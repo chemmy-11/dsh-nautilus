@@ -38,7 +38,14 @@ export function startVaultWatch(store: XuegulinStore, opts: WatchOptions): () =>
       try {
         statInfo = await stat(full)
         const meta = store.getMeta(rel)
-        kind = meta === undefined || meta.deleted === 1 ? 'created' : 'modified'
+        if (meta === undefined || meta.deleted === 1) {
+          kind = 'created'
+        } else if (Math.floor(statInfo.mtimeMs) !== meta.mtime) {
+          kind = 'modified'
+        } else {
+          // mtime 未变化：忽略（过滤 watcher 启动脉冲/重扫噪声）
+          return
+        }
       } catch {
         kind = 'deleted'
       }
