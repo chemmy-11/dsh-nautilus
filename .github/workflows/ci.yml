@@ -5,6 +5,10 @@ on:
     branches: [main]
   pull_request:
 
+# 最小权限：CI 只需要读仓库内容验证构建（public 仓库，写 token 无必要）
+permissions:
+  contents: read
+
 jobs:
   validate:
     runs-on: ubuntu-latest
