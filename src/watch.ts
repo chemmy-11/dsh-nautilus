@@ -32,6 +32,7 @@ export function startVaultWatch(store: XuegulinStore, opts: WatchOptions): () =>
   const settle = async (rel: string, windowKey: string): Promise<void> => {
     try {
       if (isExcluded(rel, exclude)) return
+      if (!rel.toLowerCase().endsWith('.md')) return // 口径统一：仅 md 文件
       const full = join(root, rel)
       let kind: 'created' | 'modified' | 'deleted'
       let statInfo: Awaited<ReturnType<typeof stat>>
@@ -71,6 +72,7 @@ export function startVaultWatch(store: XuegulinStore, opts: WatchOptions): () =>
     if (filename === null || Buffer.isBuffer(filename)) return
     const rel = filename.toString().replaceAll('\\', '/')
     if (isExcluded(rel, exclude)) return
+    if (!rel.toLowerCase().endsWith('.md')) return // 口径统一：仅 md 文件（与 scan/meta 一致）
     const existing = buckets.get(rel)
     if (existing !== undefined) clearTimeout(existing.timer)
     const key = `${rel}|${Math.floor(Date.now() / 1000) * 1000}`
