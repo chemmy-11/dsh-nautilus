@@ -44,6 +44,14 @@ DSH_CHECKOUT=<dsh-checkout> bash scripts/build.sh   # = node scripts/prepare.mjs
 
 构建链为纯 Node 实现（`scripts/prepare.mjs` + `scripts/build-client.mjs`），不依赖 bash 环境差异。
 
+**两种构建模式**（`scripts/prepare.mjs` 自动选择）：
+- **checkout 模式**（本地开发）：探测到 `$DSH_CHECKOUT` / `~/dsh-harness` → 从 checkout junction 链接 `cordis`/`schemastery`/`dsh-host-webserver` 并复用其 tsc/esbuild；
+- **npm-devDeps 模式**（CI / 无 checkout）：`npm install` 装好 devDependencies（含 `@deepseek-ai/cordis`、`@deepseek-ai/dsh-host-webserver`、`schemastery`、`typescript`、`esbuild`）后直接用本地依赖构建，无需 dsh 源码。
+
+## CI
+
+`.github/workflows/ci.yml` 在每次 push/PR 上跑 `typecheck` + `build`（npm-devDeps 模式）+ 元数据校验（bundle patch / client 双半 / files 清单）；`.github/workflows/release.yml` 在 `v*` tag 上自动构建 tgz 并创建 GitHub Release。
+
 ## 设计原则
 
 - **独立可装**：仅依赖官方 `cordis`/`schemastery`/`dsh-host-webserver`，不与任何其它插件耦合；

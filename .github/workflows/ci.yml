@@ -1,0 +1,36 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install devDeps
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Build (npm-devDeps mode)
+        run: npm run build
+
+      - name: Meta check (bundle + patch + exports)
+        run: node .github/scripts/check-meta.mjs
+
+      - name: Verify build artifacts
+        run: |
+          test -f lib/index.js
+          test -f lib/client.js
+          test -f lib/types/index.d.ts
+          echo "artifacts OK"

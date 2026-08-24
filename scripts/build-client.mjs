@@ -25,19 +25,27 @@ function detectCheckout() {
 }
 
 const checkout = detectCheckout()
-if (!checkout) {
-  console.error('build-client: cannot locate the dsh checkout (set DSH_CHECKOUT)')
-  process.exit(1)
+let esbuild
+if (checkout) {
+  console.log('build-client: esbuild from checkout ' + checkout)
+  const pnpmDir = join(checkout, 'node_modules', '.pnpm')
+  const esbuildCandidates = readdirSync(pnpmDir).filter((d) => d.startsWith('esbuild@')).sort()
+  const esbuildPkg = esbuildCandidates[esbuildCandidates.length - 1]
+  if (!esbuildPkg) {
+    console.error('build-client: esbuild not found in checkout')
+    process.exit(1)
+  }
+  const mainJs = join(pnpmDir, esbuildPkg, 'node_modules', 'esbuild', 'lib', 'main.js')
+  esbuild = require(mainJs)
+} else {
+  // npm-devDeps 模式：本地 esbuild
+  try {
+    esbuild = require('esbuild')
+  } catch (e) {
+    console.error('build-client: local esbuild not found — run `npm install` first')
+    process.exit(1)
+  }
 }
-const pnpmDir = join(checkout, 'node_modules', '.pnpm')
-const esbuildCandidates = readdirSync(pnpmDir).filter((d) => d.startsWith('esbuild@')).sort()
-const esbuildPkg = esbuildCandidates[esbuildCandidates.length - 1]
-if (!esbuildPkg) {
-  console.error('build-client: esbuild not found in checkout')
-  process.exit(1)
-}
-const mainJs = join(pnpmDir, esbuildPkg, 'node_modules', 'esbuild', 'lib', 'main.js')
-const esbuild = require(mainJs)
 
 const shim = 'var module = { exports: {} }; var exports = module.exports;'
 const banner = `${shim}\nwindow.__ModuleLoader__.load({ id: ${JSON.stringify(PLUGIN_ID)}, factory: (require) => {`

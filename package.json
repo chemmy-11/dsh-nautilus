@@ -17,8 +17,13 @@
     "schemastery": "^3.18.0"
   },
   "devDependencies": {
+    "@deepseek-ai/cordis": ">=4.0.0-rc <5",
+    "@deepseek-ai/dsh-host-webserver": ">=0.0.1-rc.1 <0.1.0 || >=0.1.0-rc.1 <0.2.0-0",
     "@types/node": "^24.13.3",
-    "typescript": "^5.9.0"
+    "cordis": ">=4.0.0-rc <5",
+    "esbuild": "^0.28.2",
+    "schemastery": "^3.18.0",
+    "typescript": "~5.9.0"
   },
   "scripts": {
     "build": "node scripts/prepare.mjs",
