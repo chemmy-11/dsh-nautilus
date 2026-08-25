@@ -1,7 +1,10 @@
 /**
  * @dsh-external/dsh-xuegulin — observation REST routes (host half).
- * GET  /api/xuegulin/state   → panel snapshot (totals / today / week / recent edit stream)
- * POST /api/xuegulin/action  → { kind: 'rescan' } triggers a full scan
+ * GET  /api/xuegulin/state          → panel snapshot (totals / today / week / recent edit stream)
+ * POST /api/xuegulin/action         → { kind: 'rescan' } triggers a full scan
+ * GET  /api/xuegulin/m2/state       → L 场读数（latest / totals / curve points / recent）
+ * GET  /api/xuegulin/m2/annotations → 预言检验表标注
+ * POST /api/xuegulin/m2/annotations → upsert 标注（prophecy 唯一）
  * Same-origin marker guard; registered as effect.
  */
 import type { IncomingMessage, ServerResponse } from 'node:http'
@@ -13,6 +16,8 @@ const API_PREFIX = '/api/xuegulin'
 export interface RouteDeps {
   store: XuegulinStore
   onRescan: () => void
+  /** L 场读数曲线窗口（天），默认 30。 */
+  m2HistoryDays?: number
 }
 
 function json(res: ServerResponse, status: number, body: unknown): void {
@@ -74,5 +79,77 @@ export function registerXuegulinRoutes(ctx: { webServer: { register(route: WebRo
   }
 
   for (const route of [state, action]) disposers.push(ctx.webServer.register(route))
+
+  // ── M2：L 场读数 ────────────────────────────────────────────────────────────
+
+  const m2State: WebRoute = {
+    kind: 'exact',
+    path: `${API_PREFIX}/m2/state`,
+    handler: (req, res): void => {
+      if (req.method !== 'GET') return json(res, 405, { ok: false, error: 'method-not-allowed' })
+      if (!browserSameOriginMarker(req)) return json(res, 403, { ok: false, error: 'forbidden' })
+      const historyDays = deps.m2HistoryDays ?? 30
+      const fromTs = Date.now() - historyDays * 86400000
+      const points = deps.store.turnReadsSince(fromTs)
+      const latest = points.length > 0 ? points[points.length - 1] : null
+      const totals = deps.store.turnTotals()
+      // 官方口径（llm-deepseek mapUsage 实证）：usage.inputTokens 已扣除缓存命中 = 未命中；
+      // 总输入 = inputTokens + cacheReadTokens；命中率 = cacheRead / 总输入；A 投影（未命中率）= inputTokens / 总输入。
+      const totalIn = totals.tokenIn + totals.cacheRead
+      const hitRate = totalIn > 0 ? totals.cacheRead / totalIn : null
+      json(res, 200, {
+        revision: Date.now(),
+        latest,
+        totals: {
+          turns: totals.turns,
+          tokenIn: totals.tokenIn,
+          tokenOut: totals.tokenOut,
+          cacheRead: totals.cacheRead,
+          missToken: totals.tokenIn,
+          totalIn,
+          hitRate,
+        },
+        curve: points,
+        recent: points.slice(-20).reverse(),
+      })
+    },
+  }
+
+  // 标注读写合并为单路由（webserver 按 path 判重，不支持同 path 多方法注册）
+  const annotations: WebRoute = {
+    kind: 'exact',
+    path: `${API_PREFIX}/m2/annotations`,
+    handler: async (req, res): Promise<void> => {
+      if (!browserSameOriginMarker(req)) return json(res, 403, { ok: false, error: 'forbidden' })
+      if (req.method === 'GET') {
+        json(res, 200, { revision: Date.now(), annotations: deps.store.listAnnotations() })
+        return
+      }
+      if (req.method !== 'POST') return json(res, 405, { ok: false, error: 'method-not-allowed' })
+      try {
+        const chunks: Buffer[] = []
+        for await (const c of req) chunks.push(c as Buffer)
+        const body = JSON.parse(Buffer.concat(chunks).toString('utf8')) as {
+          prophecy?: unknown; status?: unknown; note?: unknown; session?: unknown; turn?: unknown
+        }
+        const prophecy = typeof body.prophecy === 'string' && body.prophecy !== '' ? body.prophecy : null
+        const status = typeof body.status === 'string' && body.status !== '' ? body.status : 'pending'
+        if (prophecy === null || !/^P\d+$/.test(prophecy)) return json(res, 400, { ok: false, error: 'invalid-prophecy' })
+        if (!['pending', 'investigating', 'observed'].includes(status)) return json(res, 400, { ok: false, error: 'invalid-status' })
+        deps.store.upsertAnnotation({
+          prophecy,
+          status,
+          note: body.note === null || body.note === undefined ? null : String(body.note),
+          session: body.session === null || body.session === undefined ? null : String(body.session),
+          turn: typeof body.turn === 'number' ? body.turn : null,
+        })
+        json(res, 200, { ok: true })
+      } catch {
+        json(res, 400, { ok: false, error: 'bad-json' })
+      }
+    },
+  }
+
+  for (const route of [m2State, annotations]) disposers.push(ctx.webServer.register(route))
   return () => { for (const d of disposers) d() }
 }

@@ -12,6 +12,7 @@ import { openStore } from './store.js'
 import { scanVault } from './scan.js'
 import { startVaultWatch } from './watch.js'
 import { registerXuegulinRoutes } from './routes.js'
+import { TurnsCollector, type TurnEventLike } from './turns.js'
 
 export const name = 'xuegulin'
 export const inject = ['webServer']
@@ -22,6 +23,11 @@ export interface Config {
   pollIntervalMs: number
   debounceMs: number
   watchEnabled: boolean
+  lField: {
+    enabled: boolean
+    refreshMs: number
+    historyDays: number
+  }
 }
 
 export const Config = z.object({
@@ -30,6 +36,11 @@ export const Config = z.object({
   pollIntervalMs: z.number().min(300000).default(21600000),
   debounceMs: z.number().min(100).default(500),
   watchEnabled: z.boolean().default(true),
+  lField: z.object({
+    enabled: z.boolean().default(true),
+    refreshMs: z.number().min(30000).default(120000),
+    historyDays: z.number().min(1).default(30),
+  }).default({ enabled: true, refreshMs: 120000, historyDays: 30 }),
 })
 
 export function apply(ctx: Context, config: Config): void {
@@ -75,8 +86,31 @@ export function apply(ctx: Context, config: Config): void {
     })
   }, 'xuegulin: vault watch')
 
-  // REST（面板数据 + rescan 触发）
-  ctx.effect(() => registerXuegulinRoutes(ctx, { store, onRescan: () => { void runScan() } }), 'xuegulin: routes')
+  // REST（面板数据 + rescan 触发；M2 读数/标注）
+  ctx.effect(() => registerXuegulinRoutes(ctx, {
+    store,
+    onRescan: () => { void runScan() },
+    m2HistoryDays: config.lField.historyDays,
+  }), 'xuegulin: routes')
+
+  // M2：官方会话事件采集（L 场读数数据层；官方 session/event 直采，与团队底座零耦合）
+  // type-only 豁免：避免为类型引入 dsh-session 依赖；事件结构按官方契约 duck-type（turns.ts）。
+  ctx.effect(() => {
+    if (!config.lField.enabled) return () => undefined
+    const collector = new TurnsCollector(store)
+    const onSessionEvent = (
+      ctx.on as unknown as (name: string, listener: (session: unknown, event: unknown) => void) => () => boolean
+    ).bind(ctx)
+    return onSessionEvent('session/event', (session, event) => {
+      try {
+        const sid = String((session as { id?: unknown })?.id ?? '')
+        if (sid !== '') collector.handle(sid, event as TurnEventLike)
+      } catch (e) {
+        console.error('[xuegulin] turn collect failed', String(e))
+      }
+    })
+  }, 'xuegulin: session events (M2)')
 
   console.log('[xuegulin] M1 观测启动（vault=' + (vaultRoot || '<未配置>') + '）')
+  console.log('[xuegulin] M2 turn 采集启动（官方 session/event 直采' + (config.lField.enabled ? '' : ' · lField 已禁用') + '）')
 }
