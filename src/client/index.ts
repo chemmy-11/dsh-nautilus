@@ -1,8 +1,7 @@
 /**
  * @dsh-external/dsh-xuegulin — client panels (conversation.view tabs, official contract).
- * Tab①「Vault 观测」（M1，已有）；Tab②「L 场读数」（M2，新增）：
- *   最新读数卡 / 总量卡 / 探索率曲线（日期+轮次双视图，SVG 自绘基础版，hover 9.4）/ TPS 时序 / 预言检验表（人工标注）。
- * Data channel: same-origin REST（m2/state + m2/annotations），轮询 lField.refreshMs（默认 120s）。
+ * M3-UI: 主题令牌化（--dsw-alias-*）+ 卡片化布局 + 图表升级（网格/渐变/分色/图例）+ 交互增补。
+ * 零新依赖：样式经组件内 <style> 注入（一次性，class 前缀 xg-）；SVG 自绘。
  */
 import { createElement, useEffect, useState, type ReactNode } from 'react'
 import type {} from '@deepseek-ai/dsh-client-ui-conversation/client' // 拉 conversation.view SlotMap 类型
@@ -30,8 +29,16 @@ type M2State = {
 }
 
 type Annotation = { prophecy: string; status: string; note: string | null; updatedAt: number }
-
 type AnnotationsState = { revision: number; annotations: Annotation[] }
+
+type XuegulinState = {
+  revision: number
+  totals: { totalFiles: number; totalChars: number }
+  today: DaySummary
+  week: DaySummary
+  recent: Array<{ ts: number; path: string; kind: string }>
+}
+type DaySummary = { edits: number; modifiedFiles: number; createdFiles: number; topActive: Array<{ path: string; edits: number }> }
 
 const PROPHECIES: Record<string, string> = {
   P1: '对齐离散性（S 形阈值）',
@@ -44,227 +51,230 @@ const PROPHECIES: Record<string, string> = {
   P8: '静默溪流干涸（指数衰减）',
   P9: '注入无记录→丢失',
 }
-
 const STATUS_LABEL: Record<string, string> = { pending: '待标注', investigating: '进行中', observed: '已检验' }
 
-const MONO = { padding: '12px', fontFamily: 'monospace', fontSize: '12px' } as const
+// ── 样式（主题令牌；零硬编码色） ───────────────────────────────────────────────
+
+const STYLE_ID = 'xg-theme-style'
+const STYLE = `
+.xg-cards { display:flex; flex-direction:column; gap:12px; padding:12px; font-family:var(--dsw-font-family); }
+.xg-card { border:1px solid var(--dsw-alias-border-l2); border-radius:10px; background:var(--dsw-alias-bg-layer-2); box-shadow:var(--dsw-shadow-lv2); overflow:hidden; }
+.xg-card-head { padding:7px 14px; font:var(--dsw-font-xs-strong-13); color:var(--dsw-alias-label-secondary); border-bottom:1px solid var(--dsw-alias-border-l2); display:flex; justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap; }
+.xg-card-body { padding:10px 14px; }
+.xg-num { font-size:22px; font-weight:600; color:var(--dsw-alias-label-primary); font-family:var(--dsw-font-family); line-height:1.1; }
+.xg-label { font:var(--dsw-font-xxs-12); color:var(--dsw-alias-label-tertiary); }
+.xg-row { display:flex; gap:20px; flex-wrap:wrap; }
+.xg-kv { display:flex; flex-direction:column; gap:2px; }
+.xg-list { display:flex; flex-direction:column; gap:4px; font:var(--dsw-font-xxs-12); color:var(--dsw-alias-label-secondary); }
+.xg-path { font-family:Consolas,Menlo,monospace; color:var(--dsw-alias-label-secondary); word-break:break-all; }
+.xg-badge { padding:1px 8px; border-radius:99px; font-size:11px; white-space:nowrap; }
+.xg-badge-modified { background:var(--dsw-alias-state-business-tertiary); color:var(--dsw-alias-state-business-primary); }
+.xg-badge-created { background:var(--dsw-alias-state-success-tertiary); color:var(--dsw-alias-state-success-primary); }
+.xg-badge-deleted { background:var(--dsw-alias-state-warn-tertiary); color:var(--dsw-alias-state-warn-label); }
+.xg-btn { border:1px solid var(--dsw-alias-border-l2); background:transparent; color:var(--dsw-alias-label-secondary); border-radius:6px; padding:2px 10px; font:var(--dsw-font-xxs-12); cursor:pointer; }
+.xg-btn:hover { background:var(--dsw-alias-interactive-bg-hover); color:var(--dsw-alias-label-primary); }
+.xg-btn-active { border-color:var(--dsw-alias-state-business-primary); color:var(--dsw-alias-state-business-primary); }
+.xg-btn:disabled { opacity:.45; cursor:default; }
+.xg-select { background:var(--dsw-alias-bg-layer-1); color:var(--dsw-alias-label-primary); border:1px solid var(--dsw-alias-border-l2); border-radius:6px; padding:2px 6px; font:var(--dsw-font-xxs-12); }
+.xg-input { background:var(--dsw-alias-bg-layer-1); color:var(--dsw-alias-label-primary); border:1px solid var(--dsw-alias-border-l2); border-radius:6px; padding:2px 6px; font:var(--dsw-font-xxs-12); min-width:180px; }
+.xg-table { width:100%; border-collapse:collapse; font:var(--dsw-font-xxs-12); }
+.xg-table td { padding:5px 8px; border-bottom:1px solid var(--dsw-alias-border-l1); color:var(--dsw-alias-label-secondary); vertical-align:middle; }
+.xg-tooltip { position:absolute; background:var(--dsw-alias-bg-layer-3); border:1px solid var(--dsw-alias-border-l2); border-radius:8px; box-shadow:var(--dsw-shadow-lv3); padding:8px 10px; font:var(--dsw-font-xxs-12); color:var(--dsw-alias-label-primary); z-index:5; pointer-events:none; white-space:pre-wrap; }
+.xg-empty { padding:10px 0; font:var(--dsw-font-xxs-12); color:var(--dsw-alias-label-tertiary); }
+/* M3-UI.2+: tab 激活时隐藏输入卡（[data-composer-seat] 为官方稳定锚点，皮肤同款选择器；
+   组件挂载 ⇔ tab 激活（view ring only:activeId），body 类由 useHideComposer 挂/卸载。 */
+body.xg-hide-input [data-composer-seat] { display: none !important; }
+`
+
+let styleInjected = false
+function injectStyle(): void {
+  if (styleInjected || typeof document === 'undefined') return
+  if (document.getElementById(STYLE_ID)) { styleInjected = true; return }
+  const el = document.createElement('style')
+  el.id = STYLE_ID
+  el.textContent = STYLE
+  document.head.appendChild(el)
+  styleInjected = true
+}
+
+/** tab 激活（组件挂载）时隐藏输入卡；卸载（切回对话）恢复。 */
+function useHideComposer(): void {
+  useEffect(() => {
+    if (typeof document === 'undefined') return undefined
+    document.body.classList.add('xg-hide-input')
+    return () => document.body.classList.remove('xg-hide-input')
+  }, [])
+}
+
+// ── 工具 ────────────────────────────────────────────────────────────────────
 
 function pct(v: number | null): string {
   return v === null ? '—' : `${(v * 100).toFixed(1)}%`
 }
-
 function fmtK(n: number): string {
   if (n >= 1e6) return `${(n / 1e6).toFixed(2)}M`
   if (n >= 1e3) return `${(n / 1e3).toFixed(1)}K`
   return String(n)
 }
-
 function shortSession(s: string): string {
   return s.replace(/^session-/, '').slice(0, 8)
 }
-
 function fmtTime(ts: number): string {
   const d = new Date(ts)
   return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
 }
+function hashIdx(s: string, n: number): number {
+  let h = 0
+  for (let i = 0; i < s.length; i += 1) h = (h * 31 + s.charCodeAt(i)) >>> 0
+  return h % n
+}
+// 会话分色板（皮肤静态色 + hex 兜底；仅曲线识别用）
+const PALETTE = [
+  'var(--dsw-static-blue-450, #00cfff)',
+  'var(--dsw-static-amber-500, #ffd600)',
+  'var(--dsw-static-green-500, #4caf50)',
+  'var(--dsw-static-purple-400, #b388ff)',
+  'var(--dsw-static-pink-400, #ff80ab)',
+  'var(--dsw-static-teal-400, #4dd0e1)',
+]
+const colorOf = (session: string): string => PALETTE[hashIdx(session, PALETTE.length)]
 
-// ── SVG 折线 + hover 点位卡（零依赖自绘；9.3 基础版 + 9.4 hover 交互） ─────────
+// ── 通用小组件 ───────────────────────────────────────────────────────────────
 
-function LineChart(props: {
-  points: Array<{ id: string; value: number; label: string; detail: string }>
-  w: number
-  h: number
-  color: string
-}): ReactNode {
-  const { points, w, h, color } = props
-  const [hover, setHover] = useState<number | null>(null)
-  if (points.length === 0) return createElement('div', { style: { color: '#888' } }, '（暂无数据）')
-  const n = points.length
-  const values = points.map((p) => p.value)
-  const max = Math.max(...values)
-  const min = Math.min(...values)
+function Card(props: { title: string; extra?: ReactNode; children: ReactNode }): ReactNode {
+  return createElement('div', { className: 'xg-card' },
+    createElement('div', { className: 'xg-card-head' },
+      createElement('span', undefined, props.title),
+      props.extra ?? null,
+    ),
+    createElement('div', { className: 'xg-card-body' }, props.children),
+  )
+}
+
+function Kv(props: { label: string; value: string; accent?: boolean }): ReactNode {
+  return createElement('div', { className: 'xg-kv' },
+    createElement('div', { className: 'xg-label' }, props.label),
+    createElement('div', { className: 'xg-num', style: props.accent ? { color: 'var(--dsw-alias-state-business-primary)' } : undefined }, props.value),
+  )
+}
+
+function Badge(props: { kind: string }): ReactNode {
+  const cls = props.kind === 'created' ? 'xg-badge xg-badge-created'
+    : props.kind === 'deleted' ? 'xg-badge xg-badge-deleted'
+    : 'xg-badge xg-badge-modified'
+  return createElement('span', { className: cls }, props.kind)
+}
+
+// ── 图表（SVG：网格/渐变面积/分色/图例/hover） ────────────────────────────────
+
+type Series = { id: string; color: string; label: string; points: Array<{ x: number; value: number; detail: string }> }
+
+function LineChart(props: { series: Series[]; w: number; h: number }): ReactNode {
+  const { series, w, h } = props
+  const [hover, setHover] = useState<{ si: number; pi: number } | null>(null)
+  injectStyle()
+  const all = series.flatMap((s) => s.points.map((p) => p.value))
+  if (all.length === 0) return createElement('div', { className: 'xg-empty' }, '（暂无数据）')
+
+  const max = Math.max(...all)
+  const min = Math.min(...all)
   const span = max - min || 1
-  const px = (i: number): number => 40 + (n === 1 ? (w - 40) / 2 : (i * (w - 48)) / (n - 1))
-  const py = (v: number): number => h - 22 - ((v - min) / span) * (h - 44)
-  const coords = points.map((p, i) => `${px(i)},${py(p.value)}`).join(' ')
-  const nearest = (clientX: number, rectLeft: number): number => {
-    const x = clientX - rectLeft
-    let best = 0
-    let bestD = Infinity
-    for (let i = 0; i < n; i += 1) {
-      const d = Math.abs(px(i) - x)
-      if (d < bestD) { bestD = d; best = i }
+  const padL = 44
+  const padR = 10
+  const padT = 18
+  const padB = 20
+  const px = (x: number): number => {
+    // 每个系列的点按所属系列内 index 均分（简单近似，日期视图已按时序）
+    return padL + (x * (w - padL - padR))
+  }
+  const py = (v: number): number => h - padB - ((v - min) / span) * (h - padT - padB)
+  const ticks = [0, 1 / 3, 2 / 3, 1].map((t) => min + t * span)
+
+  const nearest = (clientX: number, clientY: number): { si: number; pi: number } | null => {
+    let best: { si: number; pi: number; d: number } | null = null
+    for (let si = 0; si < series.length; si += 1) {
+      for (let pi = 0; pi < series[si].points.length; pi += 1) {
+        const p = series[si].points[pi]
+        const d = Math.abs(px(p.x) - clientX)
+        if (best === null || d < best.d) best = { si, pi, d }
+      }
     }
-    return best
+    return best === null ? null : { si: best.si, pi: best.pi }
   }
-  const onMove = (e: ReactMouseEvent): void => {
-    const rect = e.currentTarget.getBoundingClientRect()
-    setHover(nearest(e.clientX, rect.left))
-  }
-  const hp = hover !== null ? points[hover] : null
+
+  const hovered = hover !== null ? series[hover.si]?.points[hover.pi] : null
   return createElement('div', { style: { position: 'relative', width: w } },
     createElement('svg', {
       width: w, height: h, viewBox: `0 0 ${w} ${h}`,
-      style: { background: '#0d1117' },
-      onMouseMove: onMove,
+      style: { background: 'var(--dsw-alias-bg-layer-1)', borderRadius: 8 },
+      onMouseMove: (e: { clientX: number; clientY: number; currentTarget: { getBoundingClientRect(): { left: number } } }) => {
+        const rect = e.currentTarget.getBoundingClientRect()
+        setHover(nearest(e.clientX - rect.left, e.clientY))
+      },
       onMouseLeave: () => setHover(null),
     },
-      createElement('line', { x1: 40, y1: h - 20, x2: w - 6, y2: h - 20, stroke: '#555' }),
-      createElement('line', { x1: 40, y1: 14, x2: 40, y2: h - 20, stroke: '#555' }),
-      createElement('text', { x: 44, y: 18, fill: '#888', fontSize: 10 }, `max ${max.toFixed(2)}`),
-      createElement('text', { x: 44, y: h - 24, fill: '#888', fontSize: 10 }, `min ${min.toFixed(2)}`),
-      createElement('text', { x: 44, y: h - 6, fill: '#666', fontSize: 9 }, points[0].label),
-      createElement('text', { x: Math.max(44, w - 140), y: h - 6, fill: '#666', fontSize: 9 }, points[n - 1].label),
-      n > 1 ? createElement('polyline', { points: coords, fill: 'none', stroke: color, strokeWidth: 1.5 }) : null,
-      points.map((p, i) => createElement('circle', {
-        key: p.id,
-        cx: px(i), cy: py(p.value),
-        r: hover === i ? 4.5 : 2.5,
-        fill: color,
-        stroke: hover === i ? '#fff' : 'none',
-        strokeWidth: hover === i ? 1.5 : 0,
-      })),
+      ticks.map((t) => createElement('g', { key: String(t) },
+        createElement('line', { x1: padL, y1: py(t), x2: w - padR, y2: py(t), stroke: 'var(--dsw-alias-border-l1)', strokeWidth: 1 }),
+        createElement('text', { x: padL - 6, y: py(t) + 3, fill: 'var(--dsw-alias-label-tertiary)', fontSize: 9, textAnchor: 'end' }, t >= 1000 ? `${(t / 1000).toFixed(1)}K` : t.toFixed(2)),
+      )),
+      series.map((s, si) => {
+        const pts = s.points
+        if (pts.length === 0) return null
+        const poly = pts.map((p, pi) => `${px(p.x)},${py(p.value)}`).join(' ')
+        const area = `${padL},${h - padB} ${poly} ${px(pts[pts.length - 1].x)},${h - padB}`
+        return createElement('g', { key: s.id },
+          createElement('defs', null,
+            createElement('linearGradient', { id: `xg-grad-${si}`, x1: 0, y1: 0, x2: 0, y2: 1 },
+              createElement('stop', { offset: '0%', stopColor: s.color, stopOpacity: 0.35 }),
+              createElement('stop', { offset: '100%', stopColor: s.color, stopOpacity: 0.02 }),
+            ),
+          ),
+          createElement('polygon', { points: area, fill: `url(#xg-grad-${si})` }),
+          pts.length > 1 ? createElement('polyline', { points: poly, fill: 'none', stroke: s.color, strokeWidth: 1.6 }) : null,
+          pts.map((p, pi) => createElement('circle', {
+            key: `${s.id}-${pi}`,
+            cx: px(p.x), cy: py(p.value),
+            r: hover !== null && hover.si === si && hover.pi === pi ? 4.5 : 2.2,
+            fill: s.color,
+            stroke: hover !== null && hover.si === si && hover.pi === pi ? 'var(--dsw-alias-label-primary)' : 'none',
+            strokeWidth: hover !== null && hover.si === si && hover.pi === pi ? 1.2 : 0,
+          })),
+        )
+      }),
     ),
-    hp !== null
+    hovered !== null && hover !== null
       ? createElement('div', {
+          className: 'xg-tooltip',
           style: {
-            position: 'absolute',
-            left: Math.min(Math.max(px(hover!) - 110, 0), w - 230),
+            left: Math.min(Math.max(px(series[hover.si].points[hover.pi].x) - 110, 0), w - 240),
             top: 4,
-            background: '#161b22',
-            border: '1px solid #30363d',
-            borderRadius: 6,
-            padding: '8px 10px',
-            fontSize: 11,
-            fontFamily: 'monospace',
-            zIndex: 5,
-            pointerEvents: 'none',
           },
         },
-          createElement('pre', undefined, hp.detail),
-          createElement('button', { disabled: true, style: { fontSize: 10, pointerEvents: 'none' } }, '查看完整问答（预留）'),
+          createElement('span', undefined, hovered.detail),
+          createElement('br'),
+          createElement('button', { className: 'xg-btn', disabled: true, style: { pointerEvents: 'none', marginTop: 4 } }, '查看完整问答（B 方案预留）'),
+        )
+      : null,
+    series.length > 1
+      ? createElement('div', { style: { display: 'flex', gap: 12, paddingTop: 4, flexWrap: 'wrap', fontSize: 11 } },
+          series.map((s) => createElement('span', { key: s.id, style: { color: 'var(--dsw-alias-label-secondary)' } },
+            createElement('span', { style: { display: 'inline-block', width: 8, height: 8, borderRadius: 99, background: s.color, marginRight: 4 } }),
+            s.label,
+          )),
         )
       : null,
   )
 }
 
-type ReactMouseEvent = { clientX: number; currentTarget: { getBoundingClientRect(): { left: number } } }
-
-// ── L 场读数 tab ─────────────────────────────────────────────────────────────
-
-function XuegulinLFieldView(): ReactNode {
-  const [state, setState] = useState<M2State | null>(null)
-  const [ann, setAnn] = useState<AnnotationsState | null>(null)
-  const [failed, setFailed] = useState(false)
-  const [axis, setAxis] = useState<'date' | 'turn'>('date')
-  const [metric, setMetric] = useState<'miss' | 'tps'>('miss')
-  const [sessionSel, setSessionSel] = useState<string>('')
-
-  const load = (): void => {
-    fetch('/api/xuegulin/m2/state', { headers: { 'sec-fetch-site': 'same-origin' } })
-      .then((r) => (r.ok ? (r.json() as Promise<M2State>) : Promise.resolve(null)))
-      .then((s) => { setState(s); setFailed(s === null) })
-      .catch(() => { setState(null); setFailed(true) })
-    fetch('/api/xuegulin/m2/annotations', { headers: { 'sec-fetch-site': 'same-origin' } })
-      .then((r) => (r.ok ? (r.json() as Promise<AnnotationsState>) : Promise.resolve(null)))
-      .then((a) => { if (a) setAnn(a) })
-      .catch(() => undefined)
-  }
-
-  useEffect(() => {
-    load()
-    const timer = setInterval(load, 120000)
-    return () => clearInterval(timer)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
-
-  if (failed && state === null) return createElement('div', { style: MONO }, 'L 场读数不可用（/api/xuegulin/m2/state）')
-  if (state === null) return createElement('div', { style: MONO }, 'L 场读数加载中...')
-
-  const sessions = [...new Set(state.curve.map((p) => p.session))]
-  const sel = sessionSel !== '' && sessions.includes(sessionSel) ? sessionSel : (sessions[0] ?? '')
-  const points = axis === 'date' ? state.curve : state.curve.filter((p) => p.session === sel)
-  // 官方口径：usage.inputTokens = 未命中；总输入 = inputTokens + cacheReadTokens
-  const totalIn = (p: M2Point): number => p.tokenIn + p.cacheRead
-  const missRate = (p: M2Point): number => (totalIn(p) > 0 ? p.tokenIn / totalIn(p) : 0)
-  const hitRateOf = (p: M2Point): number | null => (totalIn(p) > 0 ? p.cacheRead / totalIn(p) : null)
-  const curve = points.map((p, i) => ({
-    id: `${p.session}-${p.turn}`,
-    value: metric === 'miss' ? missRate(p) : (p.tps ?? 0),
-    label: axis === 'date' ? fmtTime(p.ts) : `turn ${p.turn}`,
-    detail: [
-      `${axis === 'date' ? fmtTime(p.ts) : 'turn ' + p.turn} · ${shortSession(p.session)}`,
-      `输入 ${fmtK(totalIn(p))}（命中 ${fmtK(p.cacheRead)} / 未命中 ${fmtK(p.tokenIn)}） out ${fmtK(p.tokenOut)}`,
-      `命中率 ${pct(hitRateOf(p))} A 投影（未命中率）${pct(missRate(p))} TPS ${p.tps === null ? '—' : p.tps.toFixed(1)}`,
-      p.question ? `问：${p.question}` : '',
-    ].filter((s) => s !== '').join('\n'),
-  }))
-
-  const t = state.totals
-  const latest = state.latest
-  const miss = 1 - (t.hitRate ?? 0)
-
-  // 标注表
-  const annMap = new Map<string, Annotation>((ann?.annotations ?? []).map((a) => [a.prophecy, a]))
-
-  const saveAnn = (prophecy: string, status: string): void => {
-    fetch('/api/xuegulin/m2/annotations', {
-      method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ prophecy, status }),
-    }).then((r) => (r.ok ? load() : undefined)).catch(() => undefined)
-  }
-
-  const lines: ReactNode[] = []
-  lines.push('【最新读数】')
-  if (latest) {
-    lines.push(`  turn ${latest.turn} · ${shortSession(latest.session)} · ${fmtTime(latest.ts)}`)
-    lines.push(`  输入=${fmtK(totalIn(latest))}（未命中 ${fmtK(latest.tokenIn)} / 命中 ${fmtK(latest.cacheRead)}） out=${fmtK(latest.tokenOut)} 命中率=${pct(hitRateOf(latest))} A 投影（未命中率）=${pct(missRate(latest))} TPS=${latest.tps === null ? '—' : latest.tps.toFixed(1)}`)
-    if (latest.question) lines.push(`  问：${latest.question}`)
-  } else {
-    lines.push('  （重启后尚未记录——等待会话活动）')
-  }
-  lines.push(`【总量】${t.turns} 轮 · 输入=${fmtK(t.totalIn ?? t.tokenIn + t.cacheRead)}（未命中 ${fmtK(t.missToken)} / 命中 ${fmtK(t.cacheRead)}） out=${fmtK(t.tokenOut)}（命中率 ${pct(t.hitRate)} / A 投影（未命中率）${pct(miss)}）`)
-  lines.push('【探索率曲线 / TPS】（SVG 自绘；hover 交互 9.4）')
-
-  return createElement('div', { style: MONO },
-    createElement('pre', undefined, lines.join('\n')),
-    createElement('div', null,
-      createElement('button', { onClick: () => setAxis(axis === 'date' ? 'turn' : 'date'), style: { marginRight: 8 } }, axis === 'date' ? '日期视图 → 轮次视图' : '轮次视图 → 日期视图'),
-      axis === 'turn'
-        ? createElement('select', { value: sel, onChange: (e) => setSessionSel(e.target.value) },
-            sessions.map((s) => createElement('option', { key: s, value: s }, shortSession(s))))
-        : null,
-      createElement('button', { onClick: () => setMetric(metric === 'miss' ? 'tps' : 'miss'), style: { marginLeft: 8 } }, metric === 'miss' ? '指标：未命中率（A 投影） → TPS' : '指标：TPS → 未命中率（A 投影）'),
-    ),
-    createElement(LineChart, { points: curve, w: 560, h: 160, color: metric === 'miss' ? '#4fc3f7' : '#ffe082' }),
-    createElement('pre', undefined, '【预言检验表】（人工标注，框架先行）'),
-    createElement('table', { key: 'ann', border: 1, cellPadding: 4 },
-      createElement('tbody', null,
-        Object.entries(PROPHECIES).map(([key, desc]) => {
-          const a = annMap.get(key)
-          const status = a?.status ?? 'pending'
-          return createElement('tr', { key },
-            createElement('td', null, `${key} ${desc}`),
-            createElement('td', null,
-              createElement('select', { value: status, onChange: (e) => saveAnn(key, e.target.value) },
-                Object.entries(STATUS_LABEL).map(([v, l]) => createElement('option', { key: v, value: v }, l)),
-              ),
-            ),
-            createElement('td', { style: { color: '#888' } }, a?.note ?? ''),
-          )
-        }),
-      ),
-    ),
-  )
-}
-
-// ── tab 注册 ─────────────────────────────────────────────────────────────────
-
-export const inject = ['slots']
+// ── Tab① Vault 观测 ──────────────────────────────────────────────────────────
 
 function XuegulinView(): ReactNode {
   const [state, setState] = useState<XuegulinState | null>(null)
   const [failed, setFailed] = useState(false)
+  const [range, setRange] = useState<'today' | 'week'>('today')
+  const [kindFilter, setKindFilter] = useState<'all' | 'created' | 'modified' | 'deleted'>('all')
+  injectStyle()
+  useHideComposer()
 
   useEffect(() => {
     let alive = true
@@ -279,37 +289,235 @@ function XuegulinView(): ReactNode {
     return () => { alive = false; clearInterval(timer) }
   }, [])
 
-  const style = { padding: '12px', fontFamily: 'monospace', fontSize: '12px', whiteSpace: 'pre-wrap' as const }
-  if (failed && state === null) {
-    return createElement('div', { style }, 'Vault 观测数据不可用（/api/xuegulin/state）')
-  }
-  if (state === null) return createElement('div', { style }, 'Vault 观测加载中...')
+  if (failed && state === null) return createElement('div', { className: 'xg-empty' }, 'Vault 观测数据不可用（/api/xuegulin/state）')
+  if (state === null) return createElement('div', { className: 'xg-empty' }, 'Vault 观测加载中...')
 
-  const lines: string[] = []
-  lines.push(`文件总数：${state.totals.totalFiles}   总字数：${state.totals.totalChars}`)
-  lines.push(`今日：${state.today.edits} 次编辑 / ${state.today.modifiedFiles} 个修改文件 / +${state.today.createdFiles} 新增`)
-  lines.push(`本周：${state.week.edits} 次编辑 / ${state.week.modifiedFiles} 个修改文件 / +${state.week.createdFiles} 新增`)
-  if (state.today.topActive.length > 0) {
-    lines.push('今日活跃 Top：')
-    for (const t of state.today.topActive) lines.push(`  ${t.edits} 次  ${t.path}`)
-  }
-  lines.push('最近编辑：')
-  for (const ev of state.recent.slice(0, 10)) {
-    const d = new Date(ev.ts)
-    lines.push(`  [${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}] ${ev.kind} ${ev.path}`)
-  }
-  return createElement('div', { style }, createElement('pre', undefined, lines.join('\n')))
+  const summary = range === 'today' ? state.today : state.week
+  const recent = state.recent.filter((e) => kindFilter === 'all' || e.kind === kindFilter)
+  return createElement('div', { className: 'xg-cards' },
+    Card({ title: 'Vault 总览', children: createElement('div', { className: 'xg-row' },
+      Kv({ label: '文件总数', value: String(state.totals.totalFiles) }),
+      Kv({ label: '总字数', value: fmtK(state.totals.totalChars) }),
+    ) }),
+    Card({
+      title: '编辑统计',
+      extra: createElement('div', null,
+        createElement('button', { className: `xg-btn${range === 'today' ? ' xg-btn-active' : ''}`, onClick: () => setRange('today'), style: { marginRight: 6 } }, '今日'),
+        createElement('button', { className: `xg-btn${range === 'week' ? ' xg-btn-active' : ''}`, onClick: () => setRange('week') }, '本周'),
+      ),
+      children: createElement('div', { className: 'xg-row' },
+        Kv({ label: '编辑次数', value: String(summary.edits) }),
+        Kv({ label: '修改文件', value: String(summary.modifiedFiles) }),
+        Kv({ label: '新增文件', value: `+${summary.createdFiles}` }),
+      ),
+    }),
+    Card({
+      title: '活跃文件 Top 5',
+      children: summary.topActive.length === 0
+        ? createElement('div', { className: 'xg-empty' }, '暂无')
+        : createElement('div', { className: 'xg-list' },
+            summary.topActive.map((t) => createElement('div', { key: t.path },
+              createElement('span', { className: 'xg-label' }, `${t.edits} 次 · `),
+              createElement('span', { className: 'xg-path' }, t.path),
+            )),
+          ),
+    }),
+    Card({
+      title: '最近编辑流',
+      extra: createElement('select', {
+        className: 'xg-select',
+        value: kindFilter,
+        onChange: (e: { target: { value: string } }) => setKindFilter(e.target.value as 'all' | 'created' | 'modified' | 'deleted'),
+      },
+        createElement('option', { value: 'all' }, '全部'),
+        createElement('option', { value: 'created' }, '新建'),
+        createElement('option', { value: 'modified' }, '修改'),
+        createElement('option', { value: 'deleted' }, '删除'),
+      ),
+      children: recent.length === 0
+        ? createElement('div', { className: 'xg-empty' }, '暂无')
+        : createElement('div', { className: 'xg-list' },
+            recent.slice(0, 12).map((e) => createElement('div', { key: `${e.ts}-${e.path}` },
+              createElement('span', { className: 'xg-label' }, `[${fmtTime(e.ts)}] `),
+              createElement(Badge, { kind: e.kind }),
+              createElement('span', { style: { marginLeft: 6 } }),
+              createElement('span', { className: 'xg-path' }, e.path),
+            )),
+          ),
+    }),
+  )
 }
 
-type XuegulinState = {
-  revision: number
-  totals: { totalFiles: number; totalChars: number }
-  today: { edits: number; modifiedFiles: number; createdFiles: number; topActive: Array<{ path: string; edits: number }> }
-  week: { edits: number; modifiedFiles: number; createdFiles: number; topActive: Array<{ path: string; edits: number }> }
-  recent: Array<{ ts: number; path: string; kind: string }>
+// ── Tab② L 场读数 ────────────────────────────────────────────────────────────
+
+function XuegulinLFieldView(): ReactNode {
+  const [state, setState] = useState<M2State | null>(null)
+  const [ann, setAnn] = useState<AnnotationsState | null>(null)
+  const [failed, setFailed] = useState(false)
+  const [axis, setAxis] = useState<'date' | 'turn'>('date')
+  const [metric, setMetric] = useState<'miss' | 'tps'>('miss')
+  const [windowDays, setWindowDays] = useState<number>(7)
+  const [sessionSel, setSessionSel] = useState<string>('')
+  const [notes, setNotes] = useState<Record<string, string>>({})
+  injectStyle()
+  useHideComposer()
+
+  const load = (): void => {
+    fetch('/api/xuegulin/m2/state', { headers: { 'sec-fetch-site': 'same-origin' } })
+      .then((r) => (r.ok ? (r.json() as Promise<M2State>) : Promise.resolve(null)))
+      .then((s) => { setState(s); setFailed(s === null) })
+      .catch(() => { setState(null); setFailed(true) })
+    fetch('/api/xuegulin/m2/annotations', { headers: { 'sec-fetch-site': 'same-origin' } })
+      .then((r) => (r.ok ? (r.json() as Promise<AnnotationsState>) : Promise.resolve(null)))
+      .then((a) => { if (a) { setAnn(a); const m: Record<string, string> = {}; for (const x of a.annotations) if (x.note) m[x.prophecy] = x.note; setNotes(m) } })
+      .catch(() => undefined)
+  }
+
+  useEffect(() => {
+    load()
+    const timer = setInterval(load, 120000)
+    return () => clearInterval(timer)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  if (failed && state === null) return createElement('div', { className: 'xg-empty' }, 'L 场读数不可用（/api/xuegulin/m2/state）')
+  if (state === null) return createElement('div', { className: 'xg-empty' }, 'L 场读数加载中...')
+
+  // 口径：usage.inputTokens = 未命中；总输入 = input + cache
+  const totalIn = (p: M2Point): number => p.tokenIn + p.cacheRead
+  const missRate = (p: M2Point): number => (totalIn(p) > 0 ? p.tokenIn / totalIn(p) : 0)
+  const hitRateOf = (p: M2Point): number | null => (totalIn(p) > 0 ? p.cacheRead / totalIn(p) : null)
+
+  const fromTs = Date.now() - windowDays * 86400000
+  const windowed = state.curve.filter((p) => p.ts >= fromTs)
+  const sessions = [...new Set(windowed.map((p) => p.session))]
+  const sel = sessionSel !== '' && sessions.includes(sessionSel) ? sessionSel : null
+  const showSessions = axis === 'date' ? sessions : (sel !== null ? [sel] : sessions)
+
+  const detailOf = (p: M2Point): string => [
+    `${axis === 'date' ? fmtTime(p.ts) : 'turn ' + p.turn} · ${shortSession(p.session)}`,
+    `输入 ${fmtK(totalIn(p))}（命中 ${fmtK(p.cacheRead)} / 未命中 ${fmtK(p.tokenIn)}） out ${fmtK(p.tokenOut)}`,
+    `命中率 ${pct(hitRateOf(p))} A 投影（未命中率）${pct(missRate(p))} TPS ${p.tps === null ? '—' : p.tps.toFixed(1)}`,
+    p.question ? `问：${p.question}` : '',
+  ].filter((s) => s !== '').join('\n')
+
+  const series: Series[] = showSessions.map((sid) => {
+    const pts = windowed.filter((p) => p.session === sid)
+    return {
+      id: sid,
+      color: colorOf(sid),
+      label: shortSession(sid),
+      points: pts.map((p, i) => ({
+        x: (i + (1 / 2)) / Math.max(pts.length, 1),
+        value: metric === 'miss' ? missRate(p) : (p.tps ?? 0),
+        detail: detailOf(p),
+      })),
+    }
+  })
+
+  const t = state.totals
+  const latest = state.latest
+  const miss = 1 - (t.hitRate ?? 0)
+  const annMap = new Map<string, Annotation>((ann?.annotations ?? []).map((a) => [a.prophecy, a]))
+
+  const saveAnn = (prophecy: string, status: string, note: string): void => {
+    fetch('/api/xuegulin/m2/annotations', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ prophecy, status, note: note.trim() === '' ? null : note }),
+    }).then((r) => (r.ok ? load() : undefined)).catch(() => undefined)
+  }
+
+  return createElement('div', { className: 'xg-cards' },
+    Card({
+      title: '最新读数',
+      children: latest === null
+        ? createElement('div', { className: 'xg-empty' }, '（等待会话活动——M2 部署起前向积累）')
+        : createElement('div', { className: 'xg-row' },
+            Kv({ label: `turn ${latest.turn} · ${shortSession(latest.session)}`, value: fmtK(totalIn(latest)) }),
+            Kv({ label: '未命中 / 命中', value: `${fmtK(latest.tokenIn)} / ${fmtK(latest.cacheRead)}` }),
+            Kv({ label: '输出', value: fmtK(latest.tokenOut) }),
+            Kv({ label: '命中率', value: pct(hitRateOf(latest)) }),
+            Kv({ label: 'A 投影（未命中率）', value: pct(missRate(latest)), accent: true }),
+            Kv({ label: 'TPS', value: latest.tps === null ? '—' : latest.tps.toFixed(1) }),
+          ),
+    }),
+    Card({
+      title: '总量 · 全部会话',
+      children: createElement('div', { className: 'xg-row' },
+        Kv({ label: '轮次', value: String(t.turns) }),
+        Kv({ label: '输入（命中/未命中）', value: `${fmtK(t.cacheRead)} / ${fmtK(t.missToken)}` }),
+        Kv({ label: '输出', value: fmtK(t.tokenOut) }),
+        Kv({ label: '总命中率', value: pct(t.hitRate) }),
+        Kv({ label: 'A 投影（未命中率）', value: pct(miss), accent: true }),
+      ),
+    }),
+    Card({
+      title: metric === 'miss' ? '探索率曲线（A 投影 = 未命中率）' : 'TPS 时序',
+      extra: createElement('div', null,
+        createElement('button', { className: `xg-btn${axis === 'date' ? ' xg-btn-active' : ''}`, onClick: () => setAxis('date'), style: { marginRight: 6 } }, '日期'),
+        createElement('button', { className: `xg-btn${axis === 'turn' ? ' xg-btn-active' : ''}`, onClick: () => setAxis('turn'), style: { marginRight: 6 } }, '轮次'),
+        createElement('button', { className: `xg-btn${metric === 'miss' ? ' xg-btn-active' : ''}`, onClick: () => setMetric(metric === 'miss' ? 'tps' : 'miss'), style: { marginRight: 6 } }, metric === 'miss' ? '未命中率' : 'TPS'),
+        createElement('select', { className: 'xg-select', value: String(windowDays), onChange: (e: { target: { value: string } }) => setWindowDays(Number(e.target.value)) },
+          createElement('option', { value: '1' }, '今天'),
+          createElement('option', { value: '3' }, '3 天'),
+          createElement('option', { value: '7' }, '7 天'),
+          createElement('option', { value: '30' }, '30 天'),
+        ),
+      ),
+      children: createElement('div', null,
+        axis === 'turn'
+          ? createElement('select', {
+              className: 'xg-select', value: sel ?? '', style: { marginBottom: 6 },
+              onChange: (e: { target: { value: string } }) => setSessionSel(e.target.value),
+            },
+              sessions.map((s) => createElement('option', { key: s, value: s }, shortSession(s))),
+            )
+          : null,
+        createElement(LineChart, { series, w: 560, h: 180 }),
+      ),
+    }),
+    Card({
+      title: '预言检验表（框架先行 · 人工标注）',
+      children: createElement('table', { className: 'xg-table' },
+        createElement('tbody', null,
+          Object.entries(PROPHECIES).map(([key, desc]) => {
+            const a = annMap.get(key)
+            const status = a?.status ?? 'pending'
+            const note = notes[key] ?? a?.note ?? ''
+            return createElement('tr', { key },
+              createElement('td', { style: { width: '42%' } }, `${key} ${desc}`),
+              createElement('td', null,
+                createElement('select', {
+                  className: 'xg-select', value: status,
+                  onChange: (e: { target: { value: string } }) => saveAnn(key, e.target.value, note),
+                },
+                  Object.entries(STATUS_LABEL).map(([v, l]) => createElement('option', { key: v, value: v }, l)),
+                ),
+              ),
+              createElement('td', null,
+                createElement('input', {
+                  className: 'xg-input', value: note, placeholder: '备注…',
+                  onChange: (e: { target: { value: string } }) => setNotes({ ...notes, [key]: e.target.value }),
+                }),
+                createElement('button', {
+                  className: 'xg-btn', style: { marginLeft: 6 },
+                  onClick: () => saveAnn(key, status, note),
+                }, '保存'),
+              ),
+            )
+          }),
+        ),
+      ),
+    }),
+  )
 }
+
+// ── tab 注册 ─────────────────────────────────────────────────────────────────
+
+export const inject = ['slots']
 
 export function apply(ctx: { slots: { inject(key: string, callback: () => unknown): unknown } }): void {
+  injectStyle()
   ctx.effect(
     () => ctx.slots.inject('conversation.view', () =>
       ctx.slots.register({
