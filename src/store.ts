@@ -25,7 +25,7 @@ export interface DaySummary {
   topActive: Array<{ path: string; edits: number }>
 }
 
-/** M2 turn 读数行（官方会话事件聚合；与团队底座零耦合）。 */
+/** M2/M3 turn 读数行（官方会话事件聚合；与团队底座零耦合）。 */
 export interface TurnReadRow {
   session: string
   turn: number
@@ -36,6 +36,16 @@ export interface TurnReadRow {
   cacheRead: number
   durationMs: number | null
   tps: number | null
+  clarity?: number | null
+  defense?: string | null
+  declaration?: number | null
+}
+
+/** M3-F.1 自评三行（A 腿二）。 */
+export interface SelfCheck {
+  clarity: number
+  defense: 'none' | 'light' | 'heavy'
+  declaration: 0 | 1
 }
 
 export function openStore(dbFile: string): XuegulinStore {
@@ -100,6 +110,15 @@ export class XuegulinStore {
         session TEXT,
         turn INTEGER,
         updated_at INTEGER NOT NULL
+      );
+      -- M3-F.2：完整问答原文（B 方案；前向积累——每轮 user/assistant 全文）
+      CREATE TABLE IF NOT EXISTS turn_text (
+        session TEXT NOT NULL,
+        turn INTEGER NOT NULL,
+        user_text TEXT NOT NULL DEFAULT '',
+        assistant_text TEXT NOT NULL DEFAULT '',
+        updated_at INTEGER NOT NULL,
+        PRIMARY KEY (session, turn)
       );
     `)
   }
@@ -224,17 +243,11 @@ export class XuegulinStore {
 
   turnReads(limit: number): TurnReadRow[] {
     const rows = this.db.prepare(`
-      SELECT session, turn, ts, question, token_in, token_out, cache_read, duration_ms, tps
+      SELECT session, turn, ts, question, token_in, token_out, cache_read, duration_ms, tps,
+             clarity, defense, declaration
       FROM turn_read ORDER BY ts DESC LIMIT ?
     `).all(limit) as Array<Record<string, unknown>>
-    return rows.map((r) => ({
-      session: String(r.session!), turn: Number(r.turn), ts: Number(r.ts),
-      question: r.question === null || r.question === undefined ? null : String(r.question),
-      tokenIn: Number(r.token_in ?? 0), tokenOut: Number(r.token_out ?? 0),
-      cacheRead: Number(r.cache_read ?? 0),
-      durationMs: r.duration_ms === null || r.duration_ms === undefined ? null : Number(r.duration_ms),
-      tps: r.tps === null || r.tps === undefined ? null : Number(r.tps),
-    }))
+    return rows.map((r) => mapTurnRow(r))
   }
 
   /** 总量读数（总命中/未命中 token）；未命中 = token_in（官方 inputTokens = 未命中口径）。 */
@@ -252,17 +265,47 @@ export class XuegulinStore {
   /** 窗口内读数（曲线数据；ts >= fromTs 升序）。 */
   turnReadsSince(fromTs: number): TurnReadRow[] {
     const rows = this.db.prepare(`
-      SELECT session, turn, ts, question, token_in, token_out, cache_read, duration_ms, tps
+      SELECT session, turn, ts, question, token_in, token_out, cache_read, duration_ms, tps,
+             clarity, defense, declaration
       FROM turn_read WHERE ts >= ? ORDER BY ts ASC
     `).all(fromTs) as Array<Record<string, unknown>>
-    return rows.map((r) => ({
-      session: String(r.session!), turn: Number(r.turn), ts: Number(r.ts),
-      question: r.question === null || r.question === undefined ? null : String(r.question),
-      tokenIn: Number(r.token_in ?? 0), tokenOut: Number(r.token_out ?? 0),
-      cacheRead: Number(r.cache_read ?? 0),
-      durationMs: r.duration_ms === null || r.duration_ms === undefined ? null : Number(r.duration_ms),
-      tps: r.tps === null || r.tps === undefined ? null : Number(r.tps),
-    }))
+    return rows.map((r) => mapTurnRow(r))
+  }
+
+  /** M3-F.1：写入某轮自评三行（upsert，幂等——同一轮重复自评以新值覆盖）。 */
+  setSelfCheck(session: string, turn: number, check: SelfCheck): void {
+    this.db.prepare(`
+      UPDATE turn_read SET clarity = ?, defense = ?, declaration = ? WHERE session = ? AND turn = ?
+    `).run(check.clarity, check.defense, check.declaration, session, turn)
+  }
+
+  // ── M3-F.2 完整问答原文（B 方案；前向积累） ─────────────────────────────────
+
+  /** 写入/更新该轮用户问题全文（首次 insert，后续仅当为空时补）。 */
+  upsertUserText(session: string, turn: number, text: string): void {
+    this.db.prepare(`
+      INSERT INTO turn_text (session, turn, user_text, updated_at) VALUES (?, ?, ?, ?)
+      ON CONFLICT(session, turn) DO UPDATE SET
+        user_text = CASE WHEN turn_text.user_text = '' THEN excluded.user_text ELSE turn_text.user_text END,
+        updated_at = excluded.updated_at
+    `).run(session, turn, text, Date.now())
+  }
+
+  /** 追加该轮 assistant 全文（多 step 拼接，幂等由 step_seen 保证调用方只调一次/step）。 */
+  appendAssistantText(session: string, turn: number, text: string): void {
+    this.db.prepare(`
+      INSERT INTO turn_text (session, turn, assistant_text, updated_at) VALUES (?, ?, ?, ?)
+      ON CONFLICT(session, turn) DO UPDATE SET
+        assistant_text = turn_text.assistant_text || excluded.assistant_text,
+        updated_at = excluded.updated_at
+    `).run(session, turn, text, Date.now())
+  }
+
+  getTurnText(session: string, turn: number): { userText: string; assistantText: string } | null {
+    const r = this.db.prepare('SELECT user_text, assistant_text FROM turn_text WHERE session = ? AND turn = ?')
+      .get(session, turn) as { user_text: string; assistant_text: string } | undefined
+    if (r === undefined) return null
+    return { userText: r.user_text, assistantText: r.assistant_text }
   }
 
   // ── M2 预言标注 ─────────────────────────────────────────────────────────────
@@ -289,5 +332,20 @@ export class XuegulinStore {
         turn = excluded.turn,
         updated_at = excluded.updated_at
     `).run(row.prophecy, row.status, row.note ?? null, row.session ?? null, row.turn ?? null, Date.now())
+  }
+}
+
+/** 行 → TurnReadRow（含 M3-F.1 预留/自评三列）。 */
+function mapTurnRow(r: Record<string, unknown>): TurnReadRow {
+  return {
+    session: String(r.session!), turn: Number(r.turn), ts: Number(r.ts),
+    question: r.question === null || r.question === undefined ? null : String(r.question),
+    tokenIn: Number(r.token_in ?? 0), tokenOut: Number(r.token_out ?? 0),
+    cacheRead: Number(r.cache_read ?? 0),
+    durationMs: r.duration_ms === null || r.duration_ms === undefined ? null : Number(r.duration_ms),
+    tps: r.tps === null || r.tps === undefined ? null : Number(r.tps),
+    clarity: r.clarity === null || r.clarity === undefined ? null : Number(r.clarity),
+    defense: r.defense === null || r.defense === undefined ? null : String(r.defense),
+    declaration: r.declaration === null || r.declaration === undefined ? null : Number(r.declaration),
   }
 }

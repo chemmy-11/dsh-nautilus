@@ -45,20 +45,30 @@ export class TurnsCollector {
   private readonly pendingSteps = new Map<string, number>()
   /** 当前轮问答摘要：session → 80 字（turn/start 时清空，user/message 时写入）。 */
   private readonly latestQuestion = new Map<string, string | null>()
+  /** 当前轮指针：session → turn（user/message 无 turn 字段——按事件序归属，同 E-1 精神）。 */
+  private readonly latestTurn = new Map<string, number>()
 
   constructor(private readonly store: XuegulinStore) {}
 
   handle(sessionId: string, ev: TurnEventLike): void {
     const time = typeof ev.time === 'number' ? ev.time : Date.now()
     switch (ev.type) {
-      case 'turn/start':
+      case 'turn/start': {
+        const turn = num((ev.data as { turn?: unknown }).turn)
+        if (turn !== undefined) this.latestTurn.set(sessionId, turn)
         // 新轮开始：重置问答摘要（无 user/message 时不残留上一轮）
         this.latestQuestion.set(sessionId, null)
         break
+      }
 
       case 'user/message': {
-        const q = textOf((ev.data as { content?: unknown }).content, QUESTION_LEN)
+        const content = (ev.data as { content?: unknown }).content
+        const full = textOf(content, Infinity)
+        const q = full.slice(0, QUESTION_LEN)
         if (q !== '') this.latestQuestion.set(sessionId, q)
+        // M3-F.2（B 方案）：完整问题原文入 turn_text（按 turn 指针归属）
+        const turn = this.latestTurn.get(sessionId)
+        if (full !== '' && turn !== undefined) this.store.upsertUserText(sessionId, turn, full)
         break
       }
 
@@ -72,7 +82,7 @@ export class TurnsCollector {
       }
 
       case 'assistant/message': {
-        const d = ev.data as { turn?: unknown; step?: unknown; usage?: UsageLike }
+        const d = ev.data as { turn?: unknown; step?: unknown; usage?: UsageLike; message?: { content?: unknown } }
         const turn = num(d.turn)
         const step = num(d.step)
         const usage = d.usage
@@ -84,6 +94,10 @@ export class TurnsCollector {
 
         // 幂等：同一 step 事件只聚合一次（重启/重载/重复 emit 不重复计数）
         if (!this.store.marksStepSeen(sessionId, turn, step)) return
+
+        // M3-F.2（B 方案）：assistant 全文累加（多 step 拼接；幂等由 step_seen 保证）
+        const assistantFull = textOf((d.message as { content?: unknown } | undefined)?.content, Infinity)
+        if (assistantFull !== '') this.store.appendAssistantText(sessionId, turn, assistantFull)
 
         this.store.upsertTurnRead({
           session: sessionId,

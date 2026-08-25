@@ -10,6 +10,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { WebRoute } from '@deepseek-ai/dsh-host-webserver'
 import type { XuegulinStore } from './store.js'
+import { analyze } from './analysis.js'
 
 const API_PREFIX = '/api/xuegulin'
 
@@ -150,6 +151,40 @@ export function registerXuegulinRoutes(ctx: { webServer: { register(route: WebRo
     },
   }
 
-  for (const route of [m2State, annotations]) disposers.push(ctx.webServer.register(route))
+  // M3-F.2：完整问答原文（B 方案；同源守卫；?session=&turn=）
+  const turnText: WebRoute = {
+    kind: 'exact',
+    path: `${API_PREFIX}/m2/turn-text`,
+    handler: (req, res): void => {
+      if (req.method !== 'GET') return json(res, 405, { ok: false, error: 'method-not-allowed' })
+      if (!browserSameOriginMarker(req)) return json(res, 403, { ok: false, error: 'forbidden' })
+      const url = new URL(String(req.url ?? ''), 'http://localhost')
+      const session = url.searchParams.get('session') ?? ''
+      const turn = Number(url.searchParams.get('turn') ?? '')
+      if (session === '' || !Number.isInteger(turn)) {
+        return json(res, 400, { ok: false, error: 'invalid-params' })
+      }
+      const text = deps.store.getTurnText(session, turn)
+      if (text === null) return json(res, 200, { found: false })
+      json(res, 200, { found: true, session, turn, ...text })
+    },
+  }
+
+  // M3-F.3：白盒探索性分析（S 形/爆发段/τ_e；口径=镜 OQ-M2-1/2 裁决）
+  const analysis: WebRoute = {
+    kind: 'exact',
+    path: `${API_PREFIX}/m2/analysis`,
+    handler: (req, res): void => {
+      if (req.method !== 'GET') return json(res, 405, { ok: false, error: 'method-not-allowed' })
+      if (!browserSameOriginMarker(req)) return json(res, 403, { ok: false, error: 'forbidden' })
+      const historyDays = deps.m2HistoryDays ?? 30
+      const fromTs = Date.now() - historyDays * 86400000
+      const rows = deps.store.turnReadsSince(fromTs)
+      const results = analyze(rows)
+      json(res, 200, { revision: Date.now(), results })
+    },
+  }
+
+  for (const route of [m2State, annotations, turnText, analysis]) disposers.push(ctx.webServer.register(route))
   return () => { for (const d of disposers) d() }
 }

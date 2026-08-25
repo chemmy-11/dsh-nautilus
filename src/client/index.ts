@@ -18,7 +18,20 @@ type M2Point = {
   cacheRead: number
   durationMs: number | null
   tps: number | null
+  clarity?: number | null
+  defense?: string | null
+  declaration?: number | null
 }
+
+type AnalysisResult = {
+  session: string
+  burst: { fromTurn: number; toTurn: number; direction: 'up' | 'down' } | null
+  tauE: number | null
+  shape: 'unknown' | 'rising' | 'falling' | 'sigmoid' | 'inverse-sigmoid'
+  points: Array<{ session: string; turn: number }>
+}
+
+type TurnTextResp = { found: boolean; session?: string; turn?: number; userText?: string; assistantText?: string }
 
 type M2State = {
   revision: number
@@ -167,9 +180,10 @@ function Badge(props: { kind: string }): ReactNode {
 
 // ── 图表（SVG：网格/渐变面积/分色/图例/hover） ────────────────────────────────
 
-type Series = { id: string; color: string; label: string; points: Array<{ x: number; value: number; detail: string }> }
+type SeriesPoint = { x: number; value: number; detail: string; meta: { session: string; turn: number } }
+type Series = { id: string; color: string; label: string; points: SeriesPoint[] }
 
-function LineChart(props: { series: Series[]; w: number; h: number }): ReactNode {
+function LineChart(props: { series: Series[]; w: number; h: number; onOpenDetail?: (meta: { session: string; turn: number }) => void }): ReactNode {
   const { series, w, h } = props
   const [hover, setHover] = useState<{ si: number; pi: number } | null>(null)
   injectStyle()
@@ -238,6 +252,8 @@ function LineChart(props: { series: Series[]; w: number; h: number }): ReactNode
             fill: s.color,
             stroke: hover !== null && hover.si === si && hover.pi === pi ? 'var(--dsw-alias-label-primary)' : 'none',
             strokeWidth: hover !== null && hover.si === si && hover.pi === pi ? 1.2 : 0,
+            cursor: 'pointer',
+            onClick: () => { if (props.onOpenDetail) props.onOpenDetail(p.meta) },
           })),
         )
       }),
@@ -252,7 +268,10 @@ function LineChart(props: { series: Series[]; w: number; h: number }): ReactNode
         },
           createElement('span', undefined, hovered.detail),
           createElement('br'),
-          createElement('button', { className: 'xg-btn', disabled: true, style: { pointerEvents: 'none', marginTop: 4 } }, '查看完整问答（B 方案预留）'),
+          createElement('span', undefined, hovered.detail),
+          createElement('br'),
+          createElement('span', { style: { display: 'block', marginTop: 4, color: 'var(--dsw-alias-label-tertiary)' } },
+            props.onOpenDetail === undefined ? '（B 方案预留）' : '点击点位 → 查看完整问答'),
         )
       : null,
     series.length > 1
@@ -359,6 +378,8 @@ function XuegulinLFieldView(): ReactNode {
   const [windowDays, setWindowDays] = useState<number>(7)
   const [sessionSel, setSessionSel] = useState<string>('')
   const [notes, setNotes] = useState<Record<string, string>>({})
+  const [analysis, setAnalysis] = useState<AnalysisResult[] | null>(null)
+  const [textDetail, setTextDetail] = useState<TurnTextResp | null>(null)
   injectStyle()
   useHideComposer()
 
@@ -371,6 +392,17 @@ function XuegulinLFieldView(): ReactNode {
       .then((r) => (r.ok ? (r.json() as Promise<AnnotationsState>) : Promise.resolve(null)))
       .then((a) => { if (a) { setAnn(a); const m: Record<string, string> = {}; for (const x of a.annotations) if (x.note) m[x.prophecy] = x.note; setNotes(m) } })
       .catch(() => undefined)
+    fetch('/api/xuegulin/m2/analysis', { headers: { 'sec-fetch-site': 'same-origin' } })
+      .then((r) => (r.ok ? (r.json() as Promise<{ results: AnalysisResult[] }>) : Promise.resolve(null)))
+      .then((a) => { if (a) setAnalysis(a.results) })
+      .catch(() => undefined)
+  }
+
+  const openTurnText = (meta: { session: string; turn: number }): void => {
+    fetch(`/api/xuegulin/m2/turn-text?session=${encodeURIComponent(meta.session)}&turn=${meta.turn}`, { headers: { 'sec-fetch-site': 'same-origin' } })
+      .then((r) => (r.ok ? (r.json() as Promise<TurnTextResp>) : Promise.resolve(null)))
+      .then((t) => { if (t) setTextDetail(t) })
+      .catch(() => setTextDetail(null))
   }
 
   useEffect(() => {
@@ -411,6 +443,7 @@ function XuegulinLFieldView(): ReactNode {
         x: (i + (1 / 2)) / Math.max(pts.length, 1),
         value: metric === 'miss' ? missRate(p) : (p.tps ?? 0),
         detail: detailOf(p),
+        meta: { session: p.session, turn: p.turn },
       })),
     }
   })
@@ -419,6 +452,7 @@ function XuegulinLFieldView(): ReactNode {
   const latest = state.latest
   const miss = 1 - (t.hitRate ?? 0)
   const annMap = new Map<string, Annotation>((ann?.annotations ?? []).map((a) => [a.prophecy, a]))
+  const DEF_LABEL: Record<string, string> = { none: '无', light: '轻', heavy: '重' }
 
   const saveAnn = (prophecy: string, status: string, note: string): void => {
     fetch('/api/xuegulin/m2/annotations', {
@@ -432,13 +466,22 @@ function XuegulinLFieldView(): ReactNode {
       title: '最新读数',
       children: latest === null
         ? createElement('div', { className: 'xg-empty' }, '（等待会话活动——M2 部署起前向积累）')
-        : createElement('div', { className: 'xg-row' },
-            Kv({ label: `turn ${latest.turn} · ${shortSession(latest.session)}`, value: fmtK(totalIn(latest)) }),
-            Kv({ label: '未命中 / 命中', value: `${fmtK(latest.tokenIn)} / ${fmtK(latest.cacheRead)}` }),
-            Kv({ label: '输出', value: fmtK(latest.tokenOut) }),
-            Kv({ label: '命中率', value: pct(hitRateOf(latest)) }),
-            Kv({ label: 'A 投影（未命中率）', value: pct(missRate(latest)), accent: true }),
-            Kv({ label: 'TPS', value: latest.tps === null ? '—' : latest.tps.toFixed(1) }),
+        : createElement('div', null,
+            createElement('div', { className: 'xg-row' },
+              Kv({ label: `turn ${latest.turn} · ${shortSession(latest.session)}`, value: fmtK(totalIn(latest)) }),
+              Kv({ label: '未命中 / 命中', value: `${fmtK(latest.tokenIn)} / ${fmtK(latest.cacheRead)}` }),
+              Kv({ label: '输出', value: fmtK(latest.tokenOut) }),
+              Kv({ label: '命中率', value: pct(hitRateOf(latest)) }),
+              Kv({ label: 'A 投影（未命中率）', value: pct(missRate(latest)), accent: true }),
+              Kv({ label: 'TPS', value: latest.tps === null ? '—' : latest.tps.toFixed(1) }),
+            ),
+            latest.clarity !== null && latest.clarity !== undefined
+              ? createElement('div', { className: 'xg-list', style: { marginTop: 8 } },
+                  createElement('span', { className: 'xg-path' },
+                    `自评（M3-F.1）：clarity ${latest.clarity.toFixed(2)} · defense ${DEF_LABEL[latest.defense ?? 'none'] ?? latest.defense} · declaration ${latest.declaration === 1 ? '有' : '无'}`,
+                  ),
+                )
+              : null,
           ),
     }),
     Card({
@@ -473,7 +516,47 @@ function XuegulinLFieldView(): ReactNode {
               sessions.map((s) => createElement('option', { key: s, value: s }, shortSession(s))),
             )
           : null,
-        createElement(LineChart, { series, w: 560, h: 180 }),
+        createElement(LineChart, { series, w: 560, h: 180, onOpenDetail: openTurnText }),
+        analysis !== null && analysis.length > 0
+          ? createElement('div', { className: 'xg-list', style: { marginTop: 8 } },
+              analysis.map((a) => {
+                const shapeLabel = { unknown: '—', rising: '上升', falling: '下降', sigmoid: 'S 形', 'inverse-sigmoid': '反 S 形' }[a.shape]
+                const burst = a.burst ? `爆发段 turn ${a.burst.fromTurn}→${a.burst.toTurn}（${a.burst.direction === 'down' ? '降' : '升'}）` : '无爆发段'
+                return createElement('span', { key: a.session },
+                  createElement('span', { className: 'xg-label' },
+                    `分析（M3-F.3 白盒）· ${shortSession(a.session)}：形态=${shapeLabel} · ${burst} · τ_e=${a.tauE === null ? '—' : a.tauE + ' turn'} · `,
+                  ),
+                )
+              }),
+            )
+          : null,
+        textDetail !== null
+          ? createElement('div', { className: 'xg-card', style: { marginTop: 8 } },
+              createElement('div', { className: 'xg-card-head' },
+                createElement('span', undefined, `完整问答 · turn ${textDetail.turn} · ${textDetail.session ? shortSession(textDetail.session) : ''}`),
+                createElement('button', { className: 'xg-btn', onClick: () => setTextDetail(null) }, '关闭'),
+              ),
+              createElement('div', { className: 'xg-card-body', style: { maxHeight: 240, overflow: 'auto' } },
+                createElement('div', { className: 'xg-list' },
+                  textDetail.found === false
+                    ? createElement('span', { className: 'xg-label' }, '该轮原文未采集（B 方案自 M3-F.2 部署起前向积累；此轮早于部署）')
+                    : null,
+                  textDetail.userText
+                    ? createElement('span', null,
+                        createElement('span', { className: 'xg-label' }, '问：'),
+                        createElement('span', { className: 'xg-path' }, textDetail.userText),
+                      )
+                    : null,
+                  textDetail.assistantText
+                    ? createElement('span', null,
+                        createElement('span', { className: 'xg-label' }, '答：'),
+                        createElement('span', { className: 'xg-path' }, textDetail.assistantText.slice(0, 4000)),
+                      )
+                    : null,
+                ),
+              ),
+            )
+          : null,
       ),
     }),
     Card({

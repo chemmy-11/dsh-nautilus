@@ -13,9 +13,10 @@ import { scanVault } from './scan.js'
 import { startVaultWatch } from './watch.js'
 import { registerXuegulinRoutes } from './routes.js'
 import { TurnsCollector, type TurnEventLike } from './turns.js'
+import { registerSelfCheckTool } from './selfcheck.js'
 
 export const name = 'xuegulin'
-export const inject = ['webServer']
+export const inject = ['webServer', 'tools']
 
 export interface Config {
   vaultRoot: string
@@ -111,6 +112,14 @@ export function apply(ctx: Context, config: Config): void {
     })
   }, 'xuegulin: session events (M2)')
 
+  // M3-F.1：A 腿二自评工具（agent 每轮即时自评三行；手写 def 零运行时依赖）
+  ctx.effect(() => {
+    const toolCtx = ctx as unknown as { tools: { register(def: unknown): void } }
+    registerSelfCheckTool(toolCtx, store)
+    return () => undefined
+  }, 'xuegulin: selfcheck tool (M3-F.1)')
+
   console.log('[xuegulin] M1 观测启动（vault=' + (vaultRoot || '<未配置>') + '）')
   console.log('[xuegulin] M2 turn 采集启动（官方 session/event 直采' + (config.lField.enabled ? '' : ' · lField 已禁用') + '）')
+  console.log('[xuegulin] M3-F 就绪（自评工具 / B 方案原文 / 白盒分析）')
 }
