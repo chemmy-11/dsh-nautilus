@@ -7,6 +7,7 @@ on:
 jobs:
   release:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       contents: write
     steps:
@@ -22,6 +23,21 @@ jobs:
 
       - name: Build (npm-devDeps mode)
         run: npm run build
+
+      - name: Test (pure functions, built artifacts)
+        run: npm test
+
+      - name: Meta check (bundle + patch + exports)
+        run: node .github/scripts/check-meta.mjs
+
+      # prepare.mjs 对 client 构建失败仅告警（host 仍有效）——发布前显式验证产物齐全，
+      # 否则 tarball 可能缺 lib/client.js 而静默发布
+      - name: Verify build artifacts
+        run: |
+          test -f lib/index.js
+          test -f lib/client.js
+          test -f lib/types/index.d.ts
+          echo "artifacts OK"
 
       - name: Pack tarball
         run: |
