@@ -1,0 +1,28 @@
+/**
+ * @dsh-external/dsh-xuegulin — 依赖合规 lint（CI/本地同款，2026-08 事故教训）。
+ * 规则：
+ *  R1 单实例合约：dependencies 禁止 in-box 包（@deepseek-ai/* 与 cordis/cosmokit/schemastery）；
+ *  R2 预发布分支：@deepseek-ai/* 的 peerDependencies 范围必须含显式 '-rc' 下限
+ *     （裸 `^0.1.0` 会静默排除 rc 构建 → 用户 ERESOLVE/双实例；官方包自身用 `^0.1.1-rc.2` 形）。
+ * 违规即 exit 1。
+ */
+import { readFileSync } from 'node:fs'
+
+const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'))
+const IN_BOX = (n) => n.startsWith('@deepseek-ai/') || ['cordis', 'cosmokit', 'schemastery'].includes(n)
+const violations = []
+
+for (const [name] of Object.entries(pkg.dependencies ?? {})) {
+  if (IN_BOX(name)) violations.push(`R1: in-box 包出现在 dependencies: ${name}（应 peerDependencies 或不声明）`)
+}
+for (const [name, range] of Object.entries(pkg.peerDependencies ?? {})) {
+  if (name.startsWith('@deepseek-ai/') && !String(range).includes('-rc')) {
+    violations.push(`R2: peer 范围缺显式 prerelease 分支: ${name}: ${range}`)
+  }
+}
+
+if (violations.length > 0) {
+  console.error('check-deps: 违规\n' + violations.map((v) => `  - ${v}`).join('\n'))
+  process.exit(1)
+}
+console.log('check-deps: OK（单实例合约 + 预发布分支合规）')

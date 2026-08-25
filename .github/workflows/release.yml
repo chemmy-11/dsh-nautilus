@@ -24,11 +24,18 @@ jobs:
       - name: Build (npm-devDeps mode)
         run: npm run build
 
+      - name: Dep compliance lint (单实例合约/预发布分支)
+        run: npm run check:deps
+
       - name: Test (pure functions, built artifacts)
         run: npm test
 
       - name: Meta check (bundle + patch + exports)
         run: node .github/scripts/check-meta.mjs
+
+      # client shim 断言（团队底座同期事故：bundle 头部缺 module shim 致浏览器加载失败）
+      - name: Client shim assertion
+        run: grep -q 'var module = { exports: {} }' lib/client.js && echo "client shim OK"
 
       # prepare.mjs 对 client 构建失败仅告警（host 仍有效）——发布前显式验证产物齐全，
       # 否则 tarball 可能缺 lib/client.js 而静默发布

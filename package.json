@@ -29,7 +29,8 @@
     "build": "node scripts/prepare.mjs",
     "prepare": "node scripts/prepare.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "node --test scripts/test.mjs"
+    "test": "node --test scripts/test.mjs",
+    "check:deps": "node scripts/check-deps.mjs"
   },
   "exports": {
     ".": {
