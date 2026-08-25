@@ -59,9 +59,17 @@ export async function scanVault(store: XuegulinStore, root: string, exclude: str
   for (const rel of files) {
     const full = join(root, rel)
     const st = await stat(full)
+    const mtime = Math.floor(st.mtimeMs)
+    // R4：mtime/size 未变 → 沿用旧 chars，跳过全文 readFile（vault 增大后 I/O 不放大）。
+    // 仅当不存在/已删除/有变化才重读；复活路径（deleted→重新存在）仍走 upsertMeta 的 updated 分支。
+    const prev = store.getMeta(rel)
+    if (prev !== undefined && prev.deleted === 0 && prev.mtime === mtime && prev.size === st.size) {
+      scanned++
+      continue
+    }
     const content = await readFile(full, 'utf8')
     const chars = countChars(content)
-    const outcome = store.upsertMeta({ path: rel, mtime: Math.floor(st.mtimeMs), size: st.size, chars, ts: now })
+    const outcome = store.upsertMeta({ path: rel, mtime, size: st.size, chars, ts: now })
     if (outcome === 'created') created++
     else if (outcome === 'updated') updated++
     scanned++

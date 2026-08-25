@@ -15,6 +15,13 @@ import { registerXuegulinRoutes } from './routes.js'
 import { TurnsCollector, type TurnEventLike } from './turns.js'
 import { registerSelfCheckTool } from './selfcheck.js'
 
+// 官方会话事件名（R2：集中常量，避免裸字符串与拼写漂移无编译期保护）。
+const SESSION_EVENT = 'session/event'
+
+// ctx.on 的事件名 key 不在 cordis 声明里（session/event 为官方事件 duck-type 通道）；
+// 此处仅做监听器形状的窄化声明，事件体仍由 TurnsCollector 按官方契约 duck-type 校验。
+type SessionEventOn = (event: string, listener: (session: unknown, event: unknown) => void) => () => boolean
+
 export const name = 'xuegulin'
 export const inject = ['webServer', 'tools']
 
@@ -99,10 +106,8 @@ export function apply(ctx: Context, config: Config): void {
   ctx.effect(() => {
     if (!config.lField.enabled) return () => undefined
     const collector = new TurnsCollector(store)
-    const onSessionEvent = (
-      ctx.on as unknown as (name: string, listener: (session: unknown, event: unknown) => void) => () => boolean
-    ).bind(ctx)
-    return onSessionEvent('session/event', (session, event) => {
+    const onSessionEvent = (ctx.on as unknown as SessionEventOn).bind(ctx)
+    return onSessionEvent(SESSION_EVENT, (session, event) => {
       try {
         const sid = String((session as { id?: unknown })?.id ?? '')
         if (sid !== '') collector.handle(sid, event as TurnEventLike)

@@ -27,7 +27,7 @@ function isExcluded(rel: string, exclude: string[]): boolean {
 
 export function startVaultWatch(store: XuegulinStore, opts: WatchOptions): () => void {
   const { root, exclude, debounceMs } = opts
-  const buckets = new Map<string, { timer: ReturnType<typeof setTimeout> }>()
+  const buckets = new Map<string, { timer: ReturnType<typeof setTimeout>; key: string }>()
 
   const settle = async (rel: string, windowKey: string): Promise<void> => {
     try {
@@ -75,12 +75,15 @@ export function startVaultWatch(store: XuegulinStore, opts: WatchOptions): () =>
     if (!rel.toLowerCase().endsWith('.md')) return // 口径统一：仅 md 文件（与 scan/meta 一致）
     const existing = buckets.get(rel)
     if (existing !== undefined) clearTimeout(existing.timer)
-    const key = `${rel}|${Math.floor(Date.now() / 1000) * 1000}`
+    // R3：窗口键 = 该 burst 首个事件的时间戳（毫秒）——与「500ms 合并」注释语义一致；
+    // 旧实现按秒取整：同一 wall-clock 秒内两个独立 burst 会撞 session_key，
+    // 第二个编辑被 edit_event 幂等（UNIQUE）丢弃 → 丢数据。
+    const key = existing?.key ?? `${rel}|${Date.now()}`
     const timer = setTimeout(() => {
       buckets.delete(rel)
       void settle(rel, key)
     }, debounceMs)
-    buckets.set(rel, { timer })
+    buckets.set(rel, { timer, key })
   })
 
   watcher.on('error', (err) => {
