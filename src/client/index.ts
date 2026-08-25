@@ -54,7 +54,9 @@ function pct(v: number | null): string {
 }
 
 function fmtK(n: number): string {
-  return n >= 10000 ? `${(n / 1000).toFixed(1)}K` : String(n)
+  if (n >= 1e6) return `${(n / 1e6).toFixed(2)}M`
+  if (n >= 1e3) return `${(n / 1e3).toFixed(1)}K`
+  return String(n)
 }
 
 function shortSession(s: string): string {
@@ -66,10 +68,16 @@ function fmtTime(ts: number): string {
   return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
 }
 
-// ── 基础 SVG 折线（零依赖自绘；hover 交互 9.4） ───────────────────────────────
+// ── SVG 折线 + hover 点位卡（零依赖自绘；9.3 基础版 + 9.4 hover 交互） ─────────
 
-function LineChart(props: { points: Array<{ id: string; value: number; label: string }>; w: number; h: number; color: string }): ReactNode {
+function LineChart(props: {
+  points: Array<{ id: string; value: number; label: string; detail: string }>
+  w: number
+  h: number
+  color: string
+}): ReactNode {
   const { points, w, h, color } = props
+  const [hover, setHover] = useState<number | null>(null)
   if (points.length === 0) return createElement('div', { style: { color: '#888' } }, '（暂无数据）')
   const n = points.length
   const values = points.map((p) => p.value)
@@ -79,17 +87,68 @@ function LineChart(props: { points: Array<{ id: string; value: number; label: st
   const px = (i: number): number => 40 + (n === 1 ? (w - 40) / 2 : (i * (w - 48)) / (n - 1))
   const py = (v: number): number => h - 22 - ((v - min) / span) * (h - 44)
   const coords = points.map((p, i) => `${px(i)},${py(p.value)}`).join(' ')
-  return createElement('svg', { width: w, height: h, viewBox: `0 0 ${w} ${h}`, style: { background: '#0d1117' } },
-    createElement('line', { x1: 40, y1: h - 20, x2: w - 6, y2: h - 20, stroke: '#555' }),
-    createElement('line', { x1: 40, y1: 14, x2: 40, y2: h - 20, stroke: '#555' }),
-    createElement('text', { x: 44, y: 18, fill: '#888', fontSize: 10 }, `max ${max.toFixed(2)}`),
-    createElement('text', { x: 44, y: h - 24, fill: '#888', fontSize: 10 }, `min ${min.toFixed(2)}`),
-    createElement('text', { x: 44, y: h - 6, fill: '#666', fontSize: 9 }, points[0].label),
-    createElement('text', { x: Math.max(44, w - 140), y: h - 6, fill: '#666', fontSize: 9 }, points[n - 1].label),
-    n > 1 ? createElement('polyline', { points: coords, fill: 'none', stroke: color, strokeWidth: 1.5 }) : null,
-    points.map((p, i) => createElement('circle', { key: p.id, cx: px(i), cy: py(p.value), r: 2.5, fill: color })),
+  const nearest = (clientX: number, rectLeft: number): number => {
+    const x = clientX - rectLeft
+    let best = 0
+    let bestD = Infinity
+    for (let i = 0; i < n; i += 1) {
+      const d = Math.abs(px(i) - x)
+      if (d < bestD) { bestD = d; best = i }
+    }
+    return best
+  }
+  const onMove = (e: ReactMouseEvent): void => {
+    const rect = e.currentTarget.getBoundingClientRect()
+    setHover(nearest(e.clientX, rect.left))
+  }
+  const hp = hover !== null ? points[hover] : null
+  return createElement('div', { style: { position: 'relative', width: w } },
+    createElement('svg', {
+      width: w, height: h, viewBox: `0 0 ${w} ${h}`,
+      style: { background: '#0d1117' },
+      onMouseMove: onMove,
+      onMouseLeave: () => setHover(null),
+    },
+      createElement('line', { x1: 40, y1: h - 20, x2: w - 6, y2: h - 20, stroke: '#555' }),
+      createElement('line', { x1: 40, y1: 14, x2: 40, y2: h - 20, stroke: '#555' }),
+      createElement('text', { x: 44, y: 18, fill: '#888', fontSize: 10 }, `max ${max.toFixed(2)}`),
+      createElement('text', { x: 44, y: h - 24, fill: '#888', fontSize: 10 }, `min ${min.toFixed(2)}`),
+      createElement('text', { x: 44, y: h - 6, fill: '#666', fontSize: 9 }, points[0].label),
+      createElement('text', { x: Math.max(44, w - 140), y: h - 6, fill: '#666', fontSize: 9 }, points[n - 1].label),
+      n > 1 ? createElement('polyline', { points: coords, fill: 'none', stroke: color, strokeWidth: 1.5 }) : null,
+      points.map((p, i) => createElement('circle', {
+        key: p.id,
+        cx: px(i), cy: py(p.value),
+        r: hover === i ? 4.5 : 2.5,
+        fill: color,
+        stroke: hover === i ? '#fff' : 'none',
+        strokeWidth: hover === i ? 1.5 : 0,
+      })),
+    ),
+    hp !== null
+      ? createElement('div', {
+          style: {
+            position: 'absolute',
+            left: Math.min(Math.max(px(hover!) - 110, 0), w - 230),
+            top: 4,
+            background: '#161b22',
+            border: '1px solid #30363d',
+            borderRadius: 6,
+            padding: '8px 10px',
+            fontSize: 11,
+            fontFamily: 'monospace',
+            zIndex: 5,
+            pointerEvents: 'none',
+          },
+        },
+          createElement('pre', undefined, hp.detail),
+          createElement('button', { disabled: true, style: { fontSize: 10, pointerEvents: 'none' } }, '查看完整问答（预留）'),
+        )
+      : null,
   )
 }
+
+type ReactMouseEvent = { clientX: number; currentTarget: { getBoundingClientRect(): { left: number } } }
 
 // ── L 场读数 tab ─────────────────────────────────────────────────────────────
 
@@ -133,6 +192,12 @@ function XuegulinLFieldView(): ReactNode {
     id: `${p.session}-${p.turn}`,
     value: metric === 'miss' ? missRate(p) : (p.tps ?? 0),
     label: axis === 'date' ? fmtTime(p.ts) : `turn ${p.turn}`,
+    detail: [
+      `${axis === 'date' ? fmtTime(p.ts) : 'turn ' + p.turn} · ${shortSession(p.session)}`,
+      `输入 ${fmtK(totalIn(p))}（命中 ${fmtK(p.cacheRead)} / 未命中 ${fmtK(p.tokenIn)}） out ${fmtK(p.tokenOut)}`,
+      `命中率 ${pct(hitRateOf(p))} A 投影（未命中率）${pct(missRate(p))} TPS ${p.tps === null ? '—' : p.tps.toFixed(1)}`,
+      p.question ? `问：${p.question}` : '',
+    ].filter((s) => s !== '').join('\n'),
   }))
 
   const t = state.totals
