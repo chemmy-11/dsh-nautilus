@@ -235,6 +235,17 @@ export class XuegulinStore {
     `).run(root, displayName, Date.now())
   }
 
+  /**
+   * 首次绑定接管：迁移期未归属（root=''）的观测数据归入新指向——
+   * 本机迁移前始终只观测这一个库（xuegulin 现状），旧行不丢、统计无缝；仅 vault_config
+   * 此前为空（首次确认）时由调用方触发；已有多库记录后不再接管（'' 行保持悬置）。
+   */
+  reclaimUnowned(root: string): number {
+    const m = this.db.prepare('UPDATE vault_meta SET root = ? WHERE root = ?').run(root, '')
+    const e = this.db.prepare('UPDATE edit_event SET root = ? WHERE root = ?').run(root, '')
+    return Number(m.changes) + Number(e.changes)
+  }
+
   // ── vault_meta ──────────────────────────────────────────────────────────────
 
   getMeta(path: string, root: string): VaultMetaRow | undefined {

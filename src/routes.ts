@@ -105,7 +105,13 @@ export function registerXuegulinRoutes(ctx: { webServer: { register(route: WebRo
           if (!st.isDirectory()) return json(res, 400, { ok: false, error: 'not-a-directory' })
           try { accessSync(norm, constants.R_OK) } catch { return json(res, 400, { ok: false, error: 'not-readable' }) }
           // OQ-M4-2：存在即可指（.md 缺失仅扫描后 0 文件提示，不阻断）
+          const firstBind = deps.store.listVaults().length === 0
           deps.store.setActiveVault(norm, typeof body.displayName === 'string' && body.displayName.trim() !== '' ? body.displayName.trim() : null)
+          // 首次确认：迁移期未归属数据（root=''）归入新指向——旧历史不丢、统计无缝
+          if (firstBind) {
+            const n = deps.store.reclaimUnowned(norm)
+            if (n > 0) console.log(`[xuegulin] 首次绑定接管未归属观测数据 ${n} 行 → ${norm}`)
+          }
           if (deps.onVaultChanged) deps.onVaultChanged()
           json(res, 200, { ok: true, active: norm })
         } catch {
