@@ -158,8 +158,13 @@ test('scanVault: 基线创建 → 未变跳过（R4）→ 改动更新', async (
     try {
       const r1 = await scanVault(store, vault, [])
       assert.deepEqual({ created: r1.created, updated: r1.updated, removed: r1.removed }, { created: 2, updated: 0, removed: 0 })
-      assert.equal(store.getMeta('a.md').chars, 5) // 正文abc（去空白）
-      assert.equal(store.getMeta('b.md').chars, 10) // helloworld
+      assert.equal(store.getMeta('a.md', vault).chars, 5) // 正文abc（去空白）
+      assert.equal(store.getMeta('b.md', vault).chars, 10) // helloworld
+
+      // M4：root 口径——root 列 = 被扫描 vault；totals 按 activeRoot 过滤
+      assert.equal(store.getMeta('a.md', vault).root, vault)
+      assert.equal(store.totals(vault).totalFiles, 2)
+      assert.equal(store.totals('').totalFiles, 0)
 
       const r2 = await scanVault(store, vault, []) // 未变 → R4 跳过分支
       assert.equal(r2.created, 0)
@@ -171,13 +176,13 @@ test('scanVault: 基线创建 → 未变跳过（R4）→ 改动更新', async (
       utimesSync(join(vault, 'a.md'), t, t)
       const r3 = await scanVault(store, vault, [])
       assert.equal(r3.updated, 1)
-      assert.equal(store.getMeta('a.md').chars, 8) // 正文abcdef
+      assert.equal(store.getMeta('a.md', vault).chars, 8) // 正文abcdef
 
       // 删除 b.md → removed 校准
       rmSync(join(vault, 'b.md'))
       const r4 = await scanVault(store, vault, [])
       assert.equal(r4.removed, 1)
-      assert.equal(store.getMeta('b.md').deleted, 1)
+      assert.equal(store.getMeta('b.md', vault).deleted, 1)
     } finally {
       store.close()
     }

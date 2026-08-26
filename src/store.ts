@@ -9,6 +9,7 @@ import { dirname } from 'node:path'
 import { randomUUID } from 'node:crypto'
 
 export interface VaultMetaRow {
+  root: string
   path: string
   mtime: number
   size: number
@@ -48,16 +49,19 @@ export interface SelfCheck {
   declaration: 0 | 1
 }
 
-export function openStore(dbFile: string): XuegulinStore {
+export function openStore(dbFile: string, initialRoot = ''): XuegulinStore {
   mkdirSync(dirname(dbFile), { recursive: true })
-  return new XuegulinStore(dbFile)
+  return new XuegulinStore(dbFile, initialRoot)
 }
 
 export class XuegulinStore {
   private readonly db: DatabaseSync
+  /** 迁移/首启前的种子 root（config.vaultRoot）——仅作初始指向与升级兜底。 */
+  private readonly initialRoot: string
 
-  constructor(dbFile: string) {
+  constructor(dbFile: string, initialRoot = '') {
     this.db = new DatabaseSync(dbFile)
+    this.initialRoot = initialRoot
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS vault_meta (
         path TEXT PRIMARY KEY,
@@ -121,79 +125,183 @@ export class XuegulinStore {
         PRIMARY KEY (session, turn)
       );
     `)
+    this.migrate()
+  }
+
+  /**
+   * M4 迁移（user_version 0→1）：观察只取自指向 vault——
+   * vault_meta 重建为 (root, path) 主键（两库同相对路径互不污染，原 path 主键改不了）；
+   * edit_event 重建加 root 列；vault_config 建表；既有行 backfill 到迁移时生效的 root（种子）。
+   */
+  private migrate(): void {
+    const v = (this.db.prepare('PRAGMA user_version').get() as { user_version: number })?.user_version ?? 0
+    if (v >= 1) return
+    const seed = this.initialRoot
+    this.db.exec('BEGIN')
+    try {
+      // 旧索引随表改名附着（同名）；先显式删，避免新建同名索引被 IF NOT EXISTS 跳过
+      this.db.exec('DROP INDEX IF EXISTS idx_meta_mtime; DROP INDEX IF EXISTS idx_edit_ts; DROP INDEX IF EXISTS idx_edit_path_ts;')
+      this.db.exec(`
+        ALTER TABLE vault_meta RENAME TO vault_meta_old;
+        CREATE TABLE vault_meta (
+          root TEXT NOT NULL DEFAULT '',
+          path TEXT NOT NULL,
+          mtime INTEGER NOT NULL,
+          size INTEGER NOT NULL,
+          chars INTEGER NOT NULL,
+          first_seen_ts INTEGER NOT NULL,
+          last_seen_ts INTEGER NOT NULL,
+          deleted INTEGER NOT NULL DEFAULT 0,
+          PRIMARY KEY (root, path)
+        );
+        CREATE INDEX IF NOT EXISTS idx_meta_mtime ON vault_meta(mtime);
+        ALTER TABLE edit_event RENAME TO edit_event_old;
+        CREATE TABLE edit_event (
+          id TEXT PRIMARY KEY,
+          ts INTEGER NOT NULL,
+          root TEXT NOT NULL DEFAULT '',
+          path TEXT NOT NULL,
+          kind TEXT NOT NULL,
+          session_key TEXT NOT NULL UNIQUE
+        );
+        CREATE INDEX IF NOT EXISTS idx_edit_ts ON edit_event(ts);
+        CREATE INDEX IF NOT EXISTS idx_edit_path_ts ON edit_event(path, ts);
+        CREATE TABLE IF NOT EXISTS vault_config (
+          root TEXT PRIMARY KEY,
+          display_name TEXT,
+          active INTEGER NOT NULL DEFAULT 0,
+          confirmed_at INTEGER,
+          last_scan_ts INTEGER
+        );
+      `)
+      this.db.prepare(`
+        INSERT INTO vault_meta (root, path, mtime, size, chars, first_seen_ts, last_seen_ts, deleted)
+        SELECT ?, path, mtime, size, chars, first_seen_ts, last_seen_ts, deleted FROM vault_meta_old
+      `).run(seed)
+      this.db.prepare(`
+        INSERT INTO edit_event (id, ts, root, path, kind, session_key)
+        SELECT id, ts, ?, path, kind, session_key FROM edit_event_old
+      `).run(seed)
+      this.db.exec(`
+        DROP TABLE vault_meta_old;
+        DROP TABLE edit_event_old;
+      `)
+      if (seed !== '') {
+        this.db.prepare(`
+          INSERT INTO vault_config (root, display_name, active, confirmed_at, last_scan_ts)
+          VALUES (?, NULL, 1, strftime('%s','now') * 1000, NULL)
+        `).run(seed)
+      }
+      this.db.exec('PRAGMA user_version = 1')
+      this.db.exec('COMMIT')
+    } catch (e) {
+      this.db.exec('ROLLBACK')
+      throw e
+    }
   }
 
   close(): void {
     this.db.close()
   }
 
-  // ── vault_meta ──────────────────────────────────────────────────────────────
+  // ── 指向（vault_config） ────────────────────────────────────────────────────
 
-  getMeta(path: string): VaultMetaRow | undefined {
-    return this.db.prepare('SELECT * FROM vault_meta WHERE path = ?').get(path) as VaultMetaRow | undefined
+  /** 当前指向：config 表 active 行；无则回退种子 root（config.vaultRoot）。 */
+  activeRoot(): string {
+    const row = this.db.prepare('SELECT root FROM vault_config WHERE active = 1 LIMIT 1').get() as { root: string } | undefined
+    return row?.root ?? this.initialRoot
   }
 
-  /** upsert；@returns 'created' | 'updated' | 'unchanged' */
-  upsertMeta(row: { path: string; mtime: number; size: number; chars: number; ts: number }): 'created' | 'updated' | 'unchanged' {
-    const existing = this.getMeta(row.path)
+  listVaults(): Array<{ root: string; displayName: string | null; active: number; confirmedAt: number | null }> {
+    const rows = this.db.prepare('SELECT root, display_name, active, confirmed_at FROM vault_config ORDER BY confirmed_at DESC').all() as Array<Record<string, unknown>>
+    return rows.map((r) => ({
+      root: String(r.root),
+      displayName: r.display_name === null || r.display_name === undefined ? null : String(r.display_name),
+      active: Number(r.active ?? 0),
+      confirmedAt: r.confirmed_at === null || r.confirmed_at === undefined ? null : Number(r.confirmed_at),
+    }))
+  }
+
+  /** 切换指向（唯一 active）；旧数据按 root 保留。 */
+  setActiveVault(root: string, displayName: string | null = null): void {
+    this.db.prepare('UPDATE vault_config SET active = 0').run()
+    this.db.prepare(`
+      INSERT INTO vault_config (root, display_name, active, confirmed_at, last_scan_ts)
+      VALUES (?, ?, 1, ?, NULL)
+      ON CONFLICT(root) DO UPDATE SET
+        active = 1,
+        confirmed_at = COALESCE(confirmed_at, excluded.confirmed_at),
+        display_name = COALESCE(display_name, excluded.display_name)
+    `).run(root, displayName, Date.now())
+  }
+
+  // ── vault_meta ──────────────────────────────────────────────────────────────
+
+  getMeta(path: string, root: string): VaultMetaRow | undefined {
+    return this.db.prepare('SELECT * FROM vault_meta WHERE path = ? AND root = ?').get(path, root) as VaultMetaRow | undefined
+  }
+
+  /** upsert；@returns 'created' | 'updated' | 'unchanged'（path+root 为业务主键） */
+  upsertMeta(row: { path: string; root: string; mtime: number; size: number; chars: number; ts: number }): 'created' | 'updated' | 'unchanged' {
+    const existing = this.getMeta(row.path, row.root)
     if (existing === undefined) {
       this.db.prepare(`
-        INSERT INTO vault_meta (path, mtime, size, chars, first_seen_ts, last_seen_ts, deleted)
-        VALUES (?, ?, ?, ?, ?, ?, 0)
-      `).run(row.path, row.mtime, row.size, row.chars, row.ts, row.ts)
+        INSERT INTO vault_meta (root, path, mtime, size, chars, first_seen_ts, last_seen_ts, deleted)
+        VALUES (?, ?, ?, ?, ?, ?, ?, 0)
+      `).run(row.root, row.path, row.mtime, row.size, row.chars, row.ts, row.ts)
       return 'created'
     }
     if (existing.deleted === 1 || existing.mtime !== row.mtime || existing.size !== row.size) {
       this.db.prepare(`
-        UPDATE vault_meta SET mtime = ?, size = ?, chars = ?, last_seen_ts = ?, deleted = 0 WHERE path = ?
-      `).run(row.mtime, row.size, row.chars, row.ts, row.path)
+        UPDATE vault_meta SET mtime = ?, size = ?, chars = ?, last_seen_ts = ?, deleted = 0 WHERE path = ? AND root = ?
+      `).run(row.mtime, row.size, row.chars, row.ts, row.path, row.root)
       return 'updated'
     }
     return 'unchanged'
   }
 
-  markDeleted(path: string, nowTs: number): void {
-    this.db.prepare('UPDATE vault_meta SET deleted = 1, last_seen_ts = ? WHERE path = ?').run(nowTs, path)
+  markDeleted(path: string, root: string, nowTs: number): void {
+    this.db.prepare('UPDATE vault_meta SET deleted = 1, last_seen_ts = ? WHERE path = ? AND root = ?').run(nowTs, path, root)
   }
 
-  totals(): { totalFiles: number; totalChars: number } {
-    const r = this.db.prepare('SELECT COUNT(*) AS n, COALESCE(SUM(chars), 0) AS c FROM vault_meta WHERE deleted = 0').get() as
+  totals(root: string): { totalFiles: number; totalChars: number } {
+    const r = this.db.prepare('SELECT COUNT(*) AS n, COALESCE(SUM(chars), 0) AS c FROM vault_meta WHERE root = ? AND deleted = 0').get(root) as
       | { n: number; c: number }
       | undefined
     return { totalFiles: r?.n ?? 0, totalChars: r?.c ?? 0 }
   }
 
-  allPaths(): string[] {
-    return (this.db.prepare('SELECT path FROM vault_meta').all() as Array<{ path: string }>).map((r) => r.path)
+  allPaths(root: string): string[] {
+    return (this.db.prepare('SELECT path FROM vault_meta WHERE root = ?').all(root) as Array<{ path: string }>).map((r) => r.path)
   }
 
   // ── edit_event ──────────────────────────────────────────────────────────────
 
   /** 幂等写入；@returns true = 新记，false = 重复忽略。 */
-  insertEdit(ev: { ts: number; path: string; kind: string; sessionKey: string }): boolean {
+  insertEdit(ev: { ts: number; root: string; path: string; kind: string; sessionKey: string }): boolean {
     const r = this.db.prepare(`
-      INSERT OR IGNORE INTO edit_event (id, ts, path, kind, session_key) VALUES (?, ?, ?, ?, ?)
-    `).run(randomUUID(), ev.ts, ev.path, ev.kind, ev.sessionKey)
+      INSERT OR IGNORE INTO edit_event (id, ts, root, path, kind, session_key) VALUES (?, ?, ?, ?, ?, ?)
+    `).run(randomUUID(), ev.ts, ev.root, ev.path, ev.kind, ev.sessionKey)
     return Number(r.changes) > 0
   }
 
-  // ── 统计（§3 口径） ─────────────────────────────────────────────────────────
+  // ── 统计（§3 口径；全部按 root 过滤——观察只取自指向 vault） ────────────────
 
-  summary(dayStart: number, dayEnd: number): DaySummary {
-    const edits = this.db.prepare('SELECT COUNT(*) AS n FROM edit_event WHERE ts >= ? AND ts < ?').get(dayStart, dayEnd) as { n: number }
-    const created = this.db.prepare("SELECT COUNT(DISTINCT path) AS n FROM edit_event WHERE ts >= ? AND ts < ? AND kind = 'created'")
-      .get(dayStart, dayEnd) as { n: number }
-    const modified = this.db.prepare("SELECT COUNT(DISTINCT path) AS n FROM edit_event WHERE ts >= ? AND ts < ? AND kind = 'modified'")
-      .get(dayStart, dayEnd) as { n: number }
+  summary(root: string, dayStart: number, dayEnd: number): DaySummary {
+    const edits = this.db.prepare('SELECT COUNT(*) AS n FROM edit_event WHERE root = ? AND ts >= ? AND ts < ?').get(root, dayStart, dayEnd) as { n: number }
+    const created = this.db.prepare("SELECT COUNT(DISTINCT path) AS n FROM edit_event WHERE root = ? AND ts >= ? AND ts < ? AND kind = 'created'")
+      .get(root, dayStart, dayEnd) as { n: number }
+    const modified = this.db.prepare("SELECT COUNT(DISTINCT path) AS n FROM edit_event WHERE root = ? AND ts >= ? AND ts < ? AND kind = 'modified'")
+      .get(root, dayStart, dayEnd) as { n: number }
     const top = this.db.prepare(`
-      SELECT path, COUNT(*) AS edits FROM edit_event WHERE ts >= ? AND ts < ?
+      SELECT path, COUNT(*) AS edits FROM edit_event WHERE root = ? AND ts >= ? AND ts < ?
       GROUP BY path ORDER BY edits DESC LIMIT 5
-    `).all(dayStart, dayEnd) as Array<{ path: string; edits: number }>
+    `).all(root, dayStart, dayEnd) as Array<{ path: string; edits: number }>
     return { edits: edits.n, modifiedFiles: modified.n, createdFiles: created.n, topActive: top }
   }
 
-  recentEvents(limit: number): Array<{ ts: number; path: string; kind: string }> {
-    return this.db.prepare('SELECT ts, path, kind FROM edit_event ORDER BY ts DESC LIMIT ?').all(limit) as Array<
+  recentEvents(root: string, limit: number): Array<{ ts: number; path: string; kind: string }> {
+    return this.db.prepare('SELECT ts, path, kind FROM edit_event WHERE root = ? ORDER BY ts DESC LIMIT ?').all(root, limit) as Array<
       { ts: number; path: string; kind: string }
     >
   }

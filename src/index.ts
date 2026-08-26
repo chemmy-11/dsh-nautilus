@@ -17,10 +17,13 @@ import { registerSelfCheckTool } from './selfcheck.js'
 
 // 官方会话事件名（R2：集中常量，避免裸字符串与拼写漂移无编译期保护）。
 const SESSION_EVENT = 'session/event'
+// M4.3：本插件自有事件——指向切换后由 routes 发射，index.ts 重挂 scan/watch（不跨插件，仅内部通道）。
+const VAULT_ROOT_CHANGED = 'xuegulin/vault-root-changed'
 
 // ctx.on 的事件名 key 不在 cordis 声明里（session/event 为官方事件 duck-type 通道）；
 // 此处仅做监听器形状的窄化声明，事件体仍由 TurnsCollector 按官方契约 duck-type 校验。
 type SessionEventOn = (event: string, listener: (session: unknown, event: unknown) => void) => () => boolean
+type CtxOnAny = (event: string, listener: (...args: unknown[]) => void) => () => boolean
 
 export const name = 'xuegulin'
 export const inject = ['webServer', 'tools']
@@ -58,17 +61,20 @@ export function apply(ctx: Context, config: Config): void {
   }
 
   const dshHome = process.env.DSH_HOME || join(homedir(), '.dsh')
-  const store = openStore(join(dshHome, 'xuegulin', 'xuegu.db'))
+  // M4.3：initialRoot = config.vaultRoot（仅种子/升级兜底；此后指向由 vault_config 表驱动）
+  const store = openStore(join(dshHome, 'xuegulin', 'xuegu.db'), vaultRoot)
   ctx.effect(() => () => store.close())
+  const activeRoot = (): string => store.activeRoot()
 
   let scanning = false
   const runScan = async (): Promise<void> => {
-    if (vaultRoot === '' || scanning) return
+    const root = activeRoot()
+    if (root === '' || scanning) return
     scanning = true
     try {
-      const result = await scanVault(store, vaultRoot, config.exclude)
+      const result = await scanVault(store, root, config.exclude)
       if (result.scanned > 0 || result.created > 0) {
-        console.log(`[xuegulin] 扫描完成：${result.scanned} 文件（+${result.created} 新 / 更新 ${result.updated} / 删除 ${result.removed}）`)
+        console.log(`[xuegulin] 扫描完成（${root}）：${result.scanned} 文件（+${result.created} 新 / 更新 ${result.updated} / 删除 ${result.removed}）`)
       }
     } catch (e) {
       console.error('[xuegulin] 扫描失败：', String(e))
@@ -84,20 +90,29 @@ export function apply(ctx: Context, config: Config): void {
     return () => clearInterval(timer)
   })
 
-  // 编辑监听（主事件源）
+  // 编辑监听（主事件源；M4.3 起跟随当前指向——root 变更事件触发重挂）
   ctx.effect(() => {
-    if (!config.watchEnabled || vaultRoot === '') return () => undefined
-    return startVaultWatch(store, {
-      root: vaultRoot,
-      exclude: config.exclude,
-      debounceMs: config.debounceMs,
-    })
-  }, 'xuegulin: vault watch')
+    let disposeWatch: (() => void) | null = null
+    const mount = (): void => {
+      disposeWatch?.()
+      disposeWatch = null
+      if (!config.watchEnabled) return
+      const root = activeRoot()
+      if (root === '') return
+      disposeWatch = startVaultWatch(store, { root, exclude: config.exclude, debounceMs: config.debounceMs })
+    }
+    mount()
+    const on = (ctx.on as unknown as CtxOnAny).bind(ctx)
+    const off = on(VAULT_ROOT_CHANGED, () => { mount(); void runScan() })
+    return () => { off(); disposeWatch?.() }
+  }, 'xuegulin: vault watch (root-aware)')
 
-  // REST（面板数据 + rescan 触发；M2 读数/标注）
+  // REST（面板数据 + rescan 触发；M2 读数/标注；M4.3 vault 指向）
+  const emitVaultChanged = (ctx.emit as unknown as (event: string, ...args: unknown[]) => void).bind(ctx)
   ctx.effect(() => registerXuegulinRoutes(ctx, {
     store,
     onRescan: () => { void runScan() },
+    onVaultChanged: () => { emitVaultChanged(VAULT_ROOT_CHANGED) },
     m2HistoryDays: config.lField.historyDays,
   }), 'xuegulin: routes')
 

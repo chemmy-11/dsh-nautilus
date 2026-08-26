@@ -10,6 +10,8 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { WebRoute } from '@deepseek-ai/dsh-host-webserver'
 import type { XuegulinStore } from './store.js'
+import { statSync, accessSync, constants } from 'node:fs'
+import { isAbsolute, resolve } from 'node:path'
 import { analyze } from './analysis.js'
 
 const API_PREFIX = '/api/xuegulin'
@@ -17,6 +19,8 @@ const API_PREFIX = '/api/xuegulin'
 export interface RouteDeps {
   store: XuegulinStore
   onRescan: () => void
+  /** M4.3：指向切换后发射（index.ts 监听后重挂 scan/watch）。 */
+  onVaultChanged?: () => void
   /** L 场读数曲线窗口（天），默认 30。 */
   m2HistoryDays?: number
 }
@@ -47,16 +51,67 @@ export function registerXuegulinRoutes(ctx: { webServer: { register(route: WebRo
     handler: (req, res): void => {
       if (req.method !== 'GET') return json(res, 405, { ok: false, error: 'method-not-allowed' })
       if (!browserSameOriginMarker(req)) return json(res, 403, { ok: false, error: 'forbidden' })
+      // M4.3：观测数据只取自指向 vault（root 过滤；未指向 → 空数据）
+      const root = deps.store.activeRoot()
       const today = dayWindow(0)
       const week = dayWindow(6)
-      const totals = deps.store.totals()
       json(res, 200, {
         revision: Date.now(),
-        totals,
-        today: deps.store.summary(today.start, today.end),
-        week: deps.store.summary(week.start, Date.now()),
-        recent: deps.store.recentEvents(20),
+        activeRoot: root,
+        totals: deps.store.totals(root),
+        today: deps.store.summary(root, today.start, today.end),
+        week: deps.store.summary(root, week.start, Date.now()),
+        recent: deps.store.recentEvents(root, 20),
       })
+    },
+  }
+
+  // M4.3：vault 指向（GET 状态 / POST 切换并触发重扫）
+  const vault: WebRoute = {
+    kind: 'exact',
+    path: `${API_PREFIX}/vault`,
+    handler: (req, res): void => {
+      if (!browserSameOriginMarker(req)) return json(res, 403, { ok: false, error: 'forbidden' })
+      if (req.method === 'GET') {
+        const active = deps.store.activeRoot()
+        let exists = false
+        let readable = false
+        if (active !== '') {
+          try {
+            exists = statSync(active).isDirectory()
+            accessSync(active, constants.R_OK)
+            readable = true
+          } catch { /* 不可读/不存在 —— readable 保持 false */ }
+        }
+        json(res, 200, {
+          revision: Date.now(), active, exists, readable,
+          known: deps.store.listVaults(),
+        })
+        return
+      }
+      if (req.method !== 'POST') return json(res, 405, { ok: false, error: 'method-not-allowed' })
+      void (async () => {
+        try {
+          const chunks: Buffer[] = []
+          for await (const c of req) chunks.push(c as Buffer)
+          const body = JSON.parse(Buffer.concat(chunks).toString('utf8')) as { root?: unknown; displayName?: unknown }
+          if (typeof body.root !== 'string' || body.root.trim() === '') {
+            return json(res, 400, { ok: false, error: 'invalid-root' })
+          }
+          if (!isAbsolute(body.root)) return json(res, 400, { ok: false, error: 'must-be-absolute' })
+          const norm = resolve(body.root)
+          let st
+          try { st = statSync(norm) } catch { return json(res, 400, { ok: false, error: 'not-found' }) }
+          if (!st.isDirectory()) return json(res, 400, { ok: false, error: 'not-a-directory' })
+          try { accessSync(norm, constants.R_OK) } catch { return json(res, 400, { ok: false, error: 'not-readable' }) }
+          // OQ-M4-2：存在即可指（.md 缺失仅扫描后 0 文件提示，不阻断）
+          deps.store.setActiveVault(norm, typeof body.displayName === 'string' && body.displayName.trim() !== '' ? body.displayName.trim() : null)
+          if (deps.onVaultChanged) deps.onVaultChanged()
+          json(res, 200, { ok: true, active: norm })
+        } catch {
+          json(res, 400, { ok: false, error: 'bad-json' })
+        }
+      })()
     },
   }
 
@@ -79,7 +134,7 @@ export function registerXuegulinRoutes(ctx: { webServer: { register(route: WebRo
     },
   }
 
-  for (const route of [state, action]) disposers.push(ctx.webServer.register(route))
+  for (const route of [state, vault, action]) disposers.push(ctx.webServer.register(route))
 
   // ── M2：L 场读数 ────────────────────────────────────────────────────────────
 

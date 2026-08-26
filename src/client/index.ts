@@ -44,8 +44,18 @@ type M2State = {
 type Annotation = { prophecy: string; status: string; note: string | null; updatedAt: number }
 type AnnotationsState = { revision: number; annotations: Annotation[] }
 
+// M4.3：vault 指向（GET /api/xuegulin/vault）
+type VaultInfo = {
+  revision: number
+  active: string
+  exists: boolean
+  readable: boolean
+  known: Array<{ root: string; displayName: string | null; active: number; confirmedAt: number | null }>
+}
+
 type XuegulinState = {
   revision: number
+  activeRoot: string
   totals: { totalFiles: number; totalChars: number }
   today: DaySummary
   week: DaySummary
@@ -65,6 +75,7 @@ const PROPHECIES: Record<string, string> = {
   P9: '注入无记录→丢失',
 }
 const STATUS_LABEL: Record<string, string> = { pending: '待标注', investigating: '进行中', observed: '已检验' }
+const METRIC_LABEL: Record<string, string> = { miss: '未命中率', tps: 'TPS', cum: '累计输入' }
 
 // ── 样式（主题令牌；零硬编码色） ───────────────────────────────────────────────
 
@@ -94,6 +105,22 @@ const STYLE = `
 .xg-table td { padding:5px 8px; border-bottom:1px solid var(--dsw-alias-border-l1); color:var(--dsw-alias-label-secondary); vertical-align:middle; }
 .xg-tooltip { position:absolute; background:var(--dsw-alias-bg-layer-3); border:1px solid var(--dsw-alias-border-l2); border-radius:8px; box-shadow:var(--dsw-shadow-lv3); padding:8px 10px; font:var(--dsw-font-xxs-12); color:var(--dsw-alias-label-primary); z-index:5; pointer-events:none; white-space:pre-wrap; }
 .xg-empty { padding:10px 0; font:var(--dsw-font-xxs-12); color:var(--dsw-alias-label-tertiary); }
+/* M4.1：分栏栅格——6 列（摘要行 3+3；主区 4+2），<1200px 回退单列（占满不留白） */
+.xg-grid { display:grid; grid-template-columns:repeat(6, 1fr); gap:12px; }
+.xg-grid > .xg-span3 { grid-column:span 3; }
+.xg-grid > .xg-span4 { grid-column:span 4; }
+.xg-grid > .xg-span2 { grid-column:span 2; }
+@media (max-width:1199px) {
+  .xg-grid { grid-template-columns:1fr; }
+  .xg-grid > .xg-span2, .xg-grid > .xg-span3, .xg-grid > .xg-span4 { grid-column:auto; }
+}
+/* M4.2：曲线放大覆盖层（fixed 悬浮，不动官方代码；z-index 高于 view 区） */
+.xg-overlay { position:fixed; inset:0; background:rgba(0,0,0,.55); display:flex; align-items:center; justify-content:center; z-index:1000; }
+.xg-overlay-inner { background:var(--dsw-alias-bg-layer-2); border:1px solid var(--dsw-alias-border-l2); border-radius:12px; padding:16px 20px; max-width:1180px; width:calc(100vw - 80px); max-height:calc(100vh - 80px); overflow:auto; }
+.xg-overlay-head { display:flex; align-items:center; justify-content:space-between; margin-bottom:10px; gap:12px; }
+/* M4.4：口径注记（Fact First——图上明说事实与边界，镜 v0 启发） */
+.xg-note { padding:8px 12px; font:var(--dsw-font-xxs-12); color:var(--dsw-alias-label-tertiary); background:var(--dsw-alias-bg-layer-1); border-radius:6px; margin-top:10px; }
+.xg-warn { color:var(--dsw-alias-state-warn-primary); }
 /* M3-UI.2+: tab 激活时隐藏输入卡（[data-composer-seat] 为官方稳定锚点，皮肤同款选择器；
    组件挂载 ⇔ tab 激活（view ring only:activeId），body 类由 useHideComposer 挂/卸载。 */
 body.xg-hide-input [data-composer-seat] { display: none !important; }
@@ -131,6 +158,35 @@ function fmtK(n: number): string {
 }
 function shortSession(s: string): string {
   return s.replace(/^session-/, '').slice(0, 8)
+}
+/** 路径末段（短名用）。 */
+function baseName(p: string): string {
+  const parts = p.replaceAll('\\', '/').split('/').filter((x) => x !== '')
+  return parts[parts.length - 1] ?? p
+}
+/**
+ * M4.2：紧凑图响应宽度——容器实测（Resize 监听），不再硬编码 560；
+ * 回退值给左列卡内最小值。expand 态不走此 hook（覆盖层定宽）。
+ */
+function useChartWidth(fallback: number): { ref: (el: Element | null) => void; w: number } {
+  const [w, setW] = useState(fallback)
+  const node = { current: null as HTMLElement | null }
+  const measure = (): void => {
+    if (node.current) setW(Math.max(Math.min(node.current.clientWidth - 64, 1400), 320))
+  }
+  const ref = (el: Element | null): void => {
+    if (el === node.current) return
+    if (node.current) window.removeEventListener('resize', measure)
+    node.current = el as HTMLElement | null
+    if (el) {
+      measure()
+      // 布局未定（栅格未铺开）时 clientWidth 可能为 0——挂载后再测两次
+      setTimeout(measure, 0)
+      setTimeout(measure, 350)
+      window.addEventListener('resize', measure)
+    }
+  }
+  return { ref, w }
 }
 function fmtTime(ts: number): string {
   const d = new Date(ts)
@@ -229,7 +285,7 @@ function LineChart(props: { series: Series[]; w: number; h: number; onOpenDetail
     },
       ticks.map((t) => createElement('g', { key: String(t) },
         createElement('line', { x1: padL, y1: py(t), x2: w - padR, y2: py(t), stroke: 'var(--dsw-alias-border-l1)', strokeWidth: 1 }),
-        createElement('text', { x: padL - 6, y: py(t) + 3, fill: 'var(--dsw-alias-label-tertiary)', fontSize: 9, textAnchor: 'end' }, t >= 1000 ? `${(t / 1000).toFixed(1)}K` : t.toFixed(2)),
+        createElement('text', { x: padL - 6, y: py(t) + 3, fill: 'var(--dsw-alias-label-tertiary)', fontSize: 9, textAnchor: 'end' }, t >= 1e6 ? `${(t / 1e6).toFixed(1)}M` : t >= 1000 ? `${(t / 1000).toFixed(1)}K` : t.toFixed(2)),
       )),
       series.map((s, si) => {
         const pts = s.points
@@ -289,32 +345,108 @@ function LineChart(props: { series: Series[]; w: number; h: number; onOpenDetail
 
 function XuegulinView(): ReactNode {
   const [state, setState] = useState<XuegulinState | null>(null)
+  const [vault, setVault] = useState<VaultInfo | null>(null)
   const [failed, setFailed] = useState(false)
   const [range, setRange] = useState<'today' | 'week'>('today')
   const [kindFilter, setKindFilter] = useState<'all' | 'created' | 'modified' | 'deleted'>('all')
+  const [editMode, setEditMode] = useState(false)
+  const [newRoot, setNewRoot] = useState('')
+  const [busy, setBusy] = useState(false)
   injectStyle()
   useHideComposer()
 
+  const load = (): void => {
+    fetch('/api/xuegulin/state', { headers: { 'sec-fetch-site': 'same-origin' } })
+      .then((r) => (r.ok ? (r.json() as Promise<XuegulinState>) : Promise.resolve(null)))
+      .then((s) => { setState(s); setFailed(s === null) })
+      .catch(() => { setState(null); setFailed(true) })
+    fetch('/api/xuegulin/vault', { headers: { 'sec-fetch-site': 'same-origin' } })
+      .then((r) => (r.ok ? (r.json() as Promise<VaultInfo>) : Promise.resolve(null)))
+      .then((v) => { if (v) setVault(v) })
+      .catch(() => undefined)
+  }
+
   useEffect(() => {
-    let alive = true
-    const load = (): void => {
-      fetch('/api/xuegulin/state', { headers: { 'sec-fetch-site': 'same-origin' } })
-        .then((r) => (r.ok ? (r.json() as Promise<XuegulinState>) : Promise.resolve(null)))
-        .then((s) => { if (alive) { setState(s); setFailed(s === null) } })
-        .catch(() => { if (alive) { setState(null); setFailed(true) } })
-    }
     load()
     const timer = setInterval(load, 30000)
-    return () => { alive = false; clearInterval(timer) }
+    return () => clearInterval(timer)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  const applyVault = (): void => {
+    // 二次确认（切换后仅显示新库数据；旧数据保留可回切——观测记录不可逆，不删除）
+    if (!window.confirm('切换后仅显示新 vault 数据；旧数据保留，可回切查看。确认切换？')) return
+    setBusy(true)
+    fetch('/api/xuegulin/vault', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ root: newRoot }),
+    }).then((r) => (r.ok ? r.json() : Promise.resolve(null)))
+      .then((v) => { if (v) { setEditMode(false); setNewRoot(''); load() } })
+      .catch(() => undefined)
+      .finally(() => setBusy(false))
+  }
 
   if (failed && state === null) return createElement('div', { className: 'xg-empty' }, 'Vault 观测数据不可用（/api/xuegulin/state）')
   if (state === null) return createElement('div', { className: 'xg-empty' }, 'Vault 观测加载中...')
 
   const summary = range === 'today' ? state.today : state.week
   const recent = state.recent.filter((e) => kindFilter === 'all' || e.kind === kindFilter)
+  // OQ-M4-1：总览卡标题 = 指向短名（displayName ?? 路径末段）+ 工作区（root 路径）
+  const shortName = state.activeRoot === '' ? '未指向'
+    : (vault?.known.find((k) => k.root === state.activeRoot)?.displayName ?? baseName(state.activeRoot))
   return createElement('div', { className: 'xg-cards' },
-    Card({ title: 'Vault 总览', children: createElement('div', { className: 'xg-row' },
+    Card({
+      title: '指向确认（Vault 观测）',
+      extra: !editMode && state.activeRoot !== ''
+        ? createElement('button', { className: 'xg-btn', onClick: () => { setNewRoot(state.activeRoot); setEditMode(true) } }, '修改指向')
+        : null,
+      children: vault === null
+        ? createElement('div', { className: 'xg-empty' }, '指向加载中...')
+        : createElement('div', null,
+            createElement('div', { className: 'xg-row' },
+              createElement('div', { className: 'xg-list' },
+                createElement('span', { className: 'xg-label' }, '当前指向'),
+                createElement('span', { className: 'xg-path' }, vault.active === '' ? '（未指向）' : vault.active),
+              ),
+              vault.active === ''
+                ? createElement('span', { className: 'xg-warn' }, '请先确认 vault 指向——观测数据将从指向后开始')
+                : createElement('div', { className: 'xg-list' },
+                    createElement('span', { className: 'xg-label' },
+                      `${vault.exists ? '目录在' : '目录缺失'} · ${vault.readable ? '可读' : '不可读'}`,
+                    ),
+                    vault.known.find((k) => k.root === vault.active)?.confirmedAt
+                      ? createElement('span', { className: 'xg-label' },
+                          `确认于 ${fmtTime(vault.known.find((k) => k.root === vault.active)!.confirmedAt ?? 0)}`,
+                        )
+                      : null,
+                  ),
+            ),
+            createElement('div', { className: 'xg-note' },
+              '数据口径：本页统计（文件/字数/编辑事件）仅来自指向 vault；L 场读数（会话级）不受指向影响。',
+            ),
+            editMode
+              ? createElement('div', { style: { marginTop: 8, display: 'flex', flexWrap: 'wrap', gap: 6 } },
+                  createElement('input', {
+                    className: 'xg-input', value: newRoot, placeholder: '绝对路径（如 L:\\...\\L-theory）',
+                    onChange: (e: { target: { value: string } }) => setNewRoot(e.target.value),
+                  }),
+                  createElement('select', {
+                    className: 'xg-select', value: '',
+                    onChange: (e: { target: { value: string } }) => { if (e.target.value !== '') { setNewRoot(e.target.value) } },
+                  },
+                    createElement('option', { value: '' }, '最近指向…'),
+                    vault.known.filter((k) => k.root !== vault.active).map((k) =>
+                      createElement('option', { key: k.root, value: k.root }, k.displayName ?? baseName(k.root))),
+                  ),
+                  createElement('button', {
+                    className: 'xg-btn', disabled: busy || newRoot.trim() === '', onClick: () => applyVault(),
+                  }, busy ? '切换中…' : '确认并重扫'),
+                  createElement('button', { className: 'xg-btn', onClick: () => { setEditMode(false); setNewRoot('') } }, '取消'),
+                )
+              : null,
+          ),
+    }),
+    Card({ title: `Vault 总览 · ${shortName}${state.activeRoot !== '' ? `（${state.activeRoot}）` : ''}`, children: createElement('div', { className: 'xg-row' },
       Kv({ label: '文件总数', value: String(state.totals.totalFiles) }),
       Kv({ label: '总字数', value: fmtK(state.totals.totalChars) }),
     ) }),
@@ -374,7 +506,9 @@ function XuegulinLFieldView(): ReactNode {
   const [ann, setAnn] = useState<AnnotationsState | null>(null)
   const [failed, setFailed] = useState(false)
   const [axis, setAxis] = useState<'date' | 'turn'>('date')
-  const [metric, setMetric] = useState<'miss' | 'tps'>('miss')
+  const [metric, setMetric] = useState<'miss' | 'tps' | 'cum'>('miss')
+  const [chartMode, setChartMode] = useState<'compact' | 'expanded'>('compact')
+  const { ref: chartRef, w: chartW } = useChartWidth(560)
   const [windowDays, setWindowDays] = useState<number>(7)
   const [sessionSel, setSessionSel] = useState<string>('')
   const [notes, setNotes] = useState<Record<string, string>>({})
@@ -405,12 +539,21 @@ function XuegulinLFieldView(): ReactNode {
       .catch(() => setTextDetail(null))
   }
 
+  // M4.2：放大打开期间暂停轮询（防底层数据变化致 hover 错位）；关闭恢复并刷新一次
   useEffect(() => {
+    if (chartMode === 'expanded') return undefined
     load()
     const timer = setInterval(load, 120000)
     return () => clearInterval(timer)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [chartMode])
+  // Esc 关闭放大
+  useEffect(() => {
+    if (chartMode !== 'expanded') return undefined
+    const h = (e: { key: string }): void => { if (e.key === 'Escape') setChartMode('compact') }
+    window.addEventListener('keydown', h)
+    return () => window.removeEventListener('keydown', h)
+  }, [chartMode])
 
   if (failed && state === null) return createElement('div', { className: 'xg-empty' }, 'L 场读数不可用（/api/xuegulin/m2/state）')
   if (state === null) return createElement('div', { className: 'xg-empty' }, 'L 场读数加载中...')
@@ -424,7 +567,8 @@ function XuegulinLFieldView(): ReactNode {
   const windowed = state.curve.filter((p) => p.ts >= fromTs)
   const sessions = [...new Set(windowed.map((p) => p.session))]
   const sel = sessionSel !== '' && sessions.includes(sessionSel) ? sessionSel : null
-  const showSessions = axis === 'date' ? sessions : (sel !== null ? [sel] : sessions)
+  // M4.4（镜启发）：两视图统一「全部会话 + 单会话」聚焦（长窗多会话曲线过乱）
+  const showSessions = sel !== null ? [sel] : sessions
 
   const detailOf = (p: M2Point): string => [
     `${axis === 'date' ? fmtTime(p.ts) : 'turn ' + p.turn} · ${shortSession(p.session)}`,
@@ -435,16 +579,24 @@ function XuegulinLFieldView(): ReactNode {
 
   const series: Series[] = showSessions.map((sid) => {
     const pts = windowed.filter((p) => p.session === sid)
+    let acc = 0
     return {
       id: sid,
       color: colorOf(sid),
       label: shortSession(sid),
-      points: pts.map((p, i) => ({
-        x: (i + (1 / 2)) / Math.max(pts.length, 1),
-        value: metric === 'miss' ? missRate(p) : (p.tps ?? 0),
-        detail: detailOf(p),
-        meta: { session: p.session, turn: p.turn },
-      })),
+      points: pts.map((p, i) => {
+        // M4.4（镜启发·弱代理）：累计输入 = Σ(命中+未命中) 按轮序；中段加速平台 = S 形候选
+        if (metric === 'cum') acc += totalIn(p)
+        const value = metric === 'miss' ? missRate(p) : metric === 'tps' ? (p.tps ?? 0) : acc
+        return {
+          x: (i + (1 / 2)) / Math.max(pts.length, 1),
+          value,
+          detail: metric === 'cum'
+            ? `${axis === 'date' ? fmtTime(p.ts) : 'turn ' + p.turn} · ${shortSession(p.session)} · 累计输入 ${fmtK(acc)}`
+            : detailOf(p),
+          meta: { session: p.session, turn: p.turn },
+        }
+      }),
     }
   })
 
@@ -461,7 +613,8 @@ function XuegulinLFieldView(): ReactNode {
     }).then((r) => (r.ok ? load() : undefined)).catch(() => undefined)
   }
 
-  return createElement('div', { className: 'xg-cards' },
+  return createElement('div', { className: 'xg-cards xg-grid' },
+    createElement('div', { className: 'xg-span3' },
     Card({
       title: '最新读数',
       children: latest === null
@@ -484,6 +637,8 @@ function XuegulinLFieldView(): ReactNode {
               : null,
           ),
     }),
+    ),
+    createElement('div', { className: 'xg-span3' },
     Card({
       title: '总量 · 全部会话',
       children: createElement('div', { className: 'xg-row' },
@@ -494,29 +649,33 @@ function XuegulinLFieldView(): ReactNode {
         Kv({ label: 'A 投影（未命中率）', value: pct(miss), accent: true }),
       ),
     }),
+    ),
+    createElement('div', { className: 'xg-span4' },
     Card({
-      title: metric === 'miss' ? '探索率曲线（A 投影 = 未命中率）' : 'TPS 时序',
+      title: `探索率曲线 · ${METRIC_LABEL[metric]}`,
       extra: createElement('div', null,
         createElement('button', { className: `xg-btn${axis === 'date' ? ' xg-btn-active' : ''}`, onClick: () => setAxis('date'), style: { marginRight: 6 } }, '日期'),
         createElement('button', { className: `xg-btn${axis === 'turn' ? ' xg-btn-active' : ''}`, onClick: () => setAxis('turn'), style: { marginRight: 6 } }, '轮次'),
-        createElement('button', { className: `xg-btn${metric === 'miss' ? ' xg-btn-active' : ''}`, onClick: () => setMetric(metric === 'miss' ? 'tps' : 'miss'), style: { marginRight: 6 } }, metric === 'miss' ? '未命中率' : 'TPS'),
+        createElement('button', { className: `xg-btn${metric === 'miss' ? ' xg-btn-active' : ''}`, onClick: () => setMetric(metric === 'miss' ? 'tps' : metric === 'tps' ? 'cum' : 'miss'), style: { marginRight: 6 } }, METRIC_LABEL[metric]),
         createElement('select', { className: 'xg-select', value: String(windowDays), onChange: (e: { target: { value: string } }) => setWindowDays(Number(e.target.value)) },
           createElement('option', { value: '1' }, '今天'),
           createElement('option', { value: '3' }, '3 天'),
           createElement('option', { value: '7' }, '7 天'),
           createElement('option', { value: '30' }, '30 天'),
         ),
+        createElement('button', { className: 'xg-btn', style: { marginLeft: 6 }, onClick: () => setChartMode(chartMode === 'expanded' ? 'compact' : 'expanded') }, chartMode === 'expanded' ? '还原' : '放大'),
       ),
       children: createElement('div', null,
-        axis === 'turn'
-          ? createElement('select', {
-              className: 'xg-select', value: sel ?? '', style: { marginBottom: 6 },
-              onChange: (e: { target: { value: string } }) => setSessionSel(e.target.value),
-            },
-              sessions.map((s) => createElement('option', { key: s, value: s }, shortSession(s))),
-            )
-          : null,
-        createElement(LineChart, { series, w: 560, h: 180, onOpenDetail: openTurnText }),
+        createElement('select', {
+          className: 'xg-select', value: sel ?? '', style: { marginBottom: 6 },
+          onChange: (e: { target: { value: string } }) => setSessionSel(e.target.value),
+        },
+          createElement('option', { value: '' }, '全部会话'),
+          sessions.map((s) => createElement('option', { key: s, value: s }, shortSession(s))),
+        ),
+        createElement('div', { ref: chartRef },
+          createElement(LineChart, { series, w: chartW, h: 200, onOpenDetail: openTurnText }),
+        ),
         analysis !== null && analysis.length > 0
           ? createElement('div', { className: 'xg-list', style: { marginTop: 8 } },
               analysis.map((a) => {
@@ -530,6 +689,13 @@ function XuegulinLFieldView(): ReactNode {
               }),
             )
           : null,
+        createElement('div', { className: 'xg-note' },
+          metric === 'cum'
+            ? '累计输入（弱代理）= Σ(命中+未命中) 按轮序；中段加速平台 = S 形候选（P1），正式判据仍以未命中率曲线为准。'
+            : metric === 'miss'
+              ? '未命中率 = inputTokens/(inputTokens+cacheRead) = A（对齐密度）在 token 空间的投影（正式腿）；长上下文/新话题会混杂抬高，与自评腿交叉受限。'
+              : 'TPS = outputTokens / 解码耗时；与探索率曲线共同构成 P4 时间结构素材。',
+        ),
         textDetail !== null
           ? createElement('div', { className: 'xg-card', style: { marginTop: 8 } },
               createElement('div', { className: 'xg-card-head' },
@@ -559,6 +725,8 @@ function XuegulinLFieldView(): ReactNode {
           : null,
       ),
     }),
+    ),
+    createElement('div', { className: 'xg-span2' },
     Card({
       title: '预言检验表（框架先行 · 人工标注）',
       children: createElement('table', { className: 'xg-table' },
@@ -592,6 +760,18 @@ function XuegulinLFieldView(): ReactNode {
         ),
       ),
     }),
+    ),
+    chartMode === 'expanded'
+      ? createElement('div', { className: 'xg-overlay', onClick: () => setChartMode('compact') },
+          createElement('div', { className: 'xg-overlay-inner', onClick: (e: { stopPropagation(): void }) => e.stopPropagation() },
+            createElement('div', { className: 'xg-overlay-head' },
+              createElement('span', undefined, `${METRIC_LABEL[metric]}（放大）· ${axis === 'date' ? '日期视图' : '轮次视图'}`),
+              createElement('button', { className: 'xg-btn', onClick: () => setChartMode('compact') }, '还原（Esc）'),
+            ),
+            createElement(LineChart, { series, w: 980, h: 460, onOpenDetail: openTurnText }),
+          ),
+        )
+      : null,
   )
 }
 

@@ -62,25 +62,25 @@ export async function scanVault(store: XuegulinStore, root: string, exclude: str
     const mtime = Math.floor(st.mtimeMs)
     // R4：mtime/size 未变 → 沿用旧 chars，跳过全文 readFile（vault 增大后 I/O 不放大）。
     // 仅当不存在/已删除/有变化才重读；复活路径（deleted→重新存在）仍走 upsertMeta 的 updated 分支。
-    const prev = store.getMeta(rel)
+    const prev = store.getMeta(rel, root)
     if (prev !== undefined && prev.deleted === 0 && prev.mtime === mtime && prev.size === st.size) {
       scanned++
       continue
     }
     const content = await readFile(full, 'utf8')
     const chars = countChars(content)
-    const outcome = store.upsertMeta({ path: rel, mtime, size: st.size, chars, ts: now })
+    const outcome = store.upsertMeta({ root, path: rel, mtime, size: st.size, chars, ts: now })
     if (outcome === 'created') created++
     else if (outcome === 'updated') updated++
     scanned++
   }
 
-  // 删除校准：meta 中存在但本次未扫到的文件（非 exclude 的）
-  const known = store.allPaths()
+  // 删除校准：meta 中存在但本次未扫到的文件（非 exclude 的；仅本 root 范围）
+  const known = store.allPaths(root)
   let removed = 0
   for (const rel of known) {
     if (!files.includes(rel) && !isExcluded(rel, exclude)) {
-      store.markDeleted(rel, now)
+      store.markDeleted(rel, root, now)
       removed++
     }
   }

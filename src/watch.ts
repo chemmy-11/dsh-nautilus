@@ -38,7 +38,7 @@ export function startVaultWatch(store: XuegulinStore, opts: WatchOptions): () =>
       let statInfo: Awaited<ReturnType<typeof stat>>
       try {
         statInfo = await stat(full)
-        const meta = store.getMeta(rel)
+        const meta = store.getMeta(rel, root)
         if (meta === undefined || meta.deleted === 1) {
           kind = 'created'
         } else if (Math.floor(statInfo.mtimeMs) !== meta.mtime) {
@@ -51,16 +51,16 @@ export function startVaultWatch(store: XuegulinStore, opts: WatchOptions): () =>
         kind = 'deleted'
       }
       const now = Date.now()
-      const inserted = store.insertEdit({ ts: now, path: rel, kind, sessionKey: windowKey })
+      const inserted = store.insertEdit({ ts: now, root, path: rel, kind, sessionKey: windowKey })
       if (inserted) {
         if (kind === 'created' || kind === 'modified') {
           try {
             const st2 = await stat(full)
             const content = await readFile(full, 'utf8')
-            store.upsertMeta({ path: rel, mtime: Math.floor(st2.mtimeMs), size: st2.size, chars: countChars(content), ts: now })
+            store.upsertMeta({ root, path: rel, mtime: Math.floor(st2.mtimeMs), size: st2.size, chars: countChars(content), ts: now })
           } catch { /* 竞争删除，忽略 */ }
         } else {
-          store.markDeleted(rel, now)
+          store.markDeleted(rel, root, now)
         }
       }
     } catch (e) {
@@ -78,7 +78,7 @@ export function startVaultWatch(store: XuegulinStore, opts: WatchOptions): () =>
     // R3：窗口键 = 该 burst 首个事件的时间戳（毫秒）——与「500ms 合并」注释语义一致；
     // 旧实现按秒取整：同一 wall-clock 秒内两个独立 burst 会撞 session_key，
     // 第二个编辑被 edit_event 幂等（UNIQUE）丢弃 → 丢数据。
-    const key = existing?.key ?? `${rel}|${Date.now()}`
+    const key = existing?.key ?? `${root}|${rel}|${Date.now()}`
     const timer = setTimeout(() => {
       buckets.delete(rel)
       void settle(rel, key)
