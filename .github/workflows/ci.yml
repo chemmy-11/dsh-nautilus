@@ -46,7 +46,7 @@ jobs:
 
       # client shim 断言（团队底座同期事故：bundle 头部缺 module shim 致浏览器加载失败）
       - name: Client shim assertion
-        run: grep -q 'var module = { exports: {} }' lib/client.js && echo "client shim OK"
+        run: "grep -q 'var module = { exports: {} }' lib/client.js && echo 'client shim OK'"
 
       - name: Verify build artifacts
         run: |
