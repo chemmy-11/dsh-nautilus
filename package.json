@@ -12,13 +12,13 @@
   ],
   "license": "BSD-3-Clause",
   "peerDependencies": {
-    "@deepseek-ai/dsh-host-webserver": "^0.1.1-rc.2",
+    "@deepseek-ai/dsh-host-webserver": "^0.1.1-rc.2 || ^0.1.2-alpha.2",
     "cordis": ">=4.0.0-rc <5",
     "schemastery": "^3.18.0"
   },
   "devDependencies": {
     "@deepseek-ai/cordis": ">=4.0.0-rc <5",
-    "@deepseek-ai/dsh-host-webserver": "0.1.1-rc.2",
+    "@deepseek-ai/dsh-host-webserver": "0.1.2-alpha.2",
     "@types/node": "^24.13.3",
     "cordis": ">=4.0.0-rc <5",
     "esbuild": "^0.28.2",
@@ -54,5 +54,11 @@
       ],
       "platform": "web"
     }
+  },
+  "allowScripts": {
+    "file:../esbuild@0.28.1/node_modules/esbuild": true,
+    "file:../../esbuild@0.25.12/node_modules/esbuild": true,
+    "file:../../esbuild@0.28.1/node_modules/esbuild": true,
+    "file:../../esbuild@0.21.5/node_modules/esbuild": true
   }
 }
