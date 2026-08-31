@@ -127,7 +127,7 @@ export class XuegulinStore {
         updated_at INTEGER NOT NULL,
         PRIMARY KEY (session, turn)
       );
-      -- M4-L：L 场读数会话归属（采集落点打标；'' = 指向制前归档/未归属桶）
+      -- M4-L：L 场读数会话归属（采集落点打标；'' = 未归属桶——仅在未指向时产生）
       CREATE TABLE IF NOT EXISTS session_root (
         session TEXT PRIMARY KEY,
         root TEXT NOT NULL DEFAULT '',
@@ -138,7 +138,8 @@ export class XuegulinStore {
       CREATE TABLE IF NOT EXISTS lfield_config (
         id INTEGER PRIMARY KEY CHECK (id = 1),
         root TEXT NOT NULL DEFAULT '',
-        updated_at INTEGER NOT NULL
+        updated_at INTEGER NOT NULL,
+        baseline_ts INTEGER
       );
     `)
     this.migrate()
@@ -148,6 +149,7 @@ export class XuegulinStore {
     const v = (this.db.prepare('PRAGMA user_version').get() as { user_version: number })?.user_version ?? 0
     if (v < 1) this.migrateV1()
     if (v < 2) this.migrateV2()
+    if (v < 3) this.migrateV3()
   }
 
   /**
@@ -221,21 +223,46 @@ export class XuegulinStore {
   }
 
   /**
-   * M4-L 迁移（user_version 1→2）：L 场读数归档 + 独立指向——
-   * 既有会话（指向制前采集）整体归入 '' 归档桶（基础数据保留可查，不再与新指向混算）；
-   * lfield_config 种子 = 迁移时 vault 观测指向（L 场与观测分离，各自独立切换）。
+   * M4-L 迁移（user_version 1→2，2026-08-31 语义修正）：L 场读数独立指向——
+   * 既有会话归属到迁移时的 vault 观测指向（历史读数即该指向语境下的读数——守谷人裁定）；
+   * lfield_config 种子 = 迁移时 vault 指向；baseline_ts = 迁移时刻（指向制前 epoch 基线）。
    */
   private migrateV2(): void {
     this.db.exec('BEGIN')
     try {
+      const seed = this.activeRoot()
       this.db.prepare(`
         INSERT OR IGNORE INTO session_root (session, root, first_ts)
-        SELECT session, '', MIN(ts) FROM turn_read GROUP BY session
-      `).run()
+        SELECT session, ?, MIN(ts) FROM turn_read GROUP BY session
+      `).run(seed)
       this.db.prepare(`
-        INSERT OR IGNORE INTO lfield_config (id, root, updated_at) VALUES (1, ?, ?)
-      `).run(this.activeRoot(), Date.now())
+        INSERT OR IGNORE INTO lfield_config (id, root, updated_at, baseline_ts) VALUES (1, ?, ?, ?)
+      `).run(seed, Date.now(), Date.now())
       this.db.exec('PRAGMA user_version = 2')
+      this.db.exec('COMMIT')
+    } catch (e) {
+      this.db.exec('ROLLBACK')
+      throw e
+    }
+  }
+
+  /**
+   * M4-L 修正迁移（user_version 2→3）：旧 v2 曾把既有会话归入 '' 归档桶——
+   * 守谷人裁定历史读数即指向语境（L-theory）读数 → 重归属到当前 L 场指向；
+   * 并为旧 v2 表补 baseline_ts 列。幂等：已重归属/已有基线 → 零行变更。
+   */
+  private migrateV3(): void {
+    this.db.exec('BEGIN')
+    try {
+      const cols = this.db.prepare('PRAGMA table_info(lfield_config)').all() as Array<{ name: string }>
+      if (!cols.some((c) => c.name === 'baseline_ts')) {
+        this.db.exec('ALTER TABLE lfield_config ADD COLUMN baseline_ts INTEGER')
+      }
+      this.db.prepare(`
+        UPDATE session_root SET root = (SELECT root FROM lfield_config WHERE id = 1) WHERE root = ?
+      `).run('')
+      this.db.prepare('UPDATE lfield_config SET baseline_ts = ? WHERE baseline_ts IS NULL').run(Date.now())
+      this.db.exec('PRAGMA user_version = 3')
       this.db.exec('COMMIT')
     } catch (e) {
       this.db.exec('ROLLBACK')
@@ -291,10 +318,16 @@ export class XuegulinStore {
 
   // ── M4-L：L 场读数独立指向（lfield_config / session_root） ──────────────────
 
-  /** L 场读数当前指向（采集归属；'' = 未指向——新会话将落入归档桶）。 */
+  /** L 场读数当前指向（采集归属；'' = 未指向——新会话将落入未归属桶）。 */
   lfieldRoot(): string {
     const r = this.db.prepare('SELECT root FROM lfield_config WHERE id = 1').get() as { root: string } | undefined
     return r === undefined ? '' : String(r.root)
+  }
+
+  /** 指向制前 epoch 基线（毫秒时刻；0 = 无基线）——面板划代注记用。 */
+  lfieldBaseline(): number {
+    const r = this.db.prepare('SELECT baseline_ts FROM lfield_config WHERE id = 1').get() as { baseline_ts: number | null } | undefined
+    return r?.baseline_ts === null || r?.baseline_ts === undefined ? 0 : Number(r.baseline_ts)
   }
 
   /** 切换 L 场读数指向（采集从此归入新根；既有会话归属不变——归档不可逆）。 */

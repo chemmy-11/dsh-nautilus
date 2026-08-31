@@ -37,6 +37,7 @@ type M2State = {
   revision: number
   activeRoot: string
   pointing: string
+  baselineTs: number | null
   archiveTurns: number
   sessionMeta: Record<string, { startTs: number; turns: number }>
   latest: M2Point | null
@@ -439,7 +440,7 @@ function XuegulinView(): ReactNode {
                   ),
             ),
             createElement('div', { className: 'xg-note' },
-              '数据口径：本页统计（文件/字数/编辑事件）仅来自指向 vault；L 场读数有独立指向（制前数据已归档，可在 L 场读数页切换查看）。',
+              '数据口径：本页统计（文件/字数/编辑事件）仅来自指向 vault；L 场读数有独立指向（历史读数归属指向语境，基线见 L 场读数页）。',
             ),
             editMode
               ? createElement('div', { style: { marginTop: 8, display: 'flex', flexWrap: 'wrap', gap: 6 } },
@@ -597,6 +598,10 @@ function XuegulinLFieldView(): ReactNode {
     const d = new Date(m.startTs)
     return `${pad2(d.getMonth() + 1)}-${pad2(d.getDate())} ${pad2(d.getHours())}:${pad2(d.getMinutes())} · ${m.turns}轮`
   }
+  const fmtDayMin = (ts: number): string => {
+    const d = new Date(ts)
+    return `${pad2(d.getMonth() + 1)}-${pad2(d.getDate())} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`
+  }
 
   const fromTs = Date.now() - windowDays * 86400000
   const windowed = state.curve.filter((p) => p.ts >= fromTs)
@@ -683,8 +688,10 @@ function XuegulinLFieldView(): ReactNode {
         createElement('option', { value: 'archive' }, `归档（${archiveSessions} 会话）`),
       ),
       viewMode === 'archive'
-        ? createElement('span', { className: 'xg-warn' }, '归档视图——指向制前历史读数（只读）；新读数归属当前指向。')
-        : null,
+        ? createElement('span', { className: 'xg-warn' }, '归档视图——未归属历史读数（只读）。')
+        : (state.baselineTs
+            ? createElement('span', { className: 'xg-label' }, `基线 ${fmtDayMin(state.baselineTs)}（此前＝指向制前历史，已归属本指向）`)
+            : null),
     ),
     createElement('div', { className: 'xg-span3' },
     Card({

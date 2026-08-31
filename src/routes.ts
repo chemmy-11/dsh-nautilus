@@ -168,6 +168,7 @@ export function registerXuegulinRoutes(ctx: { webServer: { register(route: WebRo
         revision: Date.now(),
         activeRoot: root,
         pointing: deps.store.lfieldRoot(),
+        baselineTs: deps.store.lfieldBaseline() || null,
         archiveTurns: deps.store.turnTotals('').turns,
         sessionMeta: deps.store.sessionMeta(),
         latest,
