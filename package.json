@@ -1,5 +1,5 @@
 {
-  "name": "@dsh-external/dsh-xuegulin",
+  "name": "@dsh-external/dsh-nexus",
   "version": "0.0.1",
   "description": "Vault 观测插件：Obsidian vault 元数据快照 + 编辑统计 + 观测面板（可配置任意 vault）",
   "private": true,

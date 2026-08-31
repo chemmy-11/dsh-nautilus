@@ -1,5 +1,5 @@
 /**
- * @dsh-external/dsh-xuegulin — pure-function regression tests (zero deps, node:test).
+ * @dsh-external/dsh-nexus — pure-function regression tests (zero deps, node:test).
  * Tests the BUILT artifacts (lib/) — run `npm run build` first (CI: install → build → test).
  * Coverage: analysis.ts (A 投影/S 形/爆发段/τ_e) + selfcheck.ts (自评三行) + scan.ts (R4 分支).
  * 依赖 node:sqlite（Node ≥ 22.13/24，CI node-version 24）与临时目录（mkdtemp）。
@@ -154,7 +154,7 @@ test('scanVault: 基线创建 → 未变跳过（R4）→ 改动更新', async (
   try {
     writeFileSync(join(vault, 'a.md'), '---\ntitle: x\n---\n正文 abc', 'utf8')
     writeFileSync(join(vault, 'b.md'), 'hello world', 'utf8')
-    const store = openStore(join(tmp, 'xuegu.db'))
+    const store = openStore(join(tmp, 'nexus.db'))
     try {
       const r1 = await scanVault(store, vault, [])
       assert.deepEqual({ created: r1.created, updated: r1.updated, removed: r1.removed }, { created: 2, updated: 0, removed: 0 })

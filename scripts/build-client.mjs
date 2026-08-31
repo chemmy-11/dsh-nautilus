@@ -1,5 +1,5 @@
 /**
- * @dsh-external/dsh-xuegulin — client half build (esbuild JS API, ModuleLoader wrapper).
+ * @dsh-external/dsh-nexus — client half build (esbuild JS API, ModuleLoader wrapper).
  * Output: lib/client.js (module shim + __ModuleLoader__.load wrapper) + lib/client.js.map.
  */
 import { createRequire } from 'node:module'
@@ -11,7 +11,7 @@ import { fileURLToPath } from 'node:url'
 const require = createRequire(import.meta.url)
 const pkgRoot = dirname(dirname(fileURLToPath(import.meta.url)))
 
-const PLUGIN_ID = '@dsh-external/dsh-xuegulin'
+const PLUGIN_ID = '@dsh-external/dsh-nexus'
 
 function detectCheckout() {
   const env = process.env.DSH_CHECKOUT

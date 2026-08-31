@@ -1,25 +1,25 @@
 /**
- * @dsh-external/dsh-xuegulin — observation REST routes (host half).
- * GET  /api/xuegulin/state          → panel snapshot (totals / today / week / recent edit stream)
- * POST /api/xuegulin/action         → { kind: 'rescan' } triggers a full scan
- * GET  /api/xuegulin/m2/state       → L 场读数（latest / totals / curve points / recent；?root=archive → 归档视图）
- * GET  /api/xuegulin/m2/annotations → 预言检验表标注
- * POST /api/xuegulin/m2/annotations → upsert 标注（prophecy 唯一）
- * GET  /api/xuegulin/lfield         → L 场读数独立指向（M4-L；known 桶/会话计数）
- * POST /api/xuegulin/lfield         → 切换 L 场读数指向（采集归属；归档不可逆）
+ * @dsh-external/dsh-nexus — observation REST routes (host half).
+ * GET  /api/nexus/state          → panel snapshot (totals / today / week / recent edit stream)
+ * POST /api/nexus/action         → { kind: 'rescan' } triggers a full scan
+ * GET  /api/nexus/m2/state       → L 场读数（latest / totals / curve points / recent；?root=archive → 归档视图）
+ * GET  /api/nexus/m2/annotations → 预言检验表标注
+ * POST /api/nexus/m2/annotations → upsert 标注（prophecy 唯一）
+ * GET  /api/nexus/lfield         → L 场读数独立指向（M4-L；known 桶/会话计数）
+ * POST /api/nexus/lfield         → 切换 L 场读数指向（采集归属；归档不可逆）
  * Same-origin marker guard; registered as effect.
  */
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { WebRoute } from '@deepseek-ai/dsh-host-webserver'
-import type { XuegulinStore } from './store.js'
+import type { NexusStore } from './store.js'
 import { statSync, accessSync, constants } from 'node:fs'
 import { isAbsolute, resolve } from 'node:path'
 import { analyze } from './analysis.js'
 
-const API_PREFIX = '/api/xuegulin'
+const API_PREFIX = '/api/nexus'
 
 export interface RouteDeps {
-  store: XuegulinStore
+  store: NexusStore
   onRescan: () => void
   /** M4.3：指向切换后发射（index.ts 监听后重挂 scan/watch）。 */
   onVaultChanged?: () => void
@@ -44,7 +44,7 @@ function dayWindow(offsetDays: number): { start: number; end: number } {
   return { start: start.getTime(), end: start.getTime() + 86400000 }
 }
 
-export function registerXuegulinRoutes(ctx: { webServer: { register(route: WebRoute): () => void } }, deps: RouteDeps): () => void {
+export function registerNexusRoutes(ctx: { webServer: { register(route: WebRoute): () => void } }, deps: RouteDeps): () => void {
   const disposers: Array<() => void> = []
 
   const state: WebRoute = {
@@ -112,7 +112,7 @@ export function registerXuegulinRoutes(ctx: { webServer: { register(route: WebRo
           // 首次确认：迁移期未归属数据（root=''）归入新指向——旧历史不丢、统计无缝
           if (firstBind) {
             const n = deps.store.reclaimUnowned(norm)
-            if (n > 0) console.log(`[xuegulin] 首次绑定接管未归属观测数据 ${n} 行 → ${norm}`)
+            if (n > 0) console.log(`[nexus] 首次绑定接管未归属观测数据 ${n} 行 → ${norm}`)
           }
           if (deps.onVaultChanged) deps.onVaultChanged()
           json(res, 200, { ok: true, active: norm })
@@ -289,7 +289,7 @@ export function registerXuegulinRoutes(ctx: { webServer: { register(route: WebRo
           if (!st.isDirectory()) return json(res, 400, { ok: false, error: 'not-a-directory' })
           try { accessSync(norm, constants.R_OK) } catch { return json(res, 400, { ok: false, error: 'not-readable' }) }
           deps.store.setLfieldRoot(norm)
-          console.log(`[xuegulin] L 场读数指向切换 → ${norm}（新会话自此归入；既有归属不变）`)
+          console.log(`[nexus] L 场读数指向切换 → ${norm}（新会话自此归入；既有归属不变）`)
           json(res, 200, { ok: true, active: norm })
         } catch {
           json(res, 400, { ok: false, error: 'bad-json' })

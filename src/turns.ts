@@ -1,11 +1,11 @@
 /**
- * @dsh-external/dsh-xuegulin — M2 官方会话事件采集（L 场读数数据层）。
+ * @dsh-external/dsh-nexus — M2 官方会话事件采集（L 场读数数据层）。
  * 纯逻辑（零 cordis 依赖，可单测）：订阅 session/event 的
  *   turn/start（轮次指针）→ user/message（问答摘要）→ step/start（计时）
  *   → assistant/message（usage: inputTokens/outputTokens/cacheReadTokens + turn/step）
  * 按 (session, turn) 幂等聚合为 turn_read。与团队底座零耦合（官方事件直采）。
  */
-import type { XuegulinStore } from './store.js'
+import type { NexusStore } from './store.js'
 
 /** 最小事件形态（官方 SessionEvent 的 duck-type 子集；避免新增 dsh-session 依赖）。 */
 export interface TurnEventLike {
@@ -50,7 +50,7 @@ export class TurnsCollector {
   /** M4-L：已打标会话（进程内去重；DB INSERT OR IGNORE 兜底重载/重启/多实例）。 */
   private readonly stamped = new Set<string>()
 
-  constructor(private readonly store: XuegulinStore) {}
+  constructor(private readonly store: NexusStore) {}
 
   handle(sessionId: string, ev: TurnEventLike, cwd?: string): void {
     // M4-L：会话首次落点 → 分类归属（cwd 在指向根下 = 知识库会话；否则归档桶）

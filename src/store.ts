@@ -1,5 +1,5 @@
 /**
- * @dsh-external/dsh-xuegulin — xuegu.db (SQLite, node:sqlite, zero deps).
+ * @dsh-external/dsh-nexus — nexus.db (SQLite, node:sqlite, zero deps).
  * vault_meta: file metadata baseline; edit_event: edit operations (only fs.watch channel writes).
  * turn_read/turn_text/annotation: M2/M3 L-field readings (session/event feed).
  * session_root: M4-L per-session L-field ownership ('' = pre-pointing archive bucket);
@@ -52,12 +52,12 @@ export interface SelfCheck {
   declaration: 0 | 1
 }
 
-export function openStore(dbFile: string, initialRoot = ''): XuegulinStore {
+export function openStore(dbFile: string, initialRoot = ''): NexusStore {
   mkdirSync(dirname(dbFile), { recursive: true })
-  return new XuegulinStore(dbFile, initialRoot)
+  return new NexusStore(dbFile, initialRoot)
 }
 
-export class XuegulinStore {
+export class NexusStore {
   private readonly db: DatabaseSync
   /** 迁移/首启前的种子 root（config.vaultRoot）——仅作初始指向与升级兜底。 */
   private readonly initialRoot: string
@@ -302,7 +302,7 @@ export class XuegulinStore {
 
   /**
    * 首次绑定接管：迁移期未归属（root=''）的观测数据归入新指向——
-   * 本机迁移前始终只观测这一个库（xuegulin 现状），旧行不丢、统计无缝；仅 vault_config
+   * 本机迁移前始终只观测这一个库（nexus 现状），旧行不丢、统计无缝；仅 vault_config
    * 此前为空（首次确认）时由调用方触发；已有多库记录后不再接管（'' 行保持悬置）。
    */
   reclaimUnowned(root: string): number {

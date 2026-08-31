@@ -1,5 +1,5 @@
 /**
- * @dsh-external/dsh-xuegulin — client panels (conversation.view tabs, official contract).
+ * @dsh-external/dsh-nexus — client panels (conversation.view tabs, official contract).
  * M3-UI: 主题令牌化（--dsw-alias-*）+ 卡片化布局 + 图表升级（网格/渐变/分色/图例）+ 交互增补。
  * 零新依赖：样式经组件内 <style> 注入（一次性，class 前缀 xg-）；SVG 自绘。
  */
@@ -49,7 +49,7 @@ type M2State = {
 type Annotation = { prophecy: string; status: string; note: string | null; updatedAt: number }
 type AnnotationsState = { revision: number; annotations: Annotation[] }
 
-// M4.3：vault 指向（GET /api/xuegulin/vault）
+// M4.3：vault 指向（GET /api/nexus/vault）
 type VaultInfo = {
   revision: number
   active: string
@@ -58,7 +58,7 @@ type VaultInfo = {
   known: Array<{ root: string; displayName: string | null; active: number; confirmedAt: number | null }>
 }
 
-// M4-L：L 场读数独立指向（GET /api/xuegulin/lfield）
+// M4-L：L 场读数独立指向（GET /api/nexus/lfield）
 type LfieldInfo = {
   revision: number
   active: string
@@ -66,7 +66,7 @@ type LfieldInfo = {
   known: Array<{ root: string; displayName: string | null; active: number; confirmedAt: number | null }>
 }
 
-type XuegulinState = {
+type NexusState = {
   revision: number
   activeRoot: string
   totals: { totalFiles: number; totalChars: number }
@@ -361,8 +361,8 @@ function LineChart(props: { series: Series[]; w: number; h: number; onOpenDetail
 
 // ── Tab① Vault 观测 ──────────────────────────────────────────────────────────
 
-function XuegulinView(): ReactNode {
-  const [state, setState] = useState<XuegulinState | null>(null)
+function NexusView(): ReactNode {
+  const [state, setState] = useState<NexusState | null>(null)
   const [vault, setVault] = useState<VaultInfo | null>(null)
   const [failed, setFailed] = useState(false)
   const [range, setRange] = useState<'today' | 'week'>('today')
@@ -374,11 +374,11 @@ function XuegulinView(): ReactNode {
   useHideComposer()
 
   const load = (): void => {
-    fetch('/api/xuegulin/state', { headers: { 'sec-fetch-site': 'same-origin' } })
-      .then((r) => (r.ok ? (r.json() as Promise<XuegulinState>) : Promise.resolve(null)))
+    fetch('/api/nexus/state', { headers: { 'sec-fetch-site': 'same-origin' } })
+      .then((r) => (r.ok ? (r.json() as Promise<NexusState>) : Promise.resolve(null)))
       .then((s) => { setState(s); setFailed(s === null) })
       .catch(() => { setState(null); setFailed(true) })
-    fetch('/api/xuegulin/vault', { headers: { 'sec-fetch-site': 'same-origin' } })
+    fetch('/api/nexus/vault', { headers: { 'sec-fetch-site': 'same-origin' } })
       .then((r) => (r.ok ? (r.json() as Promise<VaultInfo>) : Promise.resolve(null)))
       .then((v) => { if (v) setVault(v) })
       .catch(() => undefined)
@@ -395,7 +395,7 @@ function XuegulinView(): ReactNode {
     // 二次确认（切换后仅显示新库数据；旧数据保留可回切——观测记录不可逆，不删除）
     if (!window.confirm('切换后仅显示新 vault 数据；旧数据保留，可回切查看。确认切换？')) return
     setBusy(true)
-    fetch('/api/xuegulin/vault', {
+    fetch('/api/nexus/vault', {
       method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ root: newRoot }),
     }).then((r) => (r.ok ? r.json() : Promise.resolve(null)))
@@ -404,7 +404,7 @@ function XuegulinView(): ReactNode {
       .finally(() => setBusy(false))
   }
 
-  if (failed && state === null) return createElement('div', { className: 'xg-empty' }, 'Vault 观测数据不可用（/api/xuegulin/state）')
+  if (failed && state === null) return createElement('div', { className: 'xg-empty' }, 'Vault 观测数据不可用（/api/nexus/state）')
   if (state === null) return createElement('div', { className: 'xg-empty' }, 'Vault 观测加载中...')
 
   const summary = range === 'today' ? state.today : state.week
@@ -519,7 +519,7 @@ function XuegulinView(): ReactNode {
 
 // ── Tab② L 场读数 ────────────────────────────────────────────────────────────
 
-function XuegulinLFieldView(): ReactNode {
+function NexusLFieldView(): ReactNode {
   const [state, setState] = useState<M2State | null>(null)
   const [lfield, setLfield] = useState<LfieldInfo | null>(null)
   const [viewMode, setViewMode] = useState<'active' | 'archive'>('active')
@@ -540,26 +540,26 @@ function XuegulinLFieldView(): ReactNode {
   // M4-L：归档视图加 ?root=archive（只读查指向制前历史）；默认 = 当前 L 场指向
   const viewQ = viewMode === 'archive' ? '?root=archive' : ''
   const load = (): void => {
-    fetch(`/api/xuegulin/m2/state${viewQ}`, { headers: { 'sec-fetch-site': 'same-origin' } })
+    fetch(`/api/nexus/m2/state${viewQ}`, { headers: { 'sec-fetch-site': 'same-origin' } })
       .then((r) => (r.ok ? (r.json() as Promise<M2State>) : Promise.resolve(null)))
       .then((s) => { setState(s); setFailed(s === null) })
       .catch(() => { setState(null); setFailed(true) })
-    fetch('/api/xuegulin/lfield', { headers: { 'sec-fetch-site': 'same-origin' } })
+    fetch('/api/nexus/lfield', { headers: { 'sec-fetch-site': 'same-origin' } })
       .then((r) => (r.ok ? (r.json() as Promise<LfieldInfo>) : Promise.resolve(null)))
       .then((l) => { if (l) setLfield(l) })
       .catch(() => undefined)
-    fetch('/api/xuegulin/m2/annotations', { headers: { 'sec-fetch-site': 'same-origin' } })
+    fetch('/api/nexus/m2/annotations', { headers: { 'sec-fetch-site': 'same-origin' } })
       .then((r) => (r.ok ? (r.json() as Promise<AnnotationsState>) : Promise.resolve(null)))
       .then((a) => { if (a) { setAnn(a); const m: Record<string, string> = {}; for (const x of a.annotations) if (x.note) m[x.prophecy] = x.note; setNotes(m) } })
       .catch(() => undefined)
-    fetch(`/api/xuegulin/m2/analysis${viewQ}`, { headers: { 'sec-fetch-site': 'same-origin' } })
+    fetch(`/api/nexus/m2/analysis${viewQ}`, { headers: { 'sec-fetch-site': 'same-origin' } })
       .then((r) => (r.ok ? (r.json() as Promise<{ results: AnalysisResult[] }>) : Promise.resolve(null)))
       .then((a) => { if (a) setAnalysis(a.results) })
       .catch(() => undefined)
   }
 
   const openTurnText = (meta: { session: string; turn: number }): void => {
-    fetch(`/api/xuegulin/m2/turn-text?session=${encodeURIComponent(meta.session)}&turn=${meta.turn}`, { headers: { 'sec-fetch-site': 'same-origin' } })
+    fetch(`/api/nexus/m2/turn-text?session=${encodeURIComponent(meta.session)}&turn=${meta.turn}`, { headers: { 'sec-fetch-site': 'same-origin' } })
       .then((r) => (r.ok ? (r.json() as Promise<TurnTextResp>) : Promise.resolve(null)))
       .then((t) => { if (t) setTextDetail(t) })
       .catch(() => setTextDetail(null))
@@ -581,7 +581,7 @@ function XuegulinLFieldView(): ReactNode {
     return () => window.removeEventListener('keydown', h)
   }, [chartMode])
 
-  if (failed && state === null) return createElement('div', { className: 'xg-empty' }, 'L 场读数不可用（/api/xuegulin/m2/state）')
+  if (failed && state === null) return createElement('div', { className: 'xg-empty' }, 'L 场读数不可用（/api/nexus/m2/state）')
   if (state === null) return createElement('div', { className: 'xg-empty' }, 'L 场读数加载中...')
 
   // 口径：usage.inputTokens = 未命中；总输入 = input + cache
@@ -647,7 +647,7 @@ function XuegulinLFieldView(): ReactNode {
   const DEF_LABEL: Record<string, string> = { none: '无', light: '轻', heavy: '重' }
 
   const saveAnn = (prophecy: string, status: string, note: string): void => {
-    fetch('/api/xuegulin/m2/annotations', {
+    fetch('/api/nexus/m2/annotations', {
       method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ prophecy, status, note: note.trim() === '' ? null : note }),
     }).then((r) => (r.ok ? load() : undefined)).catch(() => undefined)
@@ -659,7 +659,7 @@ function XuegulinLFieldView(): ReactNode {
   const archiveSessions = lfield?.counts[''] ?? 0
   const switchLfield = (root: string): void => {
     if (!window.confirm('切换后新会话读数归入新指向；既有会话归属不变（归档不可逆）。确认切换 L 场指向？')) return
-    fetch('/api/xuegulin/lfield', {
+    fetch('/api/nexus/lfield', {
       method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ root }),
     }).then((r) => { if (r.ok) { setViewMode('active'); load() } }).catch(() => undefined)
@@ -867,22 +867,22 @@ export function apply(ctx: { slots: { inject(key: string, callback: () => unknow
     () => ctx.slots.inject('conversation.view', () =>
       ctx.slots.register({
         name: 'conversation.view',
-        id: '@dsh-external/dsh-xuegulin-panel',
+        id: '@dsh-external/dsh-nexus-panel',
         order: 30,
         label: () => 'Vault 观测',
-      }, XuegulinView),
+      }, NexusView),
     ),
-    '@dsh-external/dsh-xuegulin: panel',
+    '@dsh-external/dsh-nexus: panel',
   )
   ctx.effect(
     () => ctx.slots.inject('conversation.view', () =>
       ctx.slots.register({
         name: 'conversation.view',
-        id: '@dsh-external/dsh-xuegulin-lfield-panel',
+        id: '@dsh-external/dsh-nexus-lfield-panel',
         order: 35,
         label: () => 'L 场读数',
-      }, XuegulinLFieldView),
+      }, NexusLFieldView),
     ),
-    '@dsh-external/dsh-xuegulin: lfield panel',
+    '@dsh-external/dsh-nexus: lfield panel',
   )
 }

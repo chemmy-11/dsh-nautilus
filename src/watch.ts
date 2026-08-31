@@ -1,5 +1,5 @@
 /**
- * @dsh-external/dsh-xuegulin — fs.watch edit listener (main event source) + debounce merge.
+ * @dsh-external/dsh-nexus — fs.watch edit listener (main event source) + debounce merge.
  * Same-file 500ms window merges into one event (session_key = `path|windowStart` idempotent).
  * kind: path missing → deleted; not in meta → created; else modified.
  * Windows note: recursive watch events are lazy — periodic scan backstops (scan.ts).
@@ -7,7 +7,7 @@
 import { watch, type FSWatcher } from 'node:fs'
 import { stat, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import type { XuegulinStore } from './store.js'
+import type { NexusStore } from './store.js'
 import { countChars } from './scan.js'
 
 export interface WatchOptions {
@@ -25,7 +25,7 @@ function isExcluded(rel: string, exclude: string[]): boolean {
   return false
 }
 
-export function startVaultWatch(store: XuegulinStore, opts: WatchOptions): () => void {
+export function startVaultWatch(store: NexusStore, opts: WatchOptions): () => void {
   const { root, exclude, debounceMs } = opts
   const buckets = new Map<string, { timer: ReturnType<typeof setTimeout>; key: string }>()
 
@@ -64,7 +64,7 @@ export function startVaultWatch(store: XuegulinStore, opts: WatchOptions): () =>
         }
       }
     } catch (e) {
-      console.error('[xuegulin] watch settle failed', rel, String(e))
+      console.error('[nexus] watch settle failed', rel, String(e))
     }
   }
 
@@ -87,7 +87,7 @@ export function startVaultWatch(store: XuegulinStore, opts: WatchOptions): () =>
   })
 
   watcher.on('error', (err) => {
-    console.warn('[xuegulin] vault watch error (fallback to scan-only):', String(err))
+    console.warn('[nexus] vault watch error (fallback to scan-only):', String(err))
   })
 
   return () => {

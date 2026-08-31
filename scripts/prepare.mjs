@@ -1,5 +1,5 @@
 /**
- * @dsh-external/dsh-xuegulin — Node 构建入口（prepare/build 共用）。
+ * @dsh-external/dsh-nexus — Node 构建入口（prepare/build 共用）。
  * 纯 Node 实现（不依赖 bash 环境）。
  * 两种构建模式：
  *  A) DSH checkout 模式（本地开发）：DSH_CHECKOUT / ~/dsh-harness 存在 →
