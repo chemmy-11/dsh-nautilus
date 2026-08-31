@@ -223,21 +223,20 @@ export class XuegulinStore {
   }
 
   /**
-   * M4-L 迁移（user_version 1→2，2026-08-31 语义修正）：L 场读数独立指向——
-   * 既有会话归属到迁移时的 vault 观测指向（历史读数即该指向语境下的读数——守谷人裁定）；
-   * lfield_config 种子 = 迁移时 vault 指向；baseline_ts = 迁移时刻（指向制前 epoch 基线）。
+   * M4-L 迁移（user_version 1→2，2026-08-31 定稿）：L 场读数独立指向 + 归档——
+   * 既有会话（指向制前）整体归入 '' 归档桶（守谷人定稿：归档=目前全部数据，
+   * 与指向后的知识库会话两类分开处理）；lfield_config 种子 = 迁移时 vault 指向。
    */
   private migrateV2(): void {
     this.db.exec('BEGIN')
     try {
-      const seed = this.activeRoot()
       this.db.prepare(`
         INSERT OR IGNORE INTO session_root (session, root, first_ts)
-        SELECT session, ?, MIN(ts) FROM turn_read GROUP BY session
-      `).run(seed)
+        SELECT session, '', MIN(ts) FROM turn_read GROUP BY session
+      `).run()
       this.db.prepare(`
         INSERT OR IGNORE INTO lfield_config (id, root, updated_at, baseline_ts) VALUES (1, ?, ?, ?)
-      `).run(seed, Date.now(), Date.now())
+      `).run(this.activeRoot(), Date.now(), Date.now())
       this.db.exec('PRAGMA user_version = 2')
       this.db.exec('COMMIT')
     } catch (e) {
@@ -247,9 +246,8 @@ export class XuegulinStore {
   }
 
   /**
-   * M4-L 修正迁移（user_version 2→3）：旧 v2 曾把既有会话归入 '' 归档桶——
-   * 守谷人裁定历史读数即指向语境（L-theory）读数 → 重归属到当前 L 场指向；
-   * 并为旧 v2 表补 baseline_ts 列。幂等：已重归属/已有基线 → 零行变更。
+   * M4-L 修正迁移（user_version 2→3）：为旧 v2 表补 baseline_ts 列（划代基线——
+   * 归档 epoch 与指向 epoch 的分界时刻）。幂等：已有基线 → 零行变更。
    */
   private migrateV3(): void {
     this.db.exec('BEGIN')
@@ -258,9 +256,6 @@ export class XuegulinStore {
       if (!cols.some((c) => c.name === 'baseline_ts')) {
         this.db.exec('ALTER TABLE lfield_config ADD COLUMN baseline_ts INTEGER')
       }
-      this.db.prepare(`
-        UPDATE session_root SET root = (SELECT root FROM lfield_config WHERE id = 1) WHERE root = ?
-      `).run('')
       this.db.prepare('UPDATE lfield_config SET baseline_ts = ? WHERE baseline_ts IS NULL').run(Date.now())
       this.db.exec('PRAGMA user_version = 3')
       this.db.exec('COMMIT')
