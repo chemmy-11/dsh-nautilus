@@ -688,16 +688,16 @@ function XuegulinLFieldView(): ReactNode {
         createElement('option', { value: 'archive' }, `归档（${archiveSessions} 会话）`),
       ),
       viewMode === 'archive'
-        ? createElement('span', { className: 'xg-warn' }, '归档视图——未归属历史读数（只读）。')
+        ? createElement('span', { className: 'xg-warn' }, '归档视图——目前全部历史数据（知识库会话见当前指向）。')
         : (state.baselineTs
-            ? createElement('span', { className: 'xg-label' }, `基线 ${fmtDayMin(state.baselineTs)}（此前＝指向制前历史，已归属本指向）`)
+            ? createElement('span', { className: 'xg-label' }, `基线 ${fmtDayMin(state.baselineTs)}（此前＝归档历史；此后＝在工作区发起的知识库会话）`)
             : null),
     ),
     createElement('div', { className: 'xg-span3' },
     Card({
       title: '最新读数',
       children: latest === null
-        ? createElement('div', { className: 'xg-empty' }, '（等待会话活动——M2 部署起前向积累）')
+        ? createElement('div', { className: 'xg-empty' }, '（等待知识库会话——在指向工作区发起的对话将归入此处）')
         : createElement('div', null,
             createElement('div', { className: 'xg-row' },
               Kv({ label: `turn ${latest.turn} · ${shortSession(latest.session)}`, value: fmtK(totalIn(latest)) }),

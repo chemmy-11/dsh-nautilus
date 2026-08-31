@@ -124,8 +124,13 @@ export function apply(ctx: Context, config: Config): void {
     const onSessionEvent = (ctx.on as unknown as SessionEventOn).bind(ctx)
     return onSessionEvent(SESSION_EVENT, (session, event) => {
       try {
-        const sid = String((session as { id?: unknown })?.id ?? '')
-        if (sid !== '') collector.handle(sid, event as TurnEventLike)
+        const s = session as { id?: unknown; header?: { cwd?: unknown } }
+        const sid = String(s?.id ?? '')
+        if (sid !== '') {
+          // M4-L：会话发起时的 workspace（cwd）——知识库会话判定依据
+          const cwd = typeof s?.header?.cwd === 'string' ? s.header.cwd : undefined
+          collector.handle(sid, event as TurnEventLike, cwd)
+        }
       } catch (e) {
         console.error('[xuegulin] turn collect failed', String(e))
       }

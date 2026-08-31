@@ -52,11 +52,11 @@ export class TurnsCollector {
 
   constructor(private readonly store: XuegulinStore) {}
 
-  handle(sessionId: string, ev: TurnEventLike): void {
-    // M4-L：会话首次落点 → 归入当前 L 场指向（迁移归档映射优先，INSERT OR IGNORE 不改写）
+  handle(sessionId: string, ev: TurnEventLike, cwd?: string): void {
+    // M4-L：会话首次落点 → 分类归属（cwd 在指向根下 = 知识库会话；否则归档桶）
     if (!this.stamped.has(sessionId)) {
       this.stamped.add(sessionId)
-      this.store.stampSessionRoot(sessionId, typeof ev.time === 'number' ? ev.time : Date.now())
+      this.store.classifySessionRoot(sessionId, cwd, typeof ev.time === 'number' ? ev.time : Date.now())
     }
     const time = typeof ev.time === 'number' ? ev.time : Date.now()
     switch (ev.type) {

@@ -333,10 +333,23 @@ export class XuegulinStore {
     `).run(root, Date.now())
   }
 
-  /** 会话首次落点时打标归属（INSERT OR IGNORE——迁移归档映射优先，不因后续事件改写）。 */
-  stampSessionRoot(session: string, ts: number): void {
+  /**
+   * 会话首次落点分类（守谷人 2026-08-31 定稿）：cwd 在当前 L 场指向根之下（含等于）
+   * → 知识库会话，归指向根；否则 → '' 归档桶。INSERT OR IGNORE——首标定终身，不因后续改写。
+   */
+  classifySessionRoot(session: string, cwd: string | undefined, ts: number): void {
+    const root = this.lfieldRoot()
+    const kb = cwd !== undefined && cwd !== '' && root !== '' && this.isUnderRoot(cwd, root)
     this.db.prepare('INSERT OR IGNORE INTO session_root (session, root, first_ts) VALUES (?, ?, ?)')
-      .run(session, this.lfieldRoot(), ts)
+      .run(session, kb ? root : '', ts)
+  }
+
+  /** workspace 归属判定：cwd 等于根或位于根下（Windows 大小写不敏感，分隔符统一）。 */
+  private isUnderRoot(cwd: string, root: string): boolean {
+    const norm = (p: string): string => p.replaceAll('/', '\\').replace(/\\+$/, '').toLowerCase()
+    const c = norm(cwd)
+    const r = norm(root)
+    return c === r || c.startsWith(r + '\\')
   }
 
   /** 各归属桶的会话数（键含 '' 归档桶）。 */
