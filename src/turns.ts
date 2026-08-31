@@ -47,10 +47,17 @@ export class TurnsCollector {
   private readonly latestQuestion = new Map<string, string | null>()
   /** 当前轮指针：session → turn（user/message 无 turn 字段——按事件序归属，同 E-1 精神）。 */
   private readonly latestTurn = new Map<string, number>()
+  /** M4-L：已打标会话（进程内去重；DB INSERT OR IGNORE 兜底重载/重启/多实例）。 */
+  private readonly stamped = new Set<string>()
 
   constructor(private readonly store: XuegulinStore) {}
 
   handle(sessionId: string, ev: TurnEventLike): void {
+    // M4-L：会话首次落点 → 归入当前 L 场指向（迁移归档映射优先，INSERT OR IGNORE 不改写）
+    if (!this.stamped.has(sessionId)) {
+      this.stamped.add(sessionId)
+      this.store.stampSessionRoot(sessionId, typeof ev.time === 'number' ? ev.time : Date.now())
+    }
     const time = typeof ev.time === 'number' ? ev.time : Date.now()
     switch (ev.type) {
       case 'turn/start': {

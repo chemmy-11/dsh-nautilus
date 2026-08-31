@@ -2,9 +2,11 @@
  * @dsh-external/dsh-xuegulin — observation REST routes (host half).
  * GET  /api/xuegulin/state          → panel snapshot (totals / today / week / recent edit stream)
  * POST /api/xuegulin/action         → { kind: 'rescan' } triggers a full scan
- * GET  /api/xuegulin/m2/state       → L 场读数（latest / totals / curve points / recent）
+ * GET  /api/xuegulin/m2/state       → L 场读数（latest / totals / curve points / recent；?root=archive → 归档视图）
  * GET  /api/xuegulin/m2/annotations → 预言检验表标注
  * POST /api/xuegulin/m2/annotations → upsert 标注（prophecy 唯一）
+ * GET  /api/xuegulin/lfield         → L 场读数独立指向（M4-L；known 桶/会话计数）
+ * POST /api/xuegulin/lfield         → 切换 L 场读数指向（采集归属；归档不可逆）
  * Same-origin marker guard; registered as effect.
  */
 import type { IncomingMessage, ServerResponse } from 'node:http'
@@ -152,15 +154,22 @@ export function registerXuegulinRoutes(ctx: { webServer: { register(route: WebRo
       if (!browserSameOriginMarker(req)) return json(res, 403, { ok: false, error: 'forbidden' })
       const historyDays = deps.m2HistoryDays ?? 30
       const fromTs = Date.now() - historyDays * 86400000
-      const points = deps.store.turnReadsSince(fromTs)
+      // M4-L：?root=archive → 归档桶（指向制前历史，只读视图）；默认 = 当前 L 场指向
+      const url = new URL(String(req.url ?? ''), 'http://localhost')
+      const root = url.searchParams.get('root') === 'archive' ? '' : deps.store.lfieldRoot()
+      const points = deps.store.turnReadsSince(fromTs, root)
       const latest = points.length > 0 ? points[points.length - 1] : null
-      const totals = deps.store.turnTotals()
+      const totals = deps.store.turnTotals(root)
       // 官方口径（llm-deepseek mapUsage 实证）：usage.inputTokens 已扣除缓存命中 = 未命中；
       // 总输入 = inputTokens + cacheReadTokens；命中率 = cacheRead / 总输入；A 投影（未命中率）= inputTokens / 总输入。
       const totalIn = totals.tokenIn + totals.cacheRead
       const hitRate = totalIn > 0 ? totals.cacheRead / totalIn : null
       json(res, 200, {
         revision: Date.now(),
+        activeRoot: root,
+        pointing: deps.store.lfieldRoot(),
+        archiveTurns: deps.store.turnTotals('').turns,
+        sessionMeta: deps.store.sessionMeta(),
         latest,
         totals: {
           turns: totals.turns,
@@ -231,7 +240,7 @@ export function registerXuegulinRoutes(ctx: { webServer: { register(route: WebRo
     },
   }
 
-  // M3-F.3：白盒探索性分析（S 形/爆发段/τ_e；口径=镜 OQ-M2-1/2 裁决）
+  // M3-F.3：白盒探索性分析（S 形/爆发段/τ_e；口径=镜 OQ-M2-1/2 裁决；M4-L 同 ?root=archive 归桶）
   const analysis: WebRoute = {
     kind: 'exact',
     path: `${API_PREFIX}/m2/analysis`,
@@ -240,12 +249,54 @@ export function registerXuegulinRoutes(ctx: { webServer: { register(route: WebRo
       if (!browserSameOriginMarker(req)) return json(res, 403, { ok: false, error: 'forbidden' })
       const historyDays = deps.m2HistoryDays ?? 30
       const fromTs = Date.now() - historyDays * 86400000
-      const rows = deps.store.turnReadsSince(fromTs)
+      const url = new URL(String(req.url ?? ''), 'http://localhost')
+      const root = url.searchParams.get('root') === 'archive' ? '' : deps.store.lfieldRoot()
+      const rows = deps.store.turnReadsSince(fromTs, root)
       const results = analyze(rows)
       json(res, 200, { revision: Date.now(), results })
     },
   }
 
-  for (const route of [m2State, annotations, turnText, analysis]) disposers.push(ctx.webServer.register(route))
+  // M4-L：L 场读数独立指向（GET 状态 / POST 切换采集归属）
+  const lfield: WebRoute = {
+    kind: 'exact',
+    path: `${API_PREFIX}/lfield`,
+    handler: (req, res): void => {
+      if (!browserSameOriginMarker(req)) return json(res, 403, { ok: false, error: 'forbidden' })
+      if (req.method === 'GET') {
+        json(res, 200, {
+          revision: Date.now(),
+          active: deps.store.lfieldRoot(),
+          counts: deps.store.sessionRootCounts(),
+          known: deps.store.listVaults(),
+        })
+        return
+      }
+      if (req.method !== 'POST') return json(res, 405, { ok: false, error: 'method-not-allowed' })
+      void (async () => {
+        try {
+          const chunks: Buffer[] = []
+          for await (const c of req) chunks.push(c as Buffer)
+          const body = JSON.parse(Buffer.concat(chunks).toString('utf8')) as { root?: unknown }
+          if (typeof body.root !== 'string' || body.root.trim() === '') {
+            return json(res, 400, { ok: false, error: 'invalid-root' })
+          }
+          if (!isAbsolute(body.root)) return json(res, 400, { ok: false, error: 'must-be-absolute' })
+          const norm = resolve(body.root)
+          let st
+          try { st = statSync(norm) } catch { return json(res, 400, { ok: false, error: 'not-found' }) }
+          if (!st.isDirectory()) return json(res, 400, { ok: false, error: 'not-a-directory' })
+          try { accessSync(norm, constants.R_OK) } catch { return json(res, 400, { ok: false, error: 'not-readable' }) }
+          deps.store.setLfieldRoot(norm)
+          console.log(`[xuegulin] L 场读数指向切换 → ${norm}（新会话自此归入；既有归属不变）`)
+          json(res, 200, { ok: true, active: norm })
+        } catch {
+          json(res, 400, { ok: false, error: 'bad-json' })
+        }
+      })()
+    },
+  }
+
+  for (const route of [m2State, annotations, turnText, analysis, lfield]) disposers.push(ctx.webServer.register(route))
   return () => { for (const d of disposers) d() }
 }

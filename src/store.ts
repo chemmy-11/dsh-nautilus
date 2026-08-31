@@ -1,6 +1,9 @@
 /**
  * @dsh-external/dsh-xuegulin — xuegu.db (SQLite, node:sqlite, zero deps).
  * vault_meta: file metadata baseline; edit_event: edit operations (only fs.watch channel writes).
+ * turn_read/turn_text/annotation: M2/M3 L-field readings (session/event feed).
+ * session_root: M4-L per-session L-field ownership ('' = pre-pointing archive bucket);
+ * lfield_config: M4-L independent L-field pointing (single row).
  * Idempotency: edit_event.session_key unique (debounce window key) — no double counting on reload/restart.
  */
 import { DatabaseSync } from 'node:sqlite'
@@ -124,8 +127,27 @@ export class XuegulinStore {
         updated_at INTEGER NOT NULL,
         PRIMARY KEY (session, turn)
       );
+      -- M4-L：L 场读数会话归属（采集落点打标；'' = 指向制前归档/未归属桶）
+      CREATE TABLE IF NOT EXISTS session_root (
+        session TEXT PRIMARY KEY,
+        root TEXT NOT NULL DEFAULT '',
+        first_ts INTEGER NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_session_root ON session_root(root);
+      -- M4-L：L 场读数独立指向（单行配置；与 vault_config 观测指向互不影响）
+      CREATE TABLE IF NOT EXISTS lfield_config (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        root TEXT NOT NULL DEFAULT '',
+        updated_at INTEGER NOT NULL
+      );
     `)
     this.migrate()
+  }
+
+  private migrate(): void {
+    const v = (this.db.prepare('PRAGMA user_version').get() as { user_version: number })?.user_version ?? 0
+    if (v < 1) this.migrateV1()
+    if (v < 2) this.migrateV2()
   }
 
   /**
@@ -133,9 +155,7 @@ export class XuegulinStore {
    * vault_meta 重建为 (root, path) 主键（两库同相对路径互不污染，原 path 主键改不了）；
    * edit_event 重建加 root 列；vault_config 建表；既有行 backfill 到迁移时生效的 root（种子）。
    */
-  private migrate(): void {
-    const v = (this.db.prepare('PRAGMA user_version').get() as { user_version: number })?.user_version ?? 0
-    if (v >= 1) return
+  private migrateV1(): void {
     const seed = this.initialRoot
     this.db.exec('BEGIN')
     try {
@@ -200,6 +220,29 @@ export class XuegulinStore {
     }
   }
 
+  /**
+   * M4-L 迁移（user_version 1→2）：L 场读数归档 + 独立指向——
+   * 既有会话（指向制前采集）整体归入 '' 归档桶（基础数据保留可查，不再与新指向混算）；
+   * lfield_config 种子 = 迁移时 vault 观测指向（L 场与观测分离，各自独立切换）。
+   */
+  private migrateV2(): void {
+    this.db.exec('BEGIN')
+    try {
+      this.db.prepare(`
+        INSERT OR IGNORE INTO session_root (session, root, first_ts)
+        SELECT session, '', MIN(ts) FROM turn_read GROUP BY session
+      `).run()
+      this.db.prepare(`
+        INSERT OR IGNORE INTO lfield_config (id, root, updated_at) VALUES (1, ?, ?)
+      `).run(this.activeRoot(), Date.now())
+      this.db.exec('PRAGMA user_version = 2')
+      this.db.exec('COMMIT')
+    } catch (e) {
+      this.db.exec('ROLLBACK')
+      throw e
+    }
+  }
+
   close(): void {
     this.db.close()
   }
@@ -244,6 +287,50 @@ export class XuegulinStore {
     const m = this.db.prepare('UPDATE vault_meta SET root = ? WHERE root = ?').run(root, '')
     const e = this.db.prepare('UPDATE edit_event SET root = ? WHERE root = ?').run(root, '')
     return Number(m.changes) + Number(e.changes)
+  }
+
+  // ── M4-L：L 场读数独立指向（lfield_config / session_root） ──────────────────
+
+  /** L 场读数当前指向（采集归属；'' = 未指向——新会话将落入归档桶）。 */
+  lfieldRoot(): string {
+    const r = this.db.prepare('SELECT root FROM lfield_config WHERE id = 1').get() as { root: string } | undefined
+    return r === undefined ? '' : String(r.root)
+  }
+
+  /** 切换 L 场读数指向（采集从此归入新根；既有会话归属不变——归档不可逆）。 */
+  setLfieldRoot(root: string): void {
+    this.db.prepare(`
+      INSERT INTO lfield_config (id, root, updated_at) VALUES (1, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET root = excluded.root, updated_at = excluded.updated_at
+    `).run(root, Date.now())
+  }
+
+  /** 会话首次落点时打标归属（INSERT OR IGNORE——迁移归档映射优先，不因后续事件改写）。 */
+  stampSessionRoot(session: string, ts: number): void {
+    this.db.prepare('INSERT OR IGNORE INTO session_root (session, root, first_ts) VALUES (?, ?, ?)')
+      .run(session, this.lfieldRoot(), ts)
+  }
+
+  /** 各归属桶的会话数（键含 '' 归档桶）。 */
+  sessionRootCounts(): Record<string, number> {
+    const rows = this.db.prepare('SELECT root, COUNT(*) AS n FROM session_root GROUP BY root').all() as Array<{ root: string; n: number }>
+    const out: Record<string, number> = {}
+    for (const r of rows) out[String(r.root)] = Number(r.n)
+    return out
+  }
+
+  /** 每会话元信息（首轮时刻 + 轮数；会话选择器的友好标签数据源）。 */
+  sessionMeta(): Record<string, { startTs: number; turns: number }> {
+    const rows = this.db.prepare('SELECT session, MIN(ts) AS start_ts, COUNT(*) AS turns FROM turn_read GROUP BY session').all() as Array<Record<string, unknown>>
+    const out: Record<string, { startTs: number; turns: number }> = {}
+    for (const r of rows) out[String(r.session)] = { startTs: Number(r.start_ts), turns: Number(r.turns) }
+    return out
+  }
+
+  /** 会话归属过滤片段：root 给定时仅取归属该根的会话（undefined = 不过滤——工具全局口径）。 */
+  private turnRootFilter(root: string | undefined): { sql: string; params: string[] } {
+    if (root === undefined) return { sql: '', params: [] }
+    return { sql: ' AND session IN (SELECT session FROM session_root WHERE root = ?)', params: [root] }
   }
 
   // ── vault_meta ──────────────────────────────────────────────────────────────
@@ -360,34 +447,37 @@ export class XuegulinStore {
     )
   }
 
-  turnReads(limit: number): TurnReadRow[] {
+  turnReads(limit: number, root?: string): TurnReadRow[] {
+    const f = this.turnRootFilter(root)
     const rows = this.db.prepare(`
       SELECT session, turn, ts, question, token_in, token_out, cache_read, duration_ms, tps,
              clarity, defense, declaration
-      FROM turn_read ORDER BY ts DESC LIMIT ?
-    `).all(limit) as Array<Record<string, unknown>>
+      FROM turn_read WHERE 1 = 1${f.sql} ORDER BY ts DESC LIMIT ?
+    `).all(...f.params, limit) as Array<Record<string, unknown>>
     return rows.map((r) => mapTurnRow(r))
   }
 
   /** 总量读数（总命中/未命中 token）；未命中 = token_in（官方 inputTokens = 未命中口径）。 */
-  turnTotals(): { turns: number; tokenIn: number; tokenOut: number; cacheRead: number } {
+  turnTotals(root?: string): { turns: number; tokenIn: number; tokenOut: number; cacheRead: number } {
+    const f = this.turnRootFilter(root)
     const r = this.db.prepare(`
       SELECT COUNT(*) AS turns,
              COALESCE(SUM(token_in), 0) AS tin,
              COALESCE(SUM(token_out), 0) AS tout,
              COALESCE(SUM(cache_read), 0) AS cr
-      FROM turn_read
-    `).get() as { turns: number; tin: number; tout: number; cr: number }
+      FROM turn_read WHERE 1 = 1${f.sql}
+    `).get(...f.params) as { turns: number; tin: number; tout: number; cr: number }
     return { turns: Number(r.turns ?? 0), tokenIn: Number(r.tin ?? 0), tokenOut: Number(r.tout ?? 0), cacheRead: Number(r.cr ?? 0) }
   }
 
-  /** 窗口内读数（曲线数据；ts >= fromTs 升序）。 */
-  turnReadsSince(fromTs: number): TurnReadRow[] {
+  /** 窗口内读数（曲线数据；ts >= fromTs 升序；root 给定时按归属桶过滤）。 */
+  turnReadsSince(fromTs: number, root?: string): TurnReadRow[] {
+    const f = this.turnRootFilter(root)
     const rows = this.db.prepare(`
       SELECT session, turn, ts, question, token_in, token_out, cache_read, duration_ms, tps,
              clarity, defense, declaration
-      FROM turn_read WHERE ts >= ? ORDER BY ts ASC
-    `).all(fromTs) as Array<Record<string, unknown>>
+      FROM turn_read WHERE ts >= ?${f.sql} ORDER BY ts ASC
+    `).all(fromTs, ...f.params) as Array<Record<string, unknown>>
     return rows.map((r) => mapTurnRow(r))
   }
 

@@ -35,6 +35,10 @@ type TurnTextResp = { found: boolean; session?: string; turn?: number; userText?
 
 type M2State = {
   revision: number
+  activeRoot: string
+  pointing: string
+  archiveTurns: number
+  sessionMeta: Record<string, { startTs: number; turns: number }>
   latest: M2Point | null
   totals: { turns: number; tokenIn: number; tokenOut: number; cacheRead: number; missToken: number; totalIn?: number; hitRate: number | null }
   curve: M2Point[]
@@ -50,6 +54,14 @@ type VaultInfo = {
   active: string
   exists: boolean
   readable: boolean
+  known: Array<{ root: string; displayName: string | null; active: number; confirmedAt: number | null }>
+}
+
+// M4-L：L 场读数独立指向（GET /api/xuegulin/lfield）
+type LfieldInfo = {
+  revision: number
+  active: string
+  counts: Record<string, number>
   known: Array<{ root: string; displayName: string | null; active: number; confirmedAt: number | null }>
 }
 
@@ -124,6 +136,11 @@ const STYLE = `
 /* M3-UI.2+: tab 激活时隐藏输入卡（[data-composer-seat] 为官方稳定锚点，皮肤同款选择器；
    组件挂载 ⇔ tab 激活（view ring only:activeId），body 类由 useHideComposer 挂/卸载。 */
 body.xg-hide-input [data-composer-seat] { display: none !important; }
+/* M4-L：L 场指向条 + 可展开分析 */
+.xg-lf-bar { grid-column:1 / -1; display:flex; align-items:center; gap:8px; flex-wrap:wrap; font:var(--dsw-font-xxs-12); color:var(--dsw-alias-label-secondary); }
+.xg-lf-bar b { color:var(--dsw-alias-label-primary); font-weight:600; }
+.xg-details { font:var(--dsw-font-xxs-12); color:var(--dsw-alias-label-secondary); margin-top:8px; }
+.xg-details summary { cursor:pointer; color:var(--dsw-alias-label-tertiary); user-select:none; }
 `
 
 let styleInjected = false
@@ -422,7 +439,7 @@ function XuegulinView(): ReactNode {
                   ),
             ),
             createElement('div', { className: 'xg-note' },
-              '数据口径：本页统计（文件/字数/编辑事件）仅来自指向 vault；L 场读数（会话级）不受指向影响。',
+              '数据口径：本页统计（文件/字数/编辑事件）仅来自指向 vault；L 场读数有独立指向（制前数据已归档，可在 L 场读数页切换查看）。',
             ),
             editMode
               ? createElement('div', { style: { marginTop: 8, display: 'flex', flexWrap: 'wrap', gap: 6 } },
@@ -503,6 +520,8 @@ function XuegulinView(): ReactNode {
 
 function XuegulinLFieldView(): ReactNode {
   const [state, setState] = useState<M2State | null>(null)
+  const [lfield, setLfield] = useState<LfieldInfo | null>(null)
+  const [viewMode, setViewMode] = useState<'active' | 'archive'>('active')
   const [ann, setAnn] = useState<AnnotationsState | null>(null)
   const [failed, setFailed] = useState(false)
   const [axis, setAxis] = useState<'date' | 'turn'>('date')
@@ -517,16 +536,22 @@ function XuegulinLFieldView(): ReactNode {
   injectStyle()
   useHideComposer()
 
+  // M4-L：归档视图加 ?root=archive（只读查指向制前历史）；默认 = 当前 L 场指向
+  const viewQ = viewMode === 'archive' ? '?root=archive' : ''
   const load = (): void => {
-    fetch('/api/xuegulin/m2/state', { headers: { 'sec-fetch-site': 'same-origin' } })
+    fetch(`/api/xuegulin/m2/state${viewQ}`, { headers: { 'sec-fetch-site': 'same-origin' } })
       .then((r) => (r.ok ? (r.json() as Promise<M2State>) : Promise.resolve(null)))
       .then((s) => { setState(s); setFailed(s === null) })
       .catch(() => { setState(null); setFailed(true) })
+    fetch('/api/xuegulin/lfield', { headers: { 'sec-fetch-site': 'same-origin' } })
+      .then((r) => (r.ok ? (r.json() as Promise<LfieldInfo>) : Promise.resolve(null)))
+      .then((l) => { if (l) setLfield(l) })
+      .catch(() => undefined)
     fetch('/api/xuegulin/m2/annotations', { headers: { 'sec-fetch-site': 'same-origin' } })
       .then((r) => (r.ok ? (r.json() as Promise<AnnotationsState>) : Promise.resolve(null)))
       .then((a) => { if (a) { setAnn(a); const m: Record<string, string> = {}; for (const x of a.annotations) if (x.note) m[x.prophecy] = x.note; setNotes(m) } })
       .catch(() => undefined)
-    fetch('/api/xuegulin/m2/analysis', { headers: { 'sec-fetch-site': 'same-origin' } })
+    fetch(`/api/xuegulin/m2/analysis${viewQ}`, { headers: { 'sec-fetch-site': 'same-origin' } })
       .then((r) => (r.ok ? (r.json() as Promise<{ results: AnalysisResult[] }>) : Promise.resolve(null)))
       .then((a) => { if (a) setAnalysis(a.results) })
       .catch(() => undefined)
@@ -546,7 +571,7 @@ function XuegulinLFieldView(): ReactNode {
     const timer = setInterval(load, 120000)
     return () => clearInterval(timer)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [chartMode])
+  }, [chartMode, viewMode])
   // Esc 关闭放大
   useEffect(() => {
     if (chartMode !== 'expanded') return undefined
@@ -563,6 +588,16 @@ function XuegulinLFieldView(): ReactNode {
   const missRate = (p: M2Point): number => (totalIn(p) > 0 ? p.tokenIn / totalIn(p) : 0)
   const hitRateOf = (p: M2Point): number | null => (totalIn(p) > 0 ? p.cacheRead / totalIn(p) : null)
 
+  // M4-L：序列号只在展开面板显示——紧凑视图（选择器/图例/悬停）用「日期 · 轮数」友好标签
+  const serialShown = chartMode === 'expanded'
+  const pad2 = (n: number): string => String(n).padStart(2, '0')
+  const friendlyOf = (sid: string): string => {
+    const m = state.sessionMeta[sid]
+    if (m === undefined) return shortSession(sid)
+    const d = new Date(m.startTs)
+    return `${pad2(d.getMonth() + 1)}-${pad2(d.getDate())} ${pad2(d.getHours())}:${pad2(d.getMinutes())} · ${m.turns}轮`
+  }
+
   const fromTs = Date.now() - windowDays * 86400000
   const windowed = state.curve.filter((p) => p.ts >= fromTs)
   const sessions = [...new Set(windowed.map((p) => p.session))]
@@ -571,7 +606,7 @@ function XuegulinLFieldView(): ReactNode {
   const showSessions = sel !== null ? [sel] : sessions
 
   const detailOf = (p: M2Point): string => [
-    `${axis === 'date' ? fmtTime(p.ts) : 'turn ' + p.turn} · ${shortSession(p.session)}`,
+    `${axis === 'date' ? fmtTime(p.ts) : 'turn ' + p.turn}${serialShown ? ' · ' + shortSession(p.session) : ''}`,
     `输入 ${fmtK(totalIn(p))}（命中 ${fmtK(p.cacheRead)} / 未命中 ${fmtK(p.tokenIn)}） out ${fmtK(p.tokenOut)}`,
     `命中率 ${pct(hitRateOf(p))} A 投影（未命中率）${pct(missRate(p))} TPS ${p.tps === null ? '—' : p.tps.toFixed(1)}`,
     p.question ? `问：${p.question}` : '',
@@ -583,7 +618,7 @@ function XuegulinLFieldView(): ReactNode {
     return {
       id: sid,
       color: colorOf(sid),
-      label: shortSession(sid),
+      label: serialShown ? shortSession(sid) : friendlyOf(sid),
       points: pts.map((p, i) => {
         // M4.4（镜启发·弱代理）：累计输入 = Σ(命中+未命中) 按轮序；中段加速平台 = S 形候选
         if (metric === 'cum') acc += totalIn(p)
@@ -613,7 +648,44 @@ function XuegulinLFieldView(): ReactNode {
     }).then((r) => (r.ok ? load() : undefined)).catch(() => undefined)
   }
 
+  // M4-L：独立指向——切换仅改变「新会话」的归属；既有会话归属不变（归档不可逆）
+  const lfieldLabel = lfield === null ? '…'
+    : (lfield.known.find((k) => k.root === lfield.active)?.displayName ?? baseName(lfield.active))
+  const archiveSessions = lfield?.counts[''] ?? 0
+  const switchLfield = (root: string): void => {
+    if (!window.confirm('切换后新会话读数归入新指向；既有会话归属不变（归档不可逆）。确认切换 L 场指向？')) return
+    fetch('/api/xuegulin/lfield', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ root }),
+    }).then((r) => { if (r.ok) { setViewMode('active'); load() } }).catch(() => undefined)
+  }
+
   return createElement('div', { className: 'xg-cards xg-grid' },
+    createElement('div', { className: 'xg-lf-bar' },
+      createElement('span', null, 'L 场指向：'),
+      createElement('b', null, lfieldLabel),
+      lfield !== null && lfield.known.filter((k) => k.root !== lfield.active).length > 0
+        ? createElement('select', {
+            className: 'xg-select', value: '',
+            onChange: (e: { target: { value: string } }) => { if (e.target.value !== '') switchLfield(e.target.value) },
+          },
+            createElement('option', { value: '' }, '切换指向…'),
+            lfield.known.filter((k) => k.root !== lfield.active).map((k) =>
+              createElement('option', { key: k.root, value: k.root }, k.displayName ?? baseName(k.root))),
+          )
+        : null,
+      createElement('span', { style: { marginLeft: 8 } }, '视图'),
+      createElement('select', {
+        className: 'xg-select', value: viewMode,
+        onChange: (e: { target: { value: string } }) => setViewMode(e.target.value as 'active' | 'archive'),
+      },
+        createElement('option', { value: 'active' }, '当前指向'),
+        createElement('option', { value: 'archive' }, `归档（${archiveSessions} 会话）`),
+      ),
+      viewMode === 'archive'
+        ? createElement('span', { className: 'xg-warn' }, '归档视图——指向制前历史读数（只读）；新读数归属当前指向。')
+        : null,
+    ),
     createElement('div', { className: 'xg-span3' },
     Card({
       title: '最新读数',
@@ -640,7 +712,7 @@ function XuegulinLFieldView(): ReactNode {
     ),
     createElement('div', { className: 'xg-span3' },
     Card({
-      title: '总量 · 全部会话',
+      title: `总量 · ${viewMode === 'archive' ? '归档' : '当前指向'}`,
       children: createElement('div', { className: 'xg-row' },
         Kv({ label: '轮次', value: String(t.turns) }),
         Kv({ label: '输入（命中/未命中）', value: `${fmtK(t.cacheRead)} / ${fmtK(t.missToken)}` }),
@@ -671,22 +743,25 @@ function XuegulinLFieldView(): ReactNode {
           onChange: (e: { target: { value: string } }) => setSessionSel(e.target.value),
         },
           createElement('option', { value: '' }, '全部会话'),
-          sessions.map((s) => createElement('option', { key: s, value: s }, shortSession(s))),
+          sessions.map((s) => createElement('option', { key: s, value: s }, friendlyOf(s))),
         ),
         createElement('div', { ref: chartRef },
           createElement(LineChart, { series, w: chartW, h: 200, onOpenDetail: openTurnText }),
         ),
         analysis !== null && analysis.length > 0
-          ? createElement('div', { className: 'xg-list', style: { marginTop: 8 } },
-              analysis.map((a) => {
-                const shapeLabel = { unknown: '—', rising: '上升', falling: '下降', sigmoid: 'S 形', 'inverse-sigmoid': '反 S 形' }[a.shape]
-                const burst = a.burst ? `爆发段 turn ${a.burst.fromTurn}→${a.burst.toTurn}（${a.burst.direction === 'down' ? '降' : '升'}）` : '无爆发段'
-                return createElement('span', { key: a.session },
-                  createElement('span', { className: 'xg-label' },
-                    `分析（M3-F.3 白盒）· ${shortSession(a.session)}：形态=${shapeLabel} · ${burst} · τ_e=${a.tauE === null ? '—' : a.tauE + ' turn'} · `,
-                  ),
-                )
-              }),
+          ? createElement('details', { key: 'xg-analysis', className: 'xg-details' },
+              createElement('summary', null, `分析（M3-F.3 白盒）· ${analysis.length} 会话`),
+              createElement('div', { className: 'xg-list', style: { marginTop: 6 } },
+                analysis.map((a) => {
+                  const shapeLabel = { unknown: '—', rising: '上升', falling: '下降', sigmoid: 'S 形', 'inverse-sigmoid': '反 S 形' }[a.shape]
+                  const burst = a.burst ? `爆发段 turn ${a.burst.fromTurn}→${a.burst.toTurn}（${a.burst.direction === 'down' ? '降' : '升'}）` : '无爆发段'
+                  return createElement('span', { key: a.session },
+                    createElement('span', { className: 'xg-label' },
+                      `${serialShown ? shortSession(a.session) : friendlyOf(a.session)}：形态=${shapeLabel} · ${burst} · τ_e=${a.tauE === null ? '—' : a.tauE + ' turn'} · `,
+                    ),
+                  )
+                }),
+              ),
             )
           : null,
         createElement('div', { className: 'xg-note' },
