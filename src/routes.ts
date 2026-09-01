@@ -171,6 +171,7 @@ export function registerNexusRoutes(ctx: { webServer: { register(route: WebRoute
         baselineTs: deps.store.lfieldBaseline() || null,
         archiveTurns: deps.store.turnTotals('').turns,
         sessionMeta: deps.store.sessionMeta(),
+        selfcheck: deps.store.selfcheckCoverage(root),
         latest,
         totals: {
           turns: totals.turns,

@@ -40,6 +40,7 @@ type M2State = {
   baselineTs: number | null
   archiveTurns: number
   sessionMeta: Record<string, { startTs: number; turns: number }>
+  selfcheck: { checked: number; total: number; bySession: Record<string, { checked: number; total: number; missing: number[] }> }
   latest: M2Point | null
   totals: { turns: number; tokenIn: number; tokenOut: number; cacheRead: number; missToken: number; totalIn?: number; hitRate: number | null }
   curve: M2Point[]
@@ -640,6 +641,11 @@ function NexusLFieldView(): ReactNode {
     }
   })
 
+  // M4-B：自评覆盖（当前视图口径；选中会话时带缺口轮号）
+  const sc = state.selfcheck
+  const scPct = sc.total > 0 ? sc.checked / sc.total : null
+  const scSel = sel !== null ? sc.bySession[sel] : undefined
+
   const t = state.totals
   const latest = state.latest
   const miss = 1 - (t.hitRate ?? 0)
@@ -751,6 +757,16 @@ function NexusLFieldView(): ReactNode {
         },
           createElement('option', { value: '' }, '全部会话'),
           sessions.map((s) => createElement('option', { key: s, value: s }, friendlyOf(s))),
+        ),
+        createElement('div', { className: 'xg-list', style: { margin: '2px 0 6px' } },
+          sc.total > 0
+            ? createElement('span', { className: scPct < 0.8 ? 'xg-warn' : 'xg-label' },
+                `自评覆盖 ${pct(scPct)}（${sc.checked}/${sc.total} 轮）`
+                + (scSel !== undefined
+                    ? ` · 本会话 ${scSel.checked}/${scSel.total} 轮${scSel.missing.length > 0 ? ` · 缺 ${scSel.missing.map((n) => 't' + n).join(' ')}` : ' · 无缺口'}`
+                    : ''),
+              )
+            : createElement('span', { className: 'xg-label' }, '自评覆盖：本视图暂无轮次'),
         ),
         createElement('div', { ref: chartRef },
           createElement(LineChart, { series, w: chartW, h: 200, onOpenDetail: openTurnText }),

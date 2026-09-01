@@ -368,6 +368,40 @@ export class NexusStore {
     return out
   }
 
+  /** M4-B：逐会话自评覆盖（已评/总轮次 + 缺口轮号；root 给定时按归属桶过滤）。 */
+  selfcheckCoverage(root?: string): {
+    checked: number
+    total: number
+    bySession: Record<string, { checked: number; total: number; missing: number[] }>
+  } {
+    const f = this.turnRootFilter(root)
+    const agg = this.db.prepare(`
+      SELECT session, COUNT(*) AS total,
+             SUM(CASE WHEN clarity IS NOT NULL THEN 1 ELSE 0 END) AS checked
+      FROM turn_read WHERE 1 = 1${f.sql}
+      GROUP BY session
+    `).all(...f.params) as Array<Record<string, unknown>>
+    const missing = this.db.prepare(`
+      SELECT session, turn FROM turn_read WHERE clarity IS NULL${f.sql} ORDER BY session, turn
+    `).all(...f.params) as Array<Record<string, unknown>>
+    const bySession: Record<string, { checked: number; total: number; missing: number[] }> = {}
+    let checked = 0
+    let total = 0
+    for (const r of agg) {
+      const s = String(r.session)
+      const t = Number(r.total)
+      const c = Number(r.checked ?? 0)
+      bySession[s] = { checked: c, total: t, missing: [] }
+      checked += c
+      total += t
+    }
+    for (const r of missing) {
+      const s = String(r.session)
+      if (bySession[s] !== undefined) bySession[s].missing.push(Number(r.turn))
+    }
+    return { checked, total, bySession }
+  }
+
   /** 会话归属过滤片段：root 给定时仅取归属该根的会话（undefined = 不过滤——工具全局口径）。 */
   private turnRootFilter(root: string | undefined): { sql: string; params: string[] } {
     if (root === undefined) return { sql: '', params: [] }

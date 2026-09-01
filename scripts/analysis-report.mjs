@@ -79,4 +79,13 @@ console.log(`形态分布（${results.length} 会话）: ${JSON.stringify(shapes
 console.log(`τ_e 检出: ${taus.length} 例 -> ${taus.map((x) => `${x.session}:${x.tauE}turn(${x.shape})`).join(', ') || '—'}`)
 console.log(`爆发段: ${bursts.length} 例 -> ${bursts.map((x) => `${x.session}:t${x.fromTurn}→${x.toTurn}(${x.direction})`).join(', ') || '—'}`)
 console.log(`自评: ${cl.length} 轮 / ${clBySess.size} 会话（覆盖率 ${pct(rows.length > 0 ? cl.length / rows.length : null)}）| 清晰度净增样本 ${deltas.length} 例${deltas.length > 0 ? ` -> [${deltas.map((d) => d.toFixed(2)).join(', ')}]` : ''} | 宣言检出 ${declRows}`)
+if (scope === 'all') {
+  const cov = db.prepare(`
+    SELECT sr.root AS root, COUNT(tr.turn) AS total,
+           SUM(CASE WHEN tr.clarity IS NOT NULL THEN 1 ELSE 0 END) AS checked
+    FROM session_root sr JOIN turn_read tr ON tr.session = sr.session
+    GROUP BY sr.root
+  `).all()
+  console.log(`自评分桶覆盖（M4-B 对照）: ${cov.map((r) => `${r.root === '' ? 'archive(指令前)' : 'pointing(KB)'} ${(100 * Number(r.checked) / Number(r.total)).toFixed(1)}% (${r.checked}/${r.total})`).join(' · ')}`)
+}
 db.close()
