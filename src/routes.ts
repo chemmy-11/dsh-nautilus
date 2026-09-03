@@ -154,9 +154,10 @@ export function registerNexusRoutes(ctx: { webServer: { register(route: WebRoute
       if (!browserSameOriginMarker(req)) return json(res, 403, { ok: false, error: 'forbidden' })
       const historyDays = deps.m2HistoryDays ?? 30
       const fromTs = Date.now() - historyDays * 86400000
-      // M4-L：?root=archive → 归档桶（指向制前历史，只读视图）；默认 = 当前 L 场指向
+      // M4-L：视图口径——?root=archive → 归档桶；?root=all → 全局（不过滤归属）；默认 = 当前 L 场指向
       const url = new URL(String(req.url ?? ''), 'http://localhost')
-      const root = url.searchParams.get('root') === 'archive' ? '' : deps.store.lfieldRoot()
+      const rv = url.searchParams.get('root')
+      const root: string | undefined = rv === 'archive' ? '' : rv === 'all' ? undefined : deps.store.lfieldRoot()
       const points = deps.store.turnReadsSince(fromTs, root)
       const latest = points.length > 0 ? points[points.length - 1] : null
       const totals = deps.store.turnTotals(root)
@@ -166,7 +167,7 @@ export function registerNexusRoutes(ctx: { webServer: { register(route: WebRoute
       const hitRate = totalIn > 0 ? totals.cacheRead / totalIn : null
       json(res, 200, {
         revision: Date.now(),
-        activeRoot: root,
+        activeRoot: root ?? null,
         pointing: deps.store.lfieldRoot(),
         baselineTs: deps.store.lfieldBaseline() || null,
         archiveTurns: deps.store.turnTotals('').turns,
@@ -252,7 +253,8 @@ export function registerNexusRoutes(ctx: { webServer: { register(route: WebRoute
       const historyDays = deps.m2HistoryDays ?? 30
       const fromTs = Date.now() - historyDays * 86400000
       const url = new URL(String(req.url ?? ''), 'http://localhost')
-      const root = url.searchParams.get('root') === 'archive' ? '' : deps.store.lfieldRoot()
+      const rv = url.searchParams.get('root')
+      const root: string | undefined = rv === 'archive' ? '' : rv === 'all' ? undefined : deps.store.lfieldRoot()
       const rows = deps.store.turnReadsSince(fromTs, root)
       const results = analyze(rows)
       json(res, 200, { revision: Date.now(), results })

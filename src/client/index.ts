@@ -35,7 +35,7 @@ type TurnTextResp = { found: boolean; session?: string; turn?: number; userText?
 
 type M2State = {
   revision: number
-  activeRoot: string
+  activeRoot: string | null
   pointing: string
   baselineTs: number | null
   archiveTurns: number
@@ -261,6 +261,7 @@ type Series = { id: string; color: string; label: string; points: SeriesPoint[] 
 function LineChart(props: { series: Series[]; w: number; h: number; onOpenDetail?: (meta: { session: string; turn: number }) => void }): ReactNode {
   const { series, w, h } = props
   const [hover, setHover] = useState<{ si: number; pi: number } | null>(null)
+  const [tip, setTip] = useState<{ x: number; y: number } | null>(null)
   injectStyle()
   const all = series.flatMap((s) => s.points.map((p) => p.value))
   if (all.length === 0) return createElement('div', { className: 'xg-empty' }, '（暂无数据）')
@@ -279,13 +280,16 @@ function LineChart(props: { series: Series[]; w: number; h: number; onOpenDetail
   const py = (v: number): number => h - padB - ((v - min) / span) * (h - padT - padB)
   const ticks = [0, 1 / 3, 2 / 3, 1].map((t) => min + t * span)
 
-  const nearest = (clientX: number, clientY: number): { si: number; pi: number } | null => {
+  // M4-B.2：点位精确命中——以标记为圆心（10px 命中半径）取 2D 最近点，不再整列扫描
+  const hitTest = (mx: number, my: number): { si: number; pi: number } | null => {
     let best: { si: number; pi: number; d: number } | null = null
     for (let si = 0; si < series.length; si += 1) {
       for (let pi = 0; pi < series[si].points.length; pi += 1) {
         const p = series[si].points[pi]
-        const d = Math.abs(px(p.x) - clientX)
-        if (best === null || d < best.d) best = { si, pi, d }
+        const dx = px(p.x) - mx
+        const dy = py(p.value) - my
+        const d2 = dx * dx + dy * dy
+        if (d2 <= 100 && (best === null || d2 < best.d)) best = { si, pi, d: d2 }
       }
     }
     return best === null ? null : { si: best.si, pi: best.pi }
@@ -296,11 +300,14 @@ function LineChart(props: { series: Series[]; w: number; h: number; onOpenDetail
     createElement('svg', {
       width: w, height: h, viewBox: `0 0 ${w} ${h}`,
       style: { background: 'var(--dsw-alias-bg-layer-1)', borderRadius: 8 },
-      onMouseMove: (e: { clientX: number; clientY: number; currentTarget: { getBoundingClientRect(): { left: number } } }) => {
+      onMouseMove: (e: { clientX: number; clientY: number; currentTarget: { getBoundingClientRect(): { left: number; top: number } } }) => {
         const rect = e.currentTarget.getBoundingClientRect()
-        setHover(nearest(e.clientX - rect.left, e.clientY))
+        const mx = e.clientX - rect.left
+        const my = e.clientY - rect.top
+        setTip({ x: mx, y: my })
+        setHover(hitTest(mx, my))
       },
-      onMouseLeave: () => setHover(null),
+      onMouseLeave: () => { setHover(null); setTip(null) },
     },
       ticks.map((t) => createElement('g', { key: String(t) },
         createElement('line', { x1: padL, y1: py(t), x2: w - padR, y2: py(t), stroke: 'var(--dsw-alias-border-l1)', strokeWidth: 1 }),
@@ -333,19 +340,17 @@ function LineChart(props: { series: Series[]; w: number; h: number; onOpenDetail
         )
       }),
     ),
-    hovered !== null && hover !== null
+    hovered !== null && hover !== null && tip !== null
       ? createElement('div', {
           className: 'xg-tooltip',
           style: {
-            left: Math.min(Math.max(px(series[hover.si].points[hover.pi].x) - 110, 0), w - 240),
-            top: 4,
+            left: tip.x,
+            top: tip.y > 96 ? tip.y - 10 : tip.y + 14,
+            transform: tip.y > 96 ? 'translate(-50%, -100%)' : 'translate(-50%, 0)',
           },
         },
-          createElement('span', undefined, hovered.detail),
-          createElement('br'),
-          createElement('span', undefined, hovered.detail),
-          createElement('br'),
-          createElement('span', { style: { display: 'block', marginTop: 4, color: 'var(--dsw-alias-label-tertiary)' } },
+          createElement('div', null, hovered.detail),
+          createElement('div', { style: { marginTop: 4, color: 'var(--dsw-alias-label-tertiary)' } },
             props.onOpenDetail === undefined ? '（B 方案预留）' : '点击点位 → 查看完整问答'),
         )
       : null,
@@ -523,7 +528,7 @@ function NexusView(): ReactNode {
 function NexusLFieldView(): ReactNode {
   const [state, setState] = useState<M2State | null>(null)
   const [lfield, setLfield] = useState<LfieldInfo | null>(null)
-  const [viewMode, setViewMode] = useState<'active' | 'archive'>('active')
+  const [viewMode, setViewMode] = useState<'active' | 'archive' | 'all'>('active')
   const [ann, setAnn] = useState<AnnotationsState | null>(null)
   const [failed, setFailed] = useState(false)
   const [axis, setAxis] = useState<'date' | 'turn'>('date')
@@ -538,8 +543,8 @@ function NexusLFieldView(): ReactNode {
   injectStyle()
   useHideComposer()
 
-  // M4-L：归档视图加 ?root=archive（只读查指向制前历史）；默认 = 当前 L 场指向
-  const viewQ = viewMode === 'archive' ? '?root=archive' : ''
+  // M4-L：视图口径——?root=archive 归档 | ?root=all 全局 | 默认 = 当前 L 场指向
+  const viewQ = viewMode === 'archive' ? '?root=archive' : viewMode === 'all' ? '?root=all' : ''
   const load = (): void => {
     fetch(`/api/nexus/m2/state${viewQ}`, { headers: { 'sec-fetch-site': 'same-origin' } })
       .then((r) => (r.ok ? (r.json() as Promise<M2State>) : Promise.resolve(null)))
@@ -611,12 +616,12 @@ function NexusLFieldView(): ReactNode {
   // M4.4（镜启发）：两视图统一「全部会话 + 单会话」聚焦（长窗多会话曲线过乱）
   const showSessions = sel !== null ? [sel] : sessions
 
+  // M4-B.2：简略看板——仅此轮简要数据（问句经点击查看完整问答，不进看板）
   const detailOf = (p: M2Point): string => [
     `${axis === 'date' ? fmtTime(p.ts) : 'turn ' + p.turn}${serialShown ? ' · ' + shortSession(p.session) : ''}`,
     `输入 ${fmtK(totalIn(p))}（命中 ${fmtK(p.cacheRead)} / 未命中 ${fmtK(p.tokenIn)}） out ${fmtK(p.tokenOut)}`,
-    `命中率 ${pct(hitRateOf(p))} A 投影（未命中率）${pct(missRate(p))} TPS ${p.tps === null ? '—' : p.tps.toFixed(1)}`,
-    p.question ? `问：${p.question}` : '',
-  ].filter((s) => s !== '').join('\n')
+    `命中率 ${pct(hitRateOf(p))} · A 投影 ${pct(missRate(p))} · TPS ${p.tps === null ? '—' : p.tps.toFixed(1)}`,
+  ].join('\n')
 
   const series: Series[] = showSessions.map((sid) => {
     const pts = windowed.filter((p) => p.session === sid)
@@ -633,7 +638,7 @@ function NexusLFieldView(): ReactNode {
           x: (i + (1 / 2)) / Math.max(pts.length, 1),
           value,
           detail: metric === 'cum'
-            ? `${axis === 'date' ? fmtTime(p.ts) : 'turn ' + p.turn} · ${shortSession(p.session)} · 累计输入 ${fmtK(acc)}`
+            ? `${axis === 'date' ? fmtTime(p.ts) : 'turn ' + p.turn}${serialShown ? ' · ' + shortSession(p.session) : ''} · 累计输入 ${fmtK(acc)}`
             : detailOf(p),
           meta: { session: p.session, turn: p.turn },
         }
@@ -688,16 +693,19 @@ function NexusLFieldView(): ReactNode {
       createElement('span', { style: { marginLeft: 8 } }, '视图'),
       createElement('select', {
         className: 'xg-select', value: viewMode,
-        onChange: (e: { target: { value: string } }) => setViewMode(e.target.value as 'active' | 'archive'),
+        onChange: (e: { target: { value: string } }) => setViewMode(e.target.value as 'active' | 'archive' | 'all'),
       },
         createElement('option', { value: 'active' }, '当前指向'),
+        createElement('option', { value: 'all' }, 'dsh 全局会话'),
         createElement('option', { value: 'archive' }, `归档（${archiveSessions} 会话）`),
       ),
       viewMode === 'archive'
-        ? createElement('span', { className: 'xg-warn' }, '归档视图——目前全部历史数据（知识库会话见当前指向）。')
-        : (state.baselineTs
-            ? createElement('span', { className: 'xg-label' }, `基线 ${fmtDayMin(state.baselineTs)}（此前＝归档历史；此后＝在工作区发起的知识库会话）`)
-            : null),
+        ? createElement('span', { className: 'xg-warn' }, '归档视图——非知识库会话历史。')
+        : viewMode === 'all'
+          ? createElement('span', { className: 'xg-label' }, '全局视图——全部工作区会话（归档 + 指向）。')
+          : (state.baselineTs
+              ? createElement('span', { className: 'xg-label' }, `基线 ${fmtDayMin(state.baselineTs)}（此前＝归档历史；此后＝在工作区发起的知识库会话）`)
+              : null),
     ),
     createElement('div', { className: 'xg-span3' },
     Card({
@@ -725,7 +733,7 @@ function NexusLFieldView(): ReactNode {
     ),
     createElement('div', { className: 'xg-span3' },
     Card({
-      title: `总量 · ${viewMode === 'archive' ? '归档' : '当前指向'}`,
+      title: `总量 · ${viewMode === 'archive' ? '归档' : viewMode === 'all' ? '全局' : '当前指向'}`,
       children: createElement('div', { className: 'xg-row' },
         Kv({ label: '轮次', value: String(t.turns) }),
         Kv({ label: '输入（命中/未命中）', value: `${fmtK(t.cacheRead)} / ${fmtK(t.missToken)}` }),
