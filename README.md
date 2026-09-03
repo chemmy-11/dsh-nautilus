@@ -1,16 +1,34 @@
 # dsh-nexus
 
-Vault 观测插件（`@dsh-external/dsh-nexus`）——为 DeepSeek Harness（`dsh`）提供 Obsidian vault 的**元数据快照与编辑活动统计**：文件清单（路径/修改时间/大小/字数）、编辑操作计数（`fs.watch` 实时感知 + 去抖合并）、观测面板（今日/本周/活跃 Top/最近编辑流）。
+[English](./README.en.md) | 中文
 
-`vaultRoot` 指向任意 Obsidian vault 即可观测（不限于特定库）；统计与快照存插件私有目录（`~/.dsh/nexus/`），**vault 本体零写入**（只读扫描，不创建/修改任何 vault 内文件）。
+DeepSeek Harness（`dsh`）的观测插件（`@dsh-external/dsh-nexus`）：为 Obsidian vault 与 AI 会话提供**双面板量化观测**——vault 侧元数据快照与编辑统计，会话侧逐轮遥测与形态分析。对 vault 只读，观测数据全部私有化存储（`~/.dsh/nexus/`），重启/重载不丢不重。
 
-## 功能（M1）
+## ① Vault 观测
 
 - **全量扫描**：启动 + 周期校准（默认 6h）——路径/修改时间/大小/字数（去空白字符，排除 frontmatter）；
-- **编辑监听**：`fs.watch`（recursive）实时感知 vault 变更（Obsidian 关闭时同样可采），500ms 去抖合并，kind 区分 `created`/`modified`/`deleted`；重复事件幂等（`session_key`），热重载/重启不重复记账；
-- **观测面板**：对话页「Vault 观测」标签——文件总数/总字数、今日与本周编辑次数/修改文件数/新增文件、活跃文件 Top 5、最近编辑流；
-- **排除规则**：默认排除 `dsh-docs/` 等（`exclude` 可调），统计与展示均不涉及被排除目录；
-- **只读姿态**：对 vault 只读；观测数据（SQLite）与面板配置全部在私有无目录（`~/.dsh/nexus/`）。
+- **编辑监听**：`fs.watch`（recursive）实时感知 vault 变更（Obsidian 关闭时同样可采），500ms 去抖合并，`created`/`modified`/`deleted` 幂等记账；
+- **观测面板**：文件总数/总字数、今日与本周编辑统计、活跃文件 Top 5、最近编辑流；
+- **指向确认**：观测只取自指向的 vault，历史数据按 root 隔离、可回切；排除规则可配。
+
+## ② 会话读数（L 场读数）
+
+把「一段对话对知识库走了多远」变成数字——**会话级 LLM 观测 + 量化自评 + 曲线形态分析**：
+
+- **指标口径**：token（输入/输出/缓存命中）、缓存命中率与未命中率（未命中率 = A 投影）、TPS 与解码耗时、每轮主观清晰度自评（0–1）——**主客观双指标交叉验证，互相限制偏差**（客观曲线有缓存预热与新话题混杂，主观自评有报告偏差）；
+- **官方事件直采**：订阅宿主 `session/event`（**零宿主源码修改、无第三方插件依赖**），数据私有目录隔离（`~/.dsh/nexus/`，SQLite，重启/重载不丢不重）；
+- **双 tab 看板**：SVG 曲线支持**放大、筛选（时间窗/会话）、问答回看**（逐轮完整问答原文）；
+- **可重复分析管线**：形态分类（S 形/上升/下降/反转 S）· 特征时间 τ_e 检出 · 分桶对照——首轮实证：**知识库指向会话未命中率 13.7% vs 归档 5.6%**，与知识型会话探索密度更高一致；
+- **自评覆盖**：逐会话覆盖徽标（已评/总轮次 + 缺口轮号），低于 80% 预警；
+- **预言检验表**：P1–P9 假设逐条标注（待验证/进行中/已检验），分析结论回写。
+
+> 「L 场」是作者私人研究框架（L-theory）的用语；对外部使用者，把这块读作**会话级 LLM 观测看板**即可——指标本身（token/缓存/TPS/自评）都是标准的可观测性量。
+
+## 指向与分代
+
+- 插件有两个**独立指向**：**vault 指向**（观测对象）与 **L 场指向**（会话归属的 vault 根），均可在面板内确认/切换（二次确认，历史不删）；
+- 会话归属规则：**发起时所在工作区**——在指向 vault 的工作区内发起的会话归入指向桶，其余进归档；历史会话按同一规则回溯归类；
+- 看板三视图：**当前指向**（知识库会话）/ **dsh 全局会话**（全部工作区）/ **归档**（基线），对照分析即视图切换。
 
 ## 安装
 
@@ -20,7 +38,7 @@ dsh plugin --profile <name> add github:chemmy-11/dsh-nexus
 
 git 形式安装会在本机构建（`prepare` 脚本需要 dsh 源码 checkout：自动探测 `$DSH_CHECKOUT` 或 `~/dsh-harness`）；pnpm ≥10 首次安装需在 profile 的 `pnpm-workspace.yaml` 按提示放行 `allowBuilds`。
 
-配置示例（profile 的 `cordis.patch.yml` 覆盖行，整行替换；`vaultRoot` 必配）：
+配置示例（profile 的 `cordis.patch.yml`；`vaultRoot` 可省——面板内指向确认即可，config 仅作初始种子）：
 
 ```yaml
 - id: nexus
@@ -32,9 +50,17 @@ git 形式安装会在本机构建（`prepare` 脚本需要 dsh 源码 checkout�
     debounceMs: 500
 ```
 
-## 面板数据
+## API（同源访问）
 
-`GET /api/nexus/state`（同源访问）返回：`totals`（文件数/字数）、`today`/`week`（编辑次数/修改文件数/新增文件/活跃 Top）、`recent`（最近 20 条编辑流）。
+| 端点 | 说明 |
+|---|---|
+| `GET /api/nexus/state` | vault 总量 / 今日 / 本周 / 最近编辑流 |
+| `GET/POST /api/nexus/vault` | vault 指向状态 / 切换 |
+| `GET /api/nexus/m2/state` | 会话读数（latest / totals / curve / selfcheck 覆盖；`?root=archive\|all` 切视图） |
+| `GET/POST /api/nexus/m2/annotations` | 预言标注读写 |
+| `GET /api/nexus/m2/turn-text` | 某轮完整问答原文 |
+| `GET /api/nexus/m2/analysis` | 白盒分析（S 形 / 爆发段 / τ_e） |
+| `GET/POST /api/nexus/lfield` | L 场指向状态 / 切换 |
 
 ## 构建
 
@@ -46,17 +72,18 @@ DSH_CHECKOUT=<dsh-checkout> bash scripts/build.sh   # = node scripts/prepare.mjs
 
 **两种构建模式**（`scripts/prepare.mjs` 自动选择）：
 - **checkout 模式**（本地开发）：探测到 `$DSH_CHECKOUT` / `~/dsh-harness` → 从 checkout junction 链接 `cordis`/`schemastery`/`dsh-host-webserver` 并复用其 tsc/esbuild；
-- **npm-devDeps 模式**（CI / 无 checkout）：`npm install` 装好 devDependencies（含 `@deepseek-ai/cordis`、`@deepseek-ai/dsh-host-webserver`、`schemastery`、`typescript`、`esbuild`）后直接用本地依赖构建，无需 dsh 源码。
+- **npm-devDeps 模式**（CI / 无 checkout）：`npm install` 装好 devDependencies 后直接用本地依赖构建，无需 dsh 源码。
 
 ## CI
 
-`.github/workflows/ci.yml` 在每次 push/PR 上跑 `typecheck` + `build`（npm-devDeps 模式）+ 元数据校验（bundle patch / client 双半 / files 清单）；`.github/workflows/release.yml` 在 `v*` tag 上自动构建 tgz 并创建 GitHub Release。
+`.github/workflows/ci.yml` 在每次 push/PR 上跑 `typecheck` + `build`（npm-devDeps 模式）+ 测试 + 元数据校验（bundle patch / client 双半 / files 清单）；`.github/workflows/release.yml` 在 `v*` tag 上自动构建 tgz 并创建 GitHub Release。
 
 ## 设计原则
 
 - **独立可装**：仅依赖官方 `cordis`/`schemastery`/`dsh-host-webserver`，不与任何其它插件耦合；
-- **观测即留痕**：编辑事件从部署起前向积累（SQLite 持久化，重启/重载不丢不重）；
-- **边界意识**：只读 vault、数据私有化（不进 vault、不混入其它数据源）。
+- **观测即留痕**：编辑与会话读数从部署起前向积累（SQLite 持久化，重启/重载不丢不重）；
+- **边界意识**：只读 vault、数据私有化（不进 vault、不混入其它数据源）；
+- **分代不混数**：会话按发起工作区归属，知识库 epoch 与归档基线分开分析。
 
 ## 安全说明
 
