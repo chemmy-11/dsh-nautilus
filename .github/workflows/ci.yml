@@ -19,9 +19,20 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      # 工作流静态检查，置顶快速失败：YAML 语义 / ${{ }} 表达式 / shell 语法。
+      # 注意 CI 内检查救不了「本文件解析失败」（2026-08-28 事故：plain scalar 含 'exports: '
+      # 被当映射，0 jobs 静默无检查）——推送前本地跑一次 actionlint 才是这类事故的防线。
+      - name: Workflow lint (actionlint)
+        env:
+          ACTIONLINT_VERSION: '1.7.12' # 固定版本，免 raw 脚本漂移
+        run: |
+          curl -sSfLo /tmp/actionlint.tgz "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          tar -xzf /tmp/actionlint.tgz -C /tmp actionlint
+          /tmp/actionlint -color
+
+      - uses: actions/setup-node@v7
         with:
           node-version: 24
           cache: npm

@@ -16,14 +16,16 @@
 
 ## CI 门禁（`ci.yml`，push / PR 全量）
 
-1. `npm run typecheck`（tsc --noEmit）；
-2. `npm run build`（npm-devDeps 模式，无 DSH checkout 也可构建）；
-3. 元数据校验：bundle patch / client 双半 / files 清单 / client shim 断言；
-4. `npm test`（纯函数回归：analysis / selfcheck / scan）。
+1. `actionlint` 工作流静态检查（YAML 语义 / 表达式 / shell 语法）。解析失败表现为 **0 jobs 静默无检查**（2026-08-28 事故形态），CI 内自查救不了本文件——推工作流改动前本地跑一次：`go install github.com/rhysd/actionlint/cmd/actionlint@latest` 或直接下载 release 二进制；
+2. `npm run typecheck`（tsc --noEmit）；
+3. `npm run build`（npm-devDeps 模式，无 DSH checkout 也可构建）；
+4. 元数据校验：bundle patch / client 双半 / files 清单 / client shim 断言；
+5. `npm test`（纯函数回归：analysis / selfcheck / scan）。
 
 ## 发布（`release.yml`）
 
 - `v*` tag 触发：构建 tgz → GitHub Release；发布前核对 version 与 tag 一致、README 功能描述与实现状态相符（不得含"设计阶段 / 未发布"之类不实声明）。
+- `workflow_dispatch` 手动触发 = **干跑**：走完整验证 + 打包管线但不创建 Release——打 tag 前先干跑验证发布链路（release 管线修复后未经真实 tag 验证过，首次发布务必先干跑）。
 
 ## 工程红线（事故教训固化）
 

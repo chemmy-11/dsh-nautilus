@@ -3,6 +3,8 @@ name: release
 on:
   push:
     tags: ['v*']
+  # 手动触发 = 干跑：走完整验证 + 打包管线但不创建 Release——打 tag 前验证发布链路
+  workflow_dispatch:
 
 jobs:
   release:
@@ -11,9 +13,9 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 24
           cache: npm
@@ -51,7 +53,9 @@ jobs:
           npm pack
           echo "TARBALL=$(ls *.tgz)" >> "$GITHUB_ENV"
 
+      # 仅 tag push 创建 Release；workflow_dispatch 干跑到打包为止
       - name: Create GitHub Release
+        if: github.event_name == 'push'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
