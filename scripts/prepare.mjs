@@ -1,5 +1,7 @@
 /**
- * @dsh-external/dsh-nexus — Node 构建入口（prepare/build 共用）。
+ * @dsh-external/dsh-nexus — Node 构建入口（prepack/build 共用）。
+ * 挂在 npm prepack 而非 prepare：npm ci/install 不再隐式整包构建
+ * （曾致 tsc 错误在 install 步爆出、误导归因），npm pack 发布前仍自动构建兜底。
  * 纯 Node 实现（不依赖 bash 环境）。
  * 两种构建模式：
  *  A) DSH checkout 模式（本地开发）：DSH_CHECKOUT / ~/dsh-harness 存在 →
@@ -36,7 +38,7 @@ const npmMode = checkout === ''
   && existsSync(join(pkgRoot, 'node_modules', 'schemastery'))
 
 if (!checkout && !npmMode) {
-  console.error('prepare: no dsh checkout (set DSH_CHECKOUT or $HOME/dsh-harness) and no local npm devDeps — run `npm install` first')
+  console.error('build: no dsh checkout (set DSH_CHECKOUT or $HOME/dsh-harness) and no local npm devDeps — run `npm install` first')
   process.exit(1)
 }
 
@@ -46,7 +48,7 @@ if (checkout) {
     const link = join(pkgRoot, 'node_modules', name)
     const t = resolve(checkout, target)
     if (!existsSync(t)) {
-      console.error(`prepare: dependency target missing: ${t}`)
+      console.error(`build: dependency target missing: ${t}`)
       process.exit(1)
     }
     rmSync(link, { recursive: true, force: true })
@@ -79,7 +81,7 @@ if (checkout) {
   console.log('=== npm-devDeps mode: no checkout, building with local node_modules ===')
   const tscJs = join(pkgRoot, 'node_modules', 'typescript', 'bin', 'tsc')
   if (!existsSync(tscJs)) {
-    console.error('prepare: local typescript not found — run `npm install` first')
+    console.error('build: local typescript not found — run `npm install` first')
     process.exit(1)
   }
   const tsc = spawnSync(process.execPath, [tscJs, '-p', 'tsconfig.json'], { cwd: pkgRoot, stdio: 'inherit' })
@@ -90,7 +92,7 @@ if (checkout) {
 console.log('=== Building client (esbuild) ===')
 const client = spawnSync(process.execPath, ['scripts/build-client.mjs'], { cwd: pkgRoot, stdio: 'inherit' })
 if (client.status !== 0) {
-  console.warn('prepare: client build failed (host build still valid)')
+  console.warn('build: client build failed (host build still valid)')
 }
 
 console.log('=== Build complete ===')
