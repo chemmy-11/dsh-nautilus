@@ -51,7 +51,8 @@ jobs:
       - name: Pack tarball
         run: |
           npm pack
-          echo "TARBALL=$(ls *.tgz)" >> "$GITHUB_ENV"
+          # ./*.tgz 而非 *.tgz：shellcheck SC2035（actionlint 门禁零容忍）
+          echo "TARBALL=$(ls ./*.tgz)" >> "$GITHUB_ENV"
 
       # 仅 tag push 创建 Release；workflow_dispatch 干跑到打包为止
       - name: Create GitHub Release

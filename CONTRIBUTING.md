@@ -16,7 +16,7 @@
 
 ## CI 门禁（`ci.yml`，push / PR 全量）
 
-1. `actionlint` 工作流静态检查（YAML 语义 / 表达式 / shell 语法）。解析失败表现为 **0 jobs 静默无检查**（2026-08-28 事故形态），CI 内自查救不了本文件——推工作流改动前本地跑一次：`go install github.com/rhysd/actionlint/cmd/actionlint@latest` 或直接下载 release 二进制；
+1. `actionlint` 工作流静态检查（YAML 语义 / 表达式 / shell 语法）。解析失败表现为 **0 jobs 静默无检查**（2026-08-28 事故形态），CI 内自查救不了本文件——推工作流改动前本地跑一次：`go install github.com/rhysd/actionlint/cmd/actionlint@latest` 或直接下载 release 二进制。**注意需同时装 shellcheck 才与 runner 等效**（runner 自带；本机缺失时 SC 系告警漏检，2026-09-04 首跑即栽在 SC2035）。
 2. `npm run typecheck`（tsc --noEmit）；
 3. `npm run build`（npm-devDeps 模式，无 DSH checkout 也可构建）；
 4. 元数据校验：bundle patch / client 双半 / files 清单 / client shim 断言；
