@@ -5,9 +5,9 @@
  * 纯 Node 实现（不依赖 bash 环境）。
  * 两种构建模式：
  *  A) DSH checkout 模式（本地开发）：DSH_CHECKOUT / ~/dsh-harness 存在 →
- *     junction 链接 cordis/schemastery/dsh-host-webserver + 用 checkout 的 tsc/esbuild；
+ *     junction 链接 @deepseek-ai/cordis、@deepseek-ai/schemastery、@deepseek-ai/dsh-host-webserver + 用 checkout 的 tsc/esbuild；
  *  B) npm-devDeps 模式（CI / 无 checkout）：node_modules 已按 devDependencies
- *     装好 @deepseek-ai/cordis、@deepseek-ai/dsh-host-webserver、schemastery、
+ *     装好 @deepseek-ai/cordis、@deepseek-ai/schemastery、@deepseek-ai/dsh-host-webserver、
  *     typescript、esbuild → 直接用本地依赖构建，不链接 checkout。
  */
 import { rmSync, mkdirSync, symlinkSync, existsSync, readdirSync } from 'node:fs'
@@ -35,7 +35,7 @@ function detectCheckout() {
 const checkout = detectCheckout()
 const npmMode = checkout === ''
   && existsSync(join(pkgRoot, 'node_modules', '@deepseek-ai', 'cordis'))
-  && existsSync(join(pkgRoot, 'node_modules', 'schemastery'))
+  && existsSync(join(pkgRoot, 'node_modules', '@deepseek-ai', 'schemastery'))
 
 if (!checkout && !npmMode) {
   console.error('build: no dsh checkout (set DSH_CHECKOUT or $HOME/dsh-harness) and no local npm devDeps — run `npm install` first')
@@ -57,9 +57,8 @@ if (checkout) {
   }
   mkdirSync(join(pkgRoot, 'node_modules', '@deepseek-ai'), { recursive: true })
   const LINKS = [
-    ['cordis', 'vendor/cordis'],
     ['@deepseek-ai/cordis', 'vendor/cordis'],
-    ['schemastery', 'vendor/schemastery'],
+    ['@deepseek-ai/schemastery', 'vendor/schemastery'],
     ['@deepseek-ai/dsh-host-webserver', 'packages/host/webserver'],
     ['@types/node', 'node_modules/@types/node'],
   ]

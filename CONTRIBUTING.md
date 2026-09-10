@@ -21,7 +21,7 @@
 1. `actionlint` 工作流静态检查（YAML 语义 / 表达式 / shell 语法）。解析失败表现为 **0 jobs 静默无检查**（2026-08-28 事故形态），CI 内自查救不了本文件——推工作流改动前本地跑一次：`go install github.com/rhysd/actionlint/cmd/actionlint@latest` 或直接下载 release 二进制。**注意需同时装 shellcheck 才与 runner 等效**（runner 自带；本机缺失时 SC 系告警漏检，2026-09-04 首跑即栽在 SC2035）。
 2. `npm run typecheck`（tsc --noEmit）；
 3. `npm run build`（npm-devDeps 模式，无 DSH checkout 也可构建）；
-4. `npm run check:deps`（依赖合规：R1 单实例合约 / R2 显式 prerelease 分支 / R3 peer 覆盖 devDep pin）；
+4. `npm run check:deps`（依赖合规：R1 单实例合约 / R2 显式 prerelease 分支（仅约束 `@deepseek-ai/dsh*` 宿主族）/ R3 peer 覆盖 devDep pin）；
 5. 元数据校验：bundle patch / client 双半 / files 清单 / client shim 断言；
 6. `npm test`（纯函数回归：analysis / selfcheck / scan）。
 
@@ -34,11 +34,11 @@
 
 宿主发新版本（尤其 prerelease 线）时按序执行；**先确认宿主实际版本，不凭 npm dist-tag 推断**（本机 `dsh --version`、profile 实际加载的 `@deepseek-ai/dsh-host-webserver` 版本）。
 
-1. **依赖面**：devDep 精确 pin 到目标版本；peer 追加 `^<ver>` 分支并**保留旧分支**（旧宿主仍支持时）。两者必须同步——`check:deps` R3 会拒绝 peer 未覆盖 devDep pin 的组合。
+1. **依赖面**：devDep 精确 pin 到目标版本；peer 追加 `^<ver>` 分支并**保留旧分支**（旧宿主仍支持时）。两者必须同步——`check:deps` R3 会拒绝 peer 未覆盖 devDep pin 的组合。运行时只可 import **随安装提供**的 in-box 包（`@deepseek-ai/*`）；非 scoped 的 `cordis`/`schemastery` 不在 dsh 安装闭包内，写了装不上。
 2. **契约面逐项核对**（插件只消费官方契约，不 import 宿主实现）：
    - `session/event`：`turn/start`·`step/start`（`data.turn`·`step`）、`user/message`（`content` 文本块）、`assistant/message`（`data.message.content` + `usage.inputTokens/outputTokens/cacheReadTokens`）、事件信封 `{type, seq, time, data}`；
    - 宿主服务：`ctx.webServer.register(WebRoute{kind,path,handler})`、`ctx.tools.register(ToolDefinition{name,description,parameters,output.schema,output.render,execute})`、`ctx.effect` / `ctx.on`；
-   - 客户端：`ctx.slots.inject('conversation.view')` + `slots.register(def, Component)` 的 `kind=list` / `scope=session`；`dsh.client.inject` 列出的模块名在当前宿主**可解析**（历史名如 `@deepseek-ai/dsh-client-runtime` 已消失，属死名要清理）；`scripts/build-client.mjs` 的 externals 与宿主客户端基线一致。
+   - 客户端：客户端插件就是普通 Cordis 插件（`Context` 来自 `@deepseek-ai/cordis`；`@deepseek-ai/dsh-client-runtime` 在 0.1.5 已移除，属死名）；UI 注册表 `ctx.slots` 由 `@deepseek-ai/dsh-client-ui-renderer` 提供，`slots.inject(key)` + `slots.register(def, Component)`（kind/scope/owner 由归属 UI 包的 SlotMap 增强声明）；`dsh.client.inject` 是**信息性**包名边（列 UI 提供方包名），`dsh.client.external` 才是硬模块边（同步 `require` 决定代码到达），非基线模块请求必须列入；只允许 type-only 跨插件导入（bundle 纯净度门禁），运行时协作走 cordis 服务。
 3. **门禁**：typecheck + build + test + check:deps + check-meta + client shim 全绿；确认 `lib/` 产物与源码同步、构建模式（checkout / npm-devDeps）符合本机实际。
 4. **profile 实测**：记录 profile 名 + 宿主版本 + 装配方式 + 结果（涉数据给前后数字）；装配遵守「工程红线 · profile 卫生」的热装配收敛要求。
 5. **记录**：README 双语「兼容性」节更新目标版本；vault 开发文档追加「适配记录」小节（触发 / 改动表 / 契约核对结论 / 验证数据 / 遗留）。
@@ -47,7 +47,7 @@
 
 ## 工程红线（事故教训固化）
 
-1. **单实例合约**：in-box 包（`@deepseek-ai/*`、cordis/vendor 系）只进 peerDependencies，严禁 dependencies；peer 范围带显式 prerelease 分支（当前 `@deepseek-ai/dsh-host-webserver`: `^0.1.1-rc.2 || ^0.1.2-alpha.2 || ^0.1.5-rc.1`），且 **devDep pin 的版本必须落在 peer 范围内**（`check:deps` R3 自动校验）；遇「peer 装不上」查解析路径，禁止塞 dependencies 修复（hoist 双实例 → 模块级 Symbol 错位 → 全 tool 链崩溃）。
+1. **单实例合约**：in-box 包（`@deepseek-ai/*`：宿主族 `@deepseek-ai/dsh-*` 与 `@deepseek-ai/cordis`/`@deepseek-ai/schemastery`；非 scoped 的 `cordis`/`schemastery` 不在 dsh 安装闭包内、不要用）只进 peerDependencies，严禁 dependencies；peer 范围带显式 prerelease 分支（当前 `@deepseek-ai/dsh-host-webserver`: `^0.1.1-rc.2 || ^0.1.2-alpha.2 || ^0.1.5-rc.1`），且 **devDep pin 的版本必须落在 peer 范围内**（`check:deps` R3 自动校验）；遇「peer 装不上」查解析路径，禁止塞 dependencies 修复（hoist 双实例 → 模块级 Symbol 错位 → 全 tool 链崩溃）。
 2. **vault 只读**：对 vaultRoot 零写入（不创建 / 不修改任何 vault 内文件）；观测数据与配置只在 `~/.dsh/nexus/`。
 3. **迁移幂等**：SQLite schema 变更走 v{N+1} 顺序迁移，可重复执行；改名 / 搬迁类迁移仅在新缺失时执行，绝不覆盖已有数据。
 4. **集中常量**：事件名 / 路由前缀 / API 路径集中定义，避免裸字符串拼写漂移失去编译期保护。

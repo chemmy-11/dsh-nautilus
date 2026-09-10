@@ -34,7 +34,9 @@ Turning "how far a conversation moved the knowledge base" into numbers — **ses
 
 - **Host**: `dsh` 0.1.5-rc.1 (currently verified); peer range `@deepseek-ai/dsh-host-webserver` = `^0.1.1-rc.2 || ^0.1.2-alpha.2 || ^0.1.5-rc.1` (backward-compatible across the official prerelease line);
 - **Contract surface**: the host half consumes only official `session/event`, `ctx.webServer.register` and `ctx.tools.register`; the client half consumes only `ctx.slots` (`conversation.view`). No host implementation is imported, so prerelease upgrades need no code change;
-- **Adaptation run (2026-09-10, dsh 0.1.5-rc.1)**: `typecheck` / `build` / `test` (12/12) / `check:deps` / `check-meta` all green; on a live install the vault scan, session-event capture and the `record_turn_selfcheck` tool all work.
+- **Runtime deps**: only in-box packages shipped by the dsh installation are imported — `@deepseek-ai/cordis` (types), `@deepseek-ai/schemastery` (config schema), `@deepseek-ai/dsh-host-webserver` (route types). The unscoped `cordis`/`schemastery` are not part of the installation closure and have been migrated away;
+- **Client entry**: a client plugin is an ordinary Cordis plugin (`Context` from `@deepseek-ai/cordis`; `@deepseek-ai/dsh-client-runtime` was removed in 0.1.5); the UI registry `ctx.slots` is provided by `@deepseek-ai/dsh-client-ui-renderer`; cross-plugin imports are type-only and the runtime requires only the baseline `react`;
+- **Adaptation run (2026-09-10, dsh 0.1.5-rc.1)**: `typecheck` / `build` / `test` (12/12) / `check:deps` / `check-meta` all green; on a live install the vault scan, session-event capture and the `record_turn_selfcheck` tool all work; an isolated-`DSH_HOME` entry smoke test (Standard Schema validation + 8 routes + 1 tool + 2 event subscriptions) passes.
 
 ## Installation
 

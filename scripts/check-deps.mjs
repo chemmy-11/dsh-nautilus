@@ -2,8 +2,9 @@
  * @dsh-external/dsh-nexus — 依赖合规 lint（CI/本地同款，2026-08 事故教训）。
  * 规则：
  *  R1 单实例合约：dependencies 禁止 in-box 包（@deepseek-ai/* 与 cordis/cosmokit/schemastery）；
- *  R2 预发布分支：@deepseek-ai/* 的 peerDependencies 范围必须含显式 '-rc' 下限
+ *  R2 预发布分支：@deepseek-ai/dsh* 宿主族包的 peerDependencies 范围必须含显式 '-rc' 下限
  *     （裸 `^0.1.0` 会静默排除 rc 构建 → 用户 ERESOLVE/双实例；官方包自身用 `^0.1.1-rc.2` 形）。
+ *     仅约束带 prerelease 线的宿主族；稳定版 in-box 包（@deepseek-ai/cordis、schemastery）不适用。
  *  R3 peer/devDep 同步：@deepseek-ai/dsh-host-webserver 的 devDependency 必须精确 pin，
  *     且其版本线（major.minor.patch-tag）落在 peer 范围内——升级 devDep 忘改 peer
  *     会让「构建对准的宿主」与「声明支持的宿主」脱节（2026-09-10 0.1.5-rc.1 适配教训）。
@@ -19,7 +20,7 @@ for (const [name] of Object.entries(pkg.dependencies ?? {})) {
   if (IN_BOX(name)) violations.push(`R1: in-box 包出现在 dependencies: ${name}（应 peerDependencies 或不声明）`)
 }
 for (const [name, range] of Object.entries(pkg.peerDependencies ?? {})) {
-  if (name.startsWith('@deepseek-ai/') && !String(range).includes('-rc')) {
+  if (/^@deepseek-ai\/dsh(-|$)/.test(name) && !String(range).includes('-rc')) {
     violations.push(`R2: peer 范围缺显式 prerelease 分支: ${name}: ${range}`)
   }
 }

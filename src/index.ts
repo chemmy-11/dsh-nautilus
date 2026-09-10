@@ -8,7 +8,7 @@ import type {} from '@deepseek-ai/dsh-host-webserver' // 拉声明合并获得 c
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { existsSync, renameSync } from 'node:fs'
-import z from 'schemastery'
+import z from '@deepseek-ai/schemastery'
 import { openStore } from './store.js'
 import { scanVault } from './scan.js'
 import { startVaultWatch } from './watch.js'

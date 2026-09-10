@@ -2,6 +2,13 @@
  * @dsh-external/dsh-nexus — client panels (conversation.view tabs, official contract).
  * M3-UI: 主题令牌化（--dsw-alias-*）+ 卡片化布局 + 图表升级（网格/渐变/分色/图例）+ 交互增补。
  * 零新依赖：样式经组件内 <style> 注入（一次性，class 前缀 xg-）；SVG 自绘。
+ *
+ * dsh 0.1.5-rc.1 客户端入口契约（本文件据此核对）：
+ *  - 客户端插件就是普通 Cordis 插件（Context 来自 @deepseek-ai/cordis；@deepseek-ai/dsh-client-runtime 已移除）；
+ *  - UI 注册表 ctx.slots: SlotRegistry 由 @deepseek-ai/dsh-client-ui-renderer 提供（slot key 类型由归属 UI 包增强声明）；
+ *  - 只允许 type-only 跨插件导入（bundle 纯净度门禁）；运行时协作一律走 cordis 服务；
+ *  - bundle 由 scripts/build-client.mjs 产成 lazy-CJS factory（window.__ModuleLoader__.load）；
+ *    非基线模块请求必须列入 package.json 的 dsh.client.external —— 本包只 require 基线 react，故无需 external。
  */
 import { createElement, useEffect, useState, type ReactNode } from 'react'
 import type {} from '@deepseek-ai/dsh-client-ui-conversation/client' // 拉 conversation.view SlotMap 类型
