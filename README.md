@@ -30,13 +30,19 @@ DeepSeek Harness（`dsh`）的观测插件（`@dsh-external/dsh-nexus`）：为 
 - 会话归属规则：**发起时所在工作区**——在指向 vault 的工作区内发起的会话归入指向桶，其余进归档；历史会话按同一规则回溯归类；
 - 看板三视图：**当前指向**（知识库会话）/ **dsh 全局会话**（全部工作区）/ **归档**（基线），对照分析即视图切换。
 
+## 兼容性
+
+- **宿主**：`dsh` 0.1.5-rc.1（当前实测）；peer 范围 `@deepseek-ai/dsh-host-webserver` = `^0.1.1-rc.2 || ^0.1.2-alpha.2 || ^0.1.5-rc.1`（官方 prerelease 线向后兼容）；
+- **契约面**：宿主侧只消费官方 `session/event`、`ctx.webServer.register`、`ctx.tools.register`，客户端只消费 `ctx.slots`（`conversation.view`）——不 import 宿主实现，故跨 prerelease 版本无需改码；
+- **适配验证（2026-09-10，dsh 0.1.5-rc.1）**：`typecheck` / `build` / `test`（12/12）/ `check:deps` / `check-meta` 全绿；实机装配下 vault 扫描、会话事件采集与 `record_turn_selfcheck` 工具均正常。
+
 ## 安装
 
 ```sh
 dsh plugin --profile <name> add github:chemmy-11/dsh-nexus
 ```
 
-git 形式安装会在本机构建（`prepare` 脚本需要 dsh 源码 checkout：自动探测 `$DSH_CHECKOUT` 或 `~/dsh-harness`）；pnpm ≥10 首次安装需在 profile 的 `pnpm-workspace.yaml` 按提示放行 `allowBuilds`。
+本仓库不提交 `lib/`，git 形式安装由包管理器就地构建（`prepack` → `scripts/prepare.mjs`；需要 dsh 源码 checkout，自动探测 `$DSH_CHECKOUT` 或 `~/dsh-harness`，探测不到则回退 npm-devDeps 模式）；pnpm ≥10 首次安装需在 profile 的 `pnpm-workspace.yaml` 按提示放行 `allowBuilds`。
 
 配置示例（profile 的 `cordis.patch.yml`；`vaultRoot` 可省——面板内指向确认即可，config 仅作初始种子）：
 

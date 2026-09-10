@@ -30,13 +30,19 @@ Turning "how far a conversation moved the knowledge base" into numbers — **ses
 - Session attribution rule: **the workspace a session was initiated in** — sessions started inside the pointed vault's workspace form the pointing bucket, everything else is archived; historical sessions are back-filled by the same rule;
 - Three dashboard views: **current pointing** (knowledge-base sessions) / **dsh global sessions** (all workspaces) / **archive** (baseline) — comparative analysis is a view switch.
 
+## Compatibility
+
+- **Host**: `dsh` 0.1.5-rc.1 (currently verified); peer range `@deepseek-ai/dsh-host-webserver` = `^0.1.1-rc.2 || ^0.1.2-alpha.2 || ^0.1.5-rc.1` (backward-compatible across the official prerelease line);
+- **Contract surface**: the host half consumes only official `session/event`, `ctx.webServer.register` and `ctx.tools.register`; the client half consumes only `ctx.slots` (`conversation.view`). No host implementation is imported, so prerelease upgrades need no code change;
+- **Adaptation run (2026-09-10, dsh 0.1.5-rc.1)**: `typecheck` / `build` / `test` (12/12) / `check:deps` / `check-meta` all green; on a live install the vault scan, session-event capture and the `record_turn_selfcheck` tool all work.
+
 ## Installation
 
 ```sh
 dsh plugin --profile <name> add github:chemmy-11/dsh-nexus
 ```
 
-Git-form installs build on your machine (the `prepare` script needs a dsh source checkout: probes `$DSH_CHECKOUT` or `~/dsh-harness`); pnpm ≥10 requires allowing `allowBuilds` in the profile's `pnpm-workspace.yaml` on first install.
+This repository does not commit `lib/`, so a git-form install is built in place by the package manager (`prepack` → `scripts/prepare.mjs`; it needs a dsh source checkout, probing `$DSH_CHECKOUT` or `~/dsh-harness`, and falls back to npm-devDeps mode when neither exists); pnpm ≥10 requires allowing `allowBuilds` in the profile's `pnpm-workspace.yaml` on first install.
 
 Config example (in the profile's `cordis.patch.yml`; `vaultRoot` is optional — confirm pointing in the panel instead, config only seeds it):
 

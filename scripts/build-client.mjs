@@ -64,7 +64,7 @@ await esbuild.build({
   define: { 'process.env.NODE_ENV': JSON.stringify(process.env.NODE_ENV ?? 'production') },
   external: [
     'react', 'react/jsx-runtime', 'react-dom', 'react-dom/client',
-    'cordis', '@deepseek-ai/dsh-client-ui-slots', '@deepseek-ai/dsh-client-runtime/client',
+    'cordis', '@deepseek-ai/dsh-client-ui-slots', '@deepseek-ai/dsh-client-ui-conversation/client',
   ],
 })
 console.log('build-client: lib/client.js written (esbuild)')
