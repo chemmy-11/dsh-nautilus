@@ -45,11 +45,11 @@
 | 路径 | 构建由谁触发 | 说明 |
 |---|---|---|
 | 本地开发 | `npm run build` | **始终构建**；构建链纯 Node（`scripts/prepare.mjs` + `scripts/build-client.mjs`） |
-| **git 安装**（`dsh plugin add github:chemmy-11/dsh-nautilus`） | **条件 `prepare`**：`node scripts/prepare.mjs --if-dependency` | pnpm/npm 对 git 依赖**只跑 `prepare`**（`prepack` 不跑）。守卫判据 = cwd 是否落在消费方 `node_modules` 内：是则该包被当依赖安装 → 就地构建；本地 `npm install` / `npm ci`（cwd = 仓库根）→ 跳过，**不恢复「install 步隐式整包构建」**（2026-08-24 事故：tsc 错误在 install 步爆出、误导归因）。构建必须自包含，不得依赖旁边的 monorepo / 项目引用 |
+| **git 安装**（`dsh plugin add github:chemmy-11/dsh-nautilus`） | `prepare`（条件）+ `prepack` | 实测（pnpm 11.24）：pnpm 对 git 依赖**两个钩子都会跑**；真正构建的是 `prepack`，条件 `prepare`（`--if-dependency`）在被安装的副本（无 `.git`）里也构建、本地检出跳过，并让 allowBuilds 门**响亮报错**而非静默跳过。构建必须自包含，不得依赖旁边的 monorepo / 项目引用 |
 | npm / tarball | `prepack`（`npm pack` / `publish` 前） | 无条件构建，产物随 tarball 分发 |
 
 - **动构建入口或产物路径（新增/移除钩子、改 `files` 白名单、改 `main`/`exports`）时，`build` / `prepack` / `prepare` 三个钩子一起核**，并同 PR 更新 README 双语安装节与本节。
-- git 安装的消费侧需在 profile 的 `pnpm-workspace.yaml` 放行 `allowBuilds`（pnpm ≥10；等同授权该包在安装时执行代码），并按官方建议**锁定 commit SHA**。
+- **`allowBuilds` 是硬门槛**：实测未放行时，只有 `prepack` 的包会被 pnpm **静默跳过构建**（装出来没有 `lib/`，加载期才炸）；声明条件 `prepare` 后 pnpm 改为直接报 `ERR_PNPM_GIT_DEP_PREPARE_NOT_ALLOWED` 并给出确切的键（形如 `@dsh-external/dsh-nexus@git+…#<sha>`）。放行等同授权该包在安装时执行构建代码，按官方建议**锁定 commit SHA**。
 
 ## 宿主版本适配（dsh 升级流程）
 
