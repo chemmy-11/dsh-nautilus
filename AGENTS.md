@@ -1,4 +1,4 @@
-# AGENTS.md — Nautilus（dsh-nexus）插件开发守则
+# AGENTS.md — Nautilus（dsh-nautilus）插件开发守则
 
 > 本文件由 DeepSeek Harness 每次会话自动加载（渲染预算 64 KiB）。它是**常驻指令**：只写「做什么 / 不做什么 / 去哪查」，完整论证留在归属地，不在此复述。
 >
@@ -59,7 +59,7 @@
 
 ## 6. 门禁、测试与提交
 
-- 提交前本地五件套（与 CI 同款）：`npm run typecheck` · `npm run build` · `npm test` · `npm run check:deps` · 元数据校验（bundle patch / client 双半 / `files` 清单 / client shim 断言）。
+- 提交前本地**六件套**（与 CI 同款）：`npm run typecheck` · `npm run build` · `npm test` · `npm run check:deps` · `npm run check:exports` · 元数据校验（bundle patch / client 双半 / `files` 清单 / client shim 断言）。
 - **测试红线**：必须有**经真实 Loader / 组合路径**的测试——手动 `ctx.plugin(...)` 挂载绕过的正是 postmortem 0001 崩掉的那条路径（178 个单测全绿仍线上崩溃：行覆盖必要非充分）。无 `inject` 的模块加断言「模块上没有默认导出」并做一次 `unwrapExports` 往返；断言**外部世界**而不是自我报告；测试从源码解析，不落构建后的 `lib/`。
 - 提交信息：`<type>(<scope>): <中文描述>——<为什么/细节>`；scope 用里程碑子项（`M4-A` / `M5.1` / `N1-x`）或模块名；**宿主适配类必须写明目标宿主版本**（如 `dsh 0.1.5-rc.1`）。
 - issue 先行、PR 一律 squash、**push 时机按用户明确指令**（本地领先 origin 是常态）。

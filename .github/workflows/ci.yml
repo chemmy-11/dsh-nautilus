@@ -2,7 +2,9 @@ name: ci
 
 on:
   push:
-    branches: [main]
+    # 两条长驻开发线（CONTRIBUTING「分支与提交」）：main = 主干，feat/nexus = 插件线，
+    # feat/nautilus = Nautilus 主线。三条线任一被推送都全量跑门禁；临时分支走 PR 触发。
+    branches: [main, feat/nexus, feat/nautilus]
   pull_request:
 
 # 最小权限：CI 只需要读仓库内容验证构建（public 仓库，写 token 无必要）
@@ -48,6 +50,10 @@ jobs:
 
       - name: Dep compliance lint (单实例合约/预发布分支)
         run: npm run check:deps
+
+      # postmortem 0001 红线：命名空间插件混 default 导出 → Loader 丢 inject，加载即崩
+      - name: Export form guard (命名空间插件禁 default 导出)
+        run: npm run check:exports
 
       - name: Test (pure functions, built artifacts)
         run: npm test
