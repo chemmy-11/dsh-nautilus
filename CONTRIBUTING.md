@@ -1,11 +1,15 @@
 # 开发规范（CONTRIBUTING）
 
-> 上游文档在雪谷 vault `外功/DSH/`（PROJECT-MOC → 规范 / M1–M4 开发文档 / 首轮分析报告）；本文件只固化**仓库工程约定**，PR 模板自查项与此同源。
+> 上游文档在雪谷 vault `外功/DSH/`（PROJECT-MOC → 规范 / M1–M5 开发文档 / 首轮分析报告）；本文件只固化**仓库工程约定**，PR 模板自查项与此同源；面向 agent 会话的常驻守则见 [`AGENTS.md`](./AGENTS.md)——两者冲突时**以本文件为准**并回写 AGENTS.md。
 
 ## 分支与提交
 
 - `main` 为主干，保持线性；小步本地提交，**push 时机按用户明确指令**（本地领先 origin 是常态）。
-- 分支命名：`feat/<slug>` / `fix/<slug>` / `chore/<slug>`，与 PR 主题一致（如 `chore/dsh-0.1.5-compat`）。
+- **两条长驻开发线**，各自一条分支、互不混提：
+  - `feat/nexus` —— **插件线**：应用层观测插件本体（采集 / 存储 / 路由 / 面板 / 宿主适配）；
+  - `feat/nautilus` —— **Nautilus 主线**：三层指标（pulse / infer / nexus）、era 因果上下文、Agentic Ops 工作台；**包含**插件线全部内容，插件线前进后用 `git merge feat/nexus` 同步（不 rebase，保留既有提交 hash）。
+  两条线各自 squash 进 `main`；跨线公共约定（AGENTS.md / CI / PR 模板 / docs 结构）**改动先落一条线、随即 `merge` 进另一条线**，保证两边始终同一份（`main` 尚未被线合并前，模板 / CONTRIBUTING 以线为准；GitHub 上 PR 模板取**目标分支**、issue 模板取**默认分支**，故对 `main` 的 PR 会在 `main` 追平后才看到新模板）。
+- 分支命名：`feat/<slug>` / `fix/<slug>` / `chore/<slug>`，与 PR 主题一致（如 `chore/dsh-0.1.5-compat`）；线内子任务挂在线名之后（如 `feat/nexus-m5`）。
 - 提交信息：`<type>(<scope>): <中文描述>——<为什么/细节>`；type ∈ feat / fix / refactor / docs / test / ci / chore / build；scope 用里程碑子项（如 `M4-A`、`N1-x`）、模块名或面（`contributing` / `deps` / `client` / `routes`）。
 - **宿主适配类提交**（依赖升级 / 契约面适配）的描述必须写明目标宿主版本（如 `dsh 0.1.5-rc.1`），便于按版本回溯。
 - 一次提交一个语义单元；无关改动不混提。
@@ -14,16 +18,18 @@
 
 - 有风险 / 多步改动走功能分支 + PR，描述按模板（背景 / 改动 / 验证 / 自查）。
 - 合并一律 **squash**，提交信息即 PR 标题；issue 关联用 `Closes #N` / `Refs #N`。
+- **base 约定**：线内子任务 PR 对所在线（`feat/nexus` / `feat/nautilus`）；线 → `main` 的收敛 PR 直接对 `main`，同样 squash。
 - issue 先行：里程碑子项、缺陷、技术债开 issue 记账，完成在 issue 下留结论后关闭。
 
-## CI 门禁（`ci.yml`，push / PR 全量）
+## CI 门禁（`ci.yml`：push = `main` / `feat/nexus` / `feat/nautilus`，PR = 全部分支）
 
 1. `actionlint` 工作流静态检查（YAML 语义 / 表达式 / shell 语法）。解析失败表现为 **0 jobs 静默无检查**（2026-08-28 事故形态），CI 内自查救不了本文件——推工作流改动前本地跑一次：`go install github.com/rhysd/actionlint/cmd/actionlint@latest` 或直接下载 release 二进制。**注意需同时装 shellcheck 才与 runner 等效**（runner 自带；本机缺失时 SC 系告警漏检，2026-09-04 首跑即栽在 SC2035）。
 2. `npm run typecheck`（tsc --noEmit）；
 3. `npm run build`（npm-devDeps 模式，无 DSH checkout 也可构建）；
 4. `npm run check:deps`（依赖合规：R1 单实例合约 / R2 显式 prerelease 分支（仅约束 `@deepseek-ai/dsh*` 宿主族）/ R3 peer 覆盖 devDep pin）；
-5. 元数据校验：bundle patch / client 双半 / files 清单 / client shim 断言；
-6. `npm test`（纯函数回归：analysis / selfcheck / scan）。
+5. `npm run check:exports`（导出形态守卫：命名空间插件禁混 `export default` —— Loader 会丢 `inject`，事故 0001）；
+6. `npm test`（纯函数回归：analysis / selfcheck / scan）；
+7. 元数据校验 `node .github/scripts/check-meta.mjs`（bundle patch / client 双半 / files 清单）+ client shim 断言 + 产物齐全断言（`lib/index.js` · `lib/client.js` · `lib/types/index.d.ts`）。
 
 ## 发布（`release.yml`）
 
@@ -39,7 +45,7 @@
    - `session/event`：`turn/start`·`step/start`（`data.turn`·`step`）、`user/message`（`content` 文本块）、`assistant/message`（`data.message.content` + `usage.inputTokens/outputTokens/cacheReadTokens`）、事件信封 `{type, seq, time, data}`；
    - 宿主服务：`ctx.webServer.register(WebRoute{kind,path,handler})`、`ctx.tools.register(ToolDefinition{name,description,parameters,output.schema,output.render,execute})`、`ctx.effect` / `ctx.on`；
    - 客户端：客户端插件就是普通 Cordis 插件（`Context` 来自 `@deepseek-ai/cordis`；`@deepseek-ai/dsh-client-runtime` 在 0.1.5 已移除，属死名）；UI 注册表 `ctx.slots` 由 `@deepseek-ai/dsh-client-ui-renderer` 提供，`slots.inject(key)` + `slots.register(def, Component)`（kind/scope/owner 由归属 UI 包的 SlotMap 增强声明）；`dsh.client.inject` 是**信息性**包名边（列 UI 提供方包名），`dsh.client.external` 才是硬模块边（同步 `require` 决定代码到达），非基线模块请求必须列入；只允许 type-only 跨插件导入（bundle 纯净度门禁），运行时协作走 cordis 服务。
-3. **门禁**：typecheck + build + test + check:deps + check-meta + client shim 全绿；确认 `lib/` 产物与源码同步、构建模式（checkout / npm-devDeps）符合本机实际。
+3. **门禁**：typecheck + build + test + check:deps + check:exports + check-meta + client shim 全绿；确认 `lib/` 产物与源码同步、构建模式（checkout / npm-devDeps）符合本机实际。
 4. **profile 实测**：记录 profile 名 + 宿主版本 + 装配方式 + 结果（涉数据给前后数字）；装配遵守「工程红线 · profile 卫生」的热装配收敛要求。
 5. **记录**：README 双语「兼容性」节更新目标版本；vault 开发文档追加「适配记录」小节（触发 / 改动表 / 契约核对结论 / 验证数据 / 遗留）。
 
@@ -57,7 +63,7 @@
 
 ## 验证纪律
 
-- **本地门禁五件套**再提交：typecheck + build + test + `check:deps` + `check-meta`（含 client shim 断言），与 CI 同款。
+- **本地门禁六件套**再提交：typecheck + build + test + `check:deps` + `check:exports` + `check-meta`（含 client shim 断言），与 CI 同款。
 - 端上行为（面板 / 路由 / 迁移 / 事件订阅）用注入器通道（`dev_build_plugin` / `dev_inject_plugin` / `dev_reload_package`）或 profile 实测，记录**环境四元组**：dsh 版本 + profile 名 + 装配方式（bundle / patch 热装配 / 注入器）+ 结果。
 - 宿主升级后另核 `lib/` 构建模式与 `~/dsh-harness`（或 `$DSH_CHECKOUT`）可用性——checkout 缺失时走 npm-devDeps 模式，不要用「能构建」掩盖 checkout 失效。
 - 涉统计口径的改动（归属 / 覆盖率 / 曲线基线）须给出前后对照数字。

@@ -23,4 +23,4 @@ title: '[task] <一句话目标>'
 ## 边界与红线
 
 - 不做：
-- 约束：单实例合约 / vault 只读 / 迁移幂等（见 CONTRIBUTING）
+- 约束：单实例合约 / vault 只读 / 迁移幂等（见 CONTRIBUTING）；插件形态与宿主契约红线见 [AGENTS.md](../../AGENTS.md)
