@@ -41,7 +41,7 @@ DeepSeek Harness（`dsh`）的观测插件（`@dsh-external/dsh-nexus`）：为 
 ## 安装
 
 ```sh
-dsh plugin --profile <name> add github:chemmy-11/dsh-nexus
+dsh plugin --profile <name> add github:chemmy-11/dsh-nautilus
 ```
 
 本仓库不提交 `lib/`，git 形式安装由包管理器就地构建（`prepack` → `scripts/prepare.mjs`；需要 dsh 源码 checkout，自动探测 `$DSH_CHECKOUT` 或 `~/dsh-harness`，探测不到则回退 npm-devDeps 模式）；pnpm ≥10 首次安装需在 profile 的 `pnpm-workspace.yaml` 按提示放行 `allowBuilds`。
