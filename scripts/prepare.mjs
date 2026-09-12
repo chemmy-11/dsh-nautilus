@@ -1,7 +1,13 @@
 /**
- * @dsh-external/dsh-nexus — Node 构建入口（prepack/build 共用）。
- * 挂在 npm prepack 而非 prepare：npm ci/install 不再隐式整包构建
- * （曾致 tsc 错误在 install 步爆出、误导归因），npm pack 发布前仍自动构建兜底。
+ * @dsh-external/dsh-nexus — Node 构建入口（build / prepack / prepare 共用）。
+ *
+ * 三种触发（npm 生命周期本机实测，2026-09）：
+ *   · `npm run build` 与 `prepack`：**始终构建**（本地开发 / npm pack 发布打包）；
+ *   · `prepare`（`node scripts/prepare.mjs --if-dependency`）：**只在「被当依赖安装」时构建**
+ *     —— pnpm/npm 对 git 依赖只跑 `prepare`，它是在地构建 git 安装包的唯一钩子（prepack 不跑）；
+ *     而本地 `npm install` / `npm ci` 同样会触发 `prepare`（cwd = 仓库根），此时跳过，
+ *     不恢复「install 步隐式整包构建」（2026-08-24 事故：tsc 错误在 install 步爆出、误导归因）。
+ *     判据：cwd 是否落在 `node_modules` 内（= 被装进消费方依赖树）。
  * 纯 Node 实现（不依赖 bash 环境）。
  * 两种构建模式：
  *  A) DSH checkout 模式（本地开发）：DSH_CHECKOUT / ~/dsh-harness 存在 →
@@ -20,6 +26,12 @@ import { createRequire } from 'node:module'
 const require = createRequire(import.meta.url)
 const root = dirname(fileURLToPath(import.meta.url)) // scripts/
 const pkgRoot = dirname(root)
+
+// prepare 的条件守卫（见文件头）：只有「被当依赖安装」才构建——本地 install 跳过。
+if (process.argv.includes('--if-dependency') && !/(^|[\\/])node_modules([\\/]|$)/.test(process.cwd())) {
+  console.log('prepare: 本地安装（cwd 不在 node_modules 内），跳过构建——请用 npm run build')
+  process.exit(0)
+}
 
 function detectCheckout() {
   const env = process.env.DSH_CHECKOUT
