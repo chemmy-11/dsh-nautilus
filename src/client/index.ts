@@ -1,6 +1,6 @@
 /**
  * @dsh-external/dsh-nexus — client panels (conversation.view tabs, official contract).
- * M3-UI: 主题令牌化（--dsw-alias-*）+ 卡片化布局 + 图表升级（网格/渐变/分色/图例）+ 交互增补。
+ * M3-UI: 主题令牌化（--nt-* 层，默认映射 --dsw-alias-*，U1 起——映射表见 docs/2-dev/nautilus-dev-02-ui-workbench.md §2）+ 卡片化布局 + 图表升级（网格/渐变/分色/图例）+ 交互增补。
  * 零新依赖：样式经组件内 <style> 注入（一次性，class 前缀 xg-）；SVG 自绘。
  *
  * dsh 0.1.5-rc.1 客户端入口契约（本文件据此核对）：
@@ -99,31 +99,50 @@ const METRIC_LABEL: Record<string, string> = { miss: '未命中率', tps: 'TPS',
 // ── 样式（主题令牌；零硬编码色） ───────────────────────────────────────────────
 
 const STYLE_ID = 'xg-theme-style'
+/* U1 令牌层（docs/2-dev/nautilus-dev-02-ui-workbench.md §2.1）：面板样式只取 --nt-*。
+   --nt-* 默认值 = var(--dsw-alias-*, fallback)——宿主令牌优先，随宿主亮暗主题切换组件零改动；
+   fallback 为 S4 浅色纸面值，仅宿主令牌缺席时兜底。唯一静态色：--nt-accent 朱红（S4 唯一颜色主张）。 */
 const STYLE = `
-.xg-cards { display:flex; flex-direction:column; gap:12px; padding:12px; font-family:var(--dsw-font-family); }
-.xg-card { border:1px solid var(--dsw-alias-border-l2); border-radius:10px; background:var(--dsw-alias-bg-layer-2); box-shadow:var(--dsw-shadow-lv2); overflow:hidden; }
-.xg-card-head { padding:7px 14px; font:var(--dsw-font-xs-strong-13); color:var(--dsw-alias-label-secondary); border-bottom:1px solid var(--dsw-alias-border-l2); display:flex; justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap; }
+.xg-cards {
+  --nt-bg: var(--dsw-alias-bg-layer-1, #f2f2f0);
+  --nt-panel: var(--dsw-alias-bg-layer-2, #ffffff);
+  --nt-panel2: var(--dsw-alias-bg-layer-3, #f7f7f5);
+  --nt-border: var(--dsw-alias-border-l1, #d9d9d5);
+  --nt-border2: var(--dsw-alias-border-l2, #c8c8c3);
+  --nt-text: var(--dsw-alias-label-primary, #101010);
+  --nt-dim: var(--dsw-alias-label-secondary, #5f5f5c);
+  --nt-faint: var(--dsw-alias-label-tertiary, #9a9a95);
+  --nt-ok: var(--dsw-alias-state-success-primary, #1a7f37);
+  --nt-warn: var(--dsw-alias-state-warn-primary, #b42318);
+  --nt-accent: #e6321e;
+  --nt-ink: var(--dsw-alias-label-primary, #101010);
+  --nt-gray: var(--dsw-alias-label-tertiary, #9a9a95);
+  --nt-font: var(--dsw-font-family, 'Helvetica Neue', Helvetica, Arial, 'Segoe UI', 'Microsoft YaHei', sans-serif);
+}
+.xg-cards { display:flex; flex-direction:column; gap:12px; padding:12px; font-family:var(--nt-font); }
+.xg-card { border:1px solid var(--nt-border2); border-radius:10px; background:var(--nt-panel); box-shadow:var(--dsw-shadow-lv2); overflow:hidden; }
+.xg-card-head { padding:7px 14px; font:var(--dsw-font-xs-strong-13); color:var(--nt-dim); border-bottom:1px solid var(--nt-border2); display:flex; justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap; }
 .xg-card-body { padding:10px 14px; }
-.xg-num { font-size:22px; font-weight:600; color:var(--dsw-alias-label-primary); font-family:var(--dsw-font-family); line-height:1.1; }
-.xg-label { font:var(--dsw-font-xxs-12); color:var(--dsw-alias-label-tertiary); }
+.xg-num { font-size:22px; font-weight:600; color:var(--nt-text); font-family:var(--nt-font); line-height:1.1; }
+.xg-label { font:var(--dsw-font-xxs-12); color:var(--nt-faint); }
 .xg-row { display:flex; gap:20px; flex-wrap:wrap; }
 .xg-kv { display:flex; flex-direction:column; gap:2px; }
-.xg-list { display:flex; flex-direction:column; gap:4px; font:var(--dsw-font-xxs-12); color:var(--dsw-alias-label-secondary); }
-.xg-path { font-family:Consolas,Menlo,monospace; color:var(--dsw-alias-label-secondary); word-break:break-all; }
+.xg-list { display:flex; flex-direction:column; gap:4px; font:var(--dsw-font-xxs-12); color:var(--nt-dim); }
+.xg-path { font-family:Consolas,Menlo,monospace; color:var(--nt-dim); word-break:break-all; }
 .xg-badge { padding:1px 8px; border-radius:99px; font-size:11px; white-space:nowrap; }
 .xg-badge-modified { background:var(--dsw-alias-state-business-tertiary); color:var(--dsw-alias-state-business-primary); }
 .xg-badge-created { background:var(--dsw-alias-state-success-tertiary); color:var(--dsw-alias-state-success-primary); }
 .xg-badge-deleted { background:var(--dsw-alias-state-warn-tertiary); color:var(--dsw-alias-state-warn-label); }
-.xg-btn { border:1px solid var(--dsw-alias-border-l2); background:transparent; color:var(--dsw-alias-label-secondary); border-radius:6px; padding:2px 10px; font:var(--dsw-font-xxs-12); cursor:pointer; }
-.xg-btn:hover { background:var(--dsw-alias-interactive-bg-hover); color:var(--dsw-alias-label-primary); }
+.xg-btn { border:1px solid var(--nt-border2); background:transparent; color:var(--nt-dim); border-radius:6px; padding:2px 10px; font:var(--dsw-font-xxs-12); cursor:pointer; }
+.xg-btn:hover { background:var(--dsw-alias-interactive-bg-hover); color:var(--nt-text); }
 .xg-btn-active { border-color:var(--dsw-alias-state-business-primary); color:var(--dsw-alias-state-business-primary); }
 .xg-btn:disabled { opacity:.45; cursor:default; }
-.xg-select { background:var(--dsw-alias-bg-layer-1); color:var(--dsw-alias-label-primary); border:1px solid var(--dsw-alias-border-l2); border-radius:6px; padding:2px 6px; font:var(--dsw-font-xxs-12); }
-.xg-input { background:var(--dsw-alias-bg-layer-1); color:var(--dsw-alias-label-primary); border:1px solid var(--dsw-alias-border-l2); border-radius:6px; padding:2px 6px; font:var(--dsw-font-xxs-12); min-width:180px; }
+.xg-select { background:var(--nt-bg); color:var(--nt-text); border:1px solid var(--nt-border2); border-radius:6px; padding:2px 6px; font:var(--dsw-font-xxs-12); }
+.xg-input { background:var(--nt-bg); color:var(--nt-text); border:1px solid var(--nt-border2); border-radius:6px; padding:2px 6px; font:var(--dsw-font-xxs-12); min-width:180px; }
 .xg-table { width:100%; border-collapse:collapse; font:var(--dsw-font-xxs-12); }
-.xg-table td { padding:5px 8px; border-bottom:1px solid var(--dsw-alias-border-l1); color:var(--dsw-alias-label-secondary); vertical-align:middle; }
-.xg-tooltip { position:absolute; background:var(--dsw-alias-bg-layer-3); border:1px solid var(--dsw-alias-border-l2); border-radius:8px; box-shadow:var(--dsw-shadow-lv3); padding:8px 10px; font:var(--dsw-font-xxs-12); color:var(--dsw-alias-label-primary); z-index:5; pointer-events:none; white-space:pre-wrap; }
-.xg-empty { padding:10px 0; font:var(--dsw-font-xxs-12); color:var(--dsw-alias-label-tertiary); }
+.xg-table td { padding:5px 8px; border-bottom:1px solid var(--nt-border); color:var(--nt-dim); vertical-align:middle; }
+.xg-tooltip { position:absolute; background:var(--nt-panel2); border:1px solid var(--nt-border2); border-radius:8px; box-shadow:var(--dsw-shadow-lv3); padding:8px 10px; font:var(--dsw-font-xxs-12); color:var(--nt-text); z-index:5; pointer-events:none; white-space:pre-wrap; }
+.xg-empty { padding:10px 0; font:var(--dsw-font-xxs-12); color:var(--nt-faint); }
 /* M4.1：分栏栅格——6 列（摘要行 3+3；主区 4+2），<1200px 回退单列（占满不留白） */
 .xg-grid { display:grid; grid-template-columns:repeat(6, 1fr); gap:12px; }
 .xg-grid > .xg-span3 { grid-column:span 3; }
@@ -135,19 +154,19 @@ const STYLE = `
 }
 /* M4.2：曲线放大覆盖层（fixed 悬浮，不动官方代码；z-index 高于 view 区） */
 .xg-overlay { position:fixed; inset:0; background:rgba(0,0,0,.55); display:flex; align-items:center; justify-content:center; z-index:1000; }
-.xg-overlay-inner { background:var(--dsw-alias-bg-layer-2); border:1px solid var(--dsw-alias-border-l2); border-radius:12px; padding:16px 20px; max-width:1180px; width:calc(100vw - 80px); max-height:calc(100vh - 80px); overflow:auto; }
+.xg-overlay-inner { background:var(--nt-panel); border:1px solid var(--nt-border2); border-radius:12px; padding:16px 20px; max-width:1180px; width:calc(100vw - 80px); max-height:calc(100vh - 80px); overflow:auto; }
 .xg-overlay-head { display:flex; align-items:center; justify-content:space-between; margin-bottom:10px; gap:12px; }
 /* M4.4：口径注记（Fact First——图上明说事实与边界，镜 v0 启发） */
-.xg-note { padding:8px 12px; font:var(--dsw-font-xxs-12); color:var(--dsw-alias-label-tertiary); background:var(--dsw-alias-bg-layer-1); border-radius:6px; margin-top:10px; }
-.xg-warn { color:var(--dsw-alias-state-warn-primary); }
+.xg-note { padding:8px 12px; font:var(--dsw-font-xxs-12); color:var(--nt-faint); background:var(--nt-bg); border-radius:6px; margin-top:10px; }
+.xg-warn { color:var(--nt-warn); }
 /* M3-UI.2+: tab 激活时隐藏输入卡（[data-composer-seat] 为官方稳定锚点，皮肤同款选择器；
    组件挂载 ⇔ tab 激活（view ring only:activeId），body 类由 useHideComposer 挂/卸载。 */
 body.xg-hide-input [data-composer-seat] { display: none !important; }
 /* M4-L：L 场指向条 + 可展开分析 */
-.xg-lf-bar { grid-column:1 / -1; display:flex; align-items:center; gap:8px; flex-wrap:wrap; font:var(--dsw-font-xxs-12); color:var(--dsw-alias-label-secondary); }
-.xg-lf-bar b { color:var(--dsw-alias-label-primary); font-weight:600; }
-.xg-details { font:var(--dsw-font-xxs-12); color:var(--dsw-alias-label-secondary); margin-top:8px; }
-.xg-details summary { cursor:pointer; color:var(--dsw-alias-label-tertiary); user-select:none; }
+.xg-lf-bar { grid-column:1 / -1; display:flex; align-items:center; gap:8px; flex-wrap:wrap; font:var(--dsw-font-xxs-12); color:var(--nt-dim); }
+.xg-lf-bar b { color:var(--nt-text); font-weight:600; }
+.xg-details { font:var(--dsw-font-xxs-12); color:var(--nt-dim); margin-top:8px; }
+.xg-details summary { cursor:pointer; color:var(--nt-faint); user-select:none; }
 `
 
 let styleInjected = false
@@ -304,7 +323,7 @@ function LineChart(props: { series: Series[]; w: number; h: number; onOpenDetail
   return createElement('div', { style: { position: 'relative', width: w } },
     createElement('svg', {
       width: w, height: h, viewBox: `0 0 ${w} ${h}`,
-      style: { background: 'var(--dsw-alias-bg-layer-1)', borderRadius: 8 },
+      style: { background: 'var(--nt-bg)', borderRadius: 8 },
       onMouseMove: (e: { clientX: number; clientY: number; currentTarget: { getBoundingClientRect(): { left: number; top: number } } }) => {
         const rect = e.currentTarget.getBoundingClientRect()
         const mx = e.clientX - rect.left
@@ -315,8 +334,8 @@ function LineChart(props: { series: Series[]; w: number; h: number; onOpenDetail
       onMouseLeave: () => { setHover(null); setTip(null) },
     },
       ticks.map((t) => createElement('g', { key: String(t) },
-        createElement('line', { x1: padL, y1: py(t), x2: w - padR, y2: py(t), stroke: 'var(--dsw-alias-border-l1)', strokeWidth: 1 }),
-        createElement('text', { x: padL - 6, y: py(t) + 3, fill: 'var(--dsw-alias-label-tertiary)', fontSize: 9, textAnchor: 'end' }, t >= 1e6 ? `${(t / 1e6).toFixed(1)}M` : t >= 1000 ? `${(t / 1000).toFixed(1)}K` : t.toFixed(2)),
+        createElement('line', { x1: padL, y1: py(t), x2: w - padR, y2: py(t), stroke: 'var(--nt-border)', strokeWidth: 1 }),
+        createElement('text', { x: padL - 6, y: py(t) + 3, fill: 'var(--nt-faint)', fontSize: 9, textAnchor: 'end' }, t >= 1e6 ? `${(t / 1e6).toFixed(1)}M` : t >= 1000 ? `${(t / 1000).toFixed(1)}K` : t.toFixed(2)),
       )),
       series.map((s, si) => {
         const pts = s.points
@@ -337,7 +356,7 @@ function LineChart(props: { series: Series[]; w: number; h: number; onOpenDetail
             cx: px(p.x), cy: py(p.value),
             r: hover !== null && hover.si === si && hover.pi === pi ? 4.5 : 2.2,
             fill: s.color,
-            stroke: hover !== null && hover.si === si && hover.pi === pi ? 'var(--dsw-alias-label-primary)' : 'none',
+            stroke: hover !== null && hover.si === si && hover.pi === pi ? 'var(--nt-text)' : 'none',
             strokeWidth: hover !== null && hover.si === si && hover.pi === pi ? 1.2 : 0,
             cursor: 'pointer',
             onClick: () => { if (props.onOpenDetail) props.onOpenDetail(p.meta) },
@@ -355,13 +374,13 @@ function LineChart(props: { series: Series[]; w: number; h: number; onOpenDetail
           },
         },
           createElement('div', null, hovered.detail),
-          createElement('div', { style: { marginTop: 4, color: 'var(--dsw-alias-label-tertiary)' } },
+          createElement('div', { style: { marginTop: 4, color: 'var(--nt-faint)' } },
             props.onOpenDetail === undefined ? '（B 方案预留）' : '点击点位 → 查看完整问答'),
         )
       : null,
     series.length > 1
       ? createElement('div', { style: { display: 'flex', gap: 12, paddingTop: 4, flexWrap: 'wrap', fontSize: 11 } },
-          series.map((s) => createElement('span', { key: s.id, style: { color: 'var(--dsw-alias-label-secondary)' } },
+          series.map((s) => createElement('span', { key: s.id, style: { color: 'var(--nt-dim)' } },
             createElement('span', { style: { display: 'inline-block', width: 8, height: 8, borderRadius: 99, background: s.color, marginRight: 4 } }),
             s.label,
           )),
