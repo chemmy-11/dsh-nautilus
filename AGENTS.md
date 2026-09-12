@@ -30,7 +30,7 @@
 - **`!!js` 只在插件 `config` 内求值**：`disabled:` 等 Loader 条目元数据不求值，写表达式对象恒为 truthy（postmortem 0002）。条件式组态用独立 overlay 文件，不用 `disabled: !!js`。
 - **配置**：导出 `Config` 接口 + 同名 Schemastery schema，默认值写进 schema；**不要导出普通对象当 Config**（不满足 Standard Schema）。凡不同部署可能取不同值的参数都必须是配置字段——检验标准：能否只改 `cordis.yml` 而不改代码。让非法配置在加载时响亮失败。
 - **生命周期**：`ctx.on` / `ctx.tools.register` / `ctx.webServer.register` / `ctx.effect` 的注册随卸载自动撤销；需要手动清理的资源放进 `ctx.effect(() => cleanup)`。**有顺序依赖的清理必须收进同一个 `ctx.effect` 的处置器**——多个异步处置器并发执行，不保证逐个完成。分发器（事件/回调总线）内部要 `try/catch` 包住每个回调，不让单个监听器异常饿死后续监听器；停止时要**停稳**（先摘监听器与通知注册，再等子进程真正退出）。
-- **交付通道**：npm / tarball 走预构建产物；**git 安装（`dsh plugin add github:…`）拉的是源码**，pnpm 只跑 `prepare` 而**不跑 `prepack`**——本包当前只有 `prepack`，因此 git 安装前必须补一个自包含的 `prepare`（不得依赖旁边的 monorepo 或项目引用），否则到手无 `lib/`、加载失败。git 安装还要求用户在 profile 的 `pnpm-workspace.yaml` 里对确切包键写 `allowBuilds: true`（等于允许其代码在安装时执行），并**锁定 commit SHA**。
+- **交付通道**：npm / tarball 走预构建产物（`prepack` 无条件构建）；**git 安装（`dsh plugin add github:…`）拉的是源码**，pnpm 对 git 依赖只跑 `prepare` 而**不跑 `prepack`**——本包用**条件 `prepare`**：`node scripts/prepare.mjs --if-dependency` 仅当 cwd 落在消费方 `node_modules` 内（= 被当依赖安装）时构建，本地 `npm install` / `npm ci` 一律跳过（不恢复 install 步隐式整包构建——2026-08-24 事故）。**动构建入口或产物路径时三个钩子一起核**：`build` / `prepack` / `prepare`；git 安装还要求消费侧在 profile 的 `pnpm-workspace.yaml` 对确切包键写 `allowBuilds: true`（等于允许其代码在安装时执行），并**锁定 commit SHA**。
 
 ## 3. 客户端半区（browser half）
 

@@ -44,7 +44,7 @@ DeepSeek Harness（`dsh`）的观测插件（`@dsh-external/dsh-nexus`）：为 
 dsh plugin --profile <name> add github:chemmy-11/dsh-nautilus
 ```
 
-本仓库不提交 `lib/`，git 形式安装由包管理器就地构建（`prepack` → `scripts/prepare.mjs`；需要 dsh 源码 checkout，自动探测 `$DSH_CHECKOUT` 或 `~/dsh-harness`，探测不到则回退 npm-devDeps 模式）；pnpm ≥10 首次安装需在 profile 的 `pnpm-workspace.yaml` 按提示放行 `allowBuilds`。
+本仓库不提交 `lib/`，故 **git 形式安装在安装时就地构建**：`prepare` 钩子（`node scripts/prepare.mjs --if-dependency`）**只在「本包被当作依赖安装」时触发**（cwd 落在消费方 `node_modules` 内），本地 `npm install` / `npm ci` 不隐式构建（本地开发用 `npm run build`）；构建需要 dsh 源码 checkout，自动探测 `$DSH_CHECKOUT` 或 `~/dsh-harness`，探测不到则回退 npm-devDeps 模式（git 安装时 devDependencies 由包管理器装好）；pnpm ≥10 首次安装需在 profile 的 `pnpm-workspace.yaml` 按提示放行 `allowBuilds`——那等于授权该包在安装时执行构建代码，**建议锁定 commit SHA**。
 
 配置示例（profile 的 `cordis.patch.yml`；`vaultRoot` 可省——面板内指向确认即可，config 仅作初始种子）：
 

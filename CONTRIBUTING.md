@@ -38,6 +38,19 @@
 - `v*` tag 触发：构建 tgz → GitHub Release；发布前核对 version 与 tag 一致、README 功能描述与实现状态相符（不得含"设计阶段 / 未发布"之类不实声明）。
 - `workflow_dispatch` 手动触发 = **干跑**：走完整验证 + 打包管线但不创建 Release——打 tag 前先干跑验证发布链路（release 管线修复后未经真实 tag 验证过，首次发布务必先干跑）。
 
+## 交付与安装通道
+
+`lib/` 不入库，故三条分发路径的构建来源必须各自成立：
+
+| 路径 | 构建由谁触发 | 说明 |
+|---|---|---|
+| 本地开发 | `npm run build` | **始终构建**；构建链纯 Node（`scripts/prepare.mjs` + `scripts/build-client.mjs`） |
+| **git 安装**（`dsh plugin add github:chemmy-11/dsh-nautilus`） | **条件 `prepare`**：`node scripts/prepare.mjs --if-dependency` | pnpm/npm 对 git 依赖**只跑 `prepare`**（`prepack` 不跑）。守卫判据 = cwd 是否落在消费方 `node_modules` 内：是则该包被当依赖安装 → 就地构建；本地 `npm install` / `npm ci`（cwd = 仓库根）→ 跳过，**不恢复「install 步隐式整包构建」**（2026-08-24 事故：tsc 错误在 install 步爆出、误导归因）。构建必须自包含，不得依赖旁边的 monorepo / 项目引用 |
+| npm / tarball | `prepack`（`npm pack` / `publish` 前） | 无条件构建，产物随 tarball 分发 |
+
+- **动构建入口或产物路径（新增/移除钩子、改 `files` 白名单、改 `main`/`exports`）时，`build` / `prepack` / `prepare` 三个钩子一起核**，并同 PR 更新 README 双语安装节与本节。
+- git 安装的消费侧需在 profile 的 `pnpm-workspace.yaml` 放行 `allowBuilds`（pnpm ≥10；等同授权该包在安装时执行代码），并按官方建议**锁定 commit SHA**。
+
 ## 宿主版本适配（dsh 升级流程）
 
 宿主发新版本（尤其 prerelease 线）时按序执行；**先确认宿主实际版本，不凭 npm dist-tag 推断**（本机 `dsh --version`、profile 实际加载的 `@deepseek-ai/dsh-host-webserver` 版本）。
