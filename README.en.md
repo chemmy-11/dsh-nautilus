@@ -41,7 +41,7 @@ Turning "how far a conversation moved the knowledge base" into numbers — **ses
 ## Installation
 
 ```sh
-dsh plugin --profile <name> add github:chemmy-11/dsh-nexus
+dsh plugin --profile <name> add github:chemmy-11/dsh-nautilus
 ```
 
 This repository does not commit `lib/`, so a git-form install is built in place by the package manager (`prepack` → `scripts/prepare.mjs`; it needs a dsh source checkout, probing `$DSH_CHECKOUT` or `~/dsh-harness`, and falls back to npm-devDeps mode when neither exists); pnpm ≥10 requires allowing `allowBuilds` in the profile's `pnpm-workspace.yaml` on first install.

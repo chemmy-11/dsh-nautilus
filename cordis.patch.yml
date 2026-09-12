@@ -1,5 +1,5 @@
 # @dsh-external/dsh-nexus bundle patch 层。
-# 装配：`dsh plugin --profile <name> add github:chemmy-11/dsh-nexus`（或 npm/tarball）。
+# 装配：`dsh plugin --profile <name> add github:chemmy-11/dsh-nautilus`（或 npm/tarball）。
 - insert:
     - id: nexus
       name: '@dsh-external/dsh-nexus'
