@@ -2,9 +2,9 @@ name: ci
 
 on:
   push:
-    # 两条长驻开发线（CONTRIBUTING「分支与提交」）：main = 主干，feat/nexus = 插件线，
-    # feat/nautilus = Nautilus 主线。三条线任一被推送都全量跑门禁；临时分支走 PR 触发。
-    branches: [main, feat/nexus, feat/nautilus]
+    # 三条长驻开发线（CONTRIBUTING「分支与提交」）：main = 主干，feat/nexus = 插件线，
+    # feat/nautilus = Nautilus 主线，feat/ui = UI 支线。四条分支任一被推送都全量跑门禁；临时分支走 PR 触发。
+    branches: [main, feat/nexus, feat/nautilus, feat/ui]
   pull_request:
 
 # 最小权限：CI 只需要读仓库内容验证构建（public 仓库，写 token 无必要）
