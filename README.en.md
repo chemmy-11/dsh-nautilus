@@ -32,11 +32,11 @@ Turning "how far a conversation moved the knowledge base" into numbers — **ses
 
 ## Compatibility
 
-- **Host**: `dsh` 0.1.5-rc.1 (currently verified); peer range `@deepseek-ai/dsh-host-webserver` = `^0.1.1-rc.2 || ^0.1.2-alpha.2 || ^0.1.5-rc.1` (backward-compatible across the official prerelease line);
+- **Host**: `dsh` 0.1.5-rc.2 (the target of this adaptation); peer range `@deepseek-ai/dsh-host-webserver` = `^0.1.1-rc.2 || ^0.1.2-alpha.2 || ^0.1.5-rc.1` — `^0.1.5-rc.1` already covers rc.2 of the same tuple (semver prereleases are only comparable within the same `[major,minor,patch]`), so no new branch was needed; backward-compatible across the official prerelease line;
 - **Contract surface**: the host half consumes only official `session/event`, `ctx.webServer.register` and `ctx.tools.register`; the client half consumes only `ctx.slots` (`conversation.view`). No host implementation is imported, so prerelease upgrades need no code change;
 - **Runtime deps**: only in-box packages shipped by the dsh installation are imported — `@deepseek-ai/cordis` (types), `@deepseek-ai/schemastery` (config schema), `@deepseek-ai/dsh-host-webserver` (route types). The unscoped `cordis`/`schemastery` are not part of the installation closure and have been migrated away;
 - **Client entry**: a client plugin is an ordinary Cordis plugin (`Context` from `@deepseek-ai/cordis`; `@deepseek-ai/dsh-client-runtime` was removed in 0.1.5); the UI registry `ctx.slots` is provided by `@deepseek-ai/dsh-client-ui-renderer`; cross-plugin imports are type-only and the runtime requires only the baseline `react`;
-- **Adaptation run (2026-09-10, dsh 0.1.5-rc.1)**: `typecheck` / `build` / `test` (12/12) / `check:deps` / `check-meta` all green; on a live install the vault scan, session-event capture and the `record_turn_selfcheck` tool all work; an isolated-`DSH_HOME` entry smoke test (Standard Schema validation + 8 routes + 1 tool + 2 event subscriptions) passes.
+- **Adaptation run (2026-09-13, dsh 0.1.5-rc.2)**: the contract surface was diffed first — the rc.1 → rc.2 artifacts of `dsh-host-webserver` / `dsh-session` / `dsh-tools` / `dsh-client-ui-renderer` / `dsh-client-ui-conversation` are byte-identical apart from the version field (no interface change, hence no code change); the devDep is pinned exactly to `0.1.5-rc.2` (cordis 4.0.2 / schemastery 3.18.2 match rc.2's own dependencies); `typecheck` / `build` / `test` (12/12) / `check:deps` / `check-meta` / the client shim all pass; the isolated-`DSH_HOME` entry smoke passes (Standard Schema defaults and invalid-value rejection + 8 routes + 1 tool + 2 event subscriptions + 6 disposers + fresh DB at schema v3 / 9 tables). The previous 0.1.5-rc.1 run (2026-09-10) was equally green.
 
 ## Installation
 

@@ -32,11 +32,11 @@ DeepSeek Harness（`dsh`）的观测插件（`@dsh-external/dsh-nexus`）：为 
 
 ## 兼容性
 
-- **宿主**：`dsh` 0.1.5-rc.1（当前实测）；peer 范围 `@deepseek-ai/dsh-host-webserver` = `^0.1.1-rc.2 || ^0.1.2-alpha.2 || ^0.1.5-rc.1`（官方 prerelease 线向后兼容）；
+- **宿主**：`dsh` 0.1.5-rc.2（本次适配目标）；peer 范围 `@deepseek-ai/dsh-host-webserver` = `^0.1.1-rc.2 || ^0.1.2-alpha.2 || ^0.1.5-rc.1`——`^0.1.5-rc.1` 已覆盖同元组的 rc.2（semver prerelease 同 `[major,minor,patch]` 才可比），官方 prerelease 线向后兼容；
 - **契约面**：宿主侧只消费官方 `session/event`、`ctx.webServer.register`、`ctx.tools.register`，客户端只消费 `ctx.slots`（`conversation.view`）——不 import 宿主实现，故跨 prerelease 版本无需改码；
 - **依赖面**：运行时只 import 随 dsh 安装提供的 in-box 包——`@deepseek-ai/cordis`（类型）、`@deepseek-ai/schemastery`（Config schema）、`@deepseek-ai/dsh-host-webserver`（路由类型）；非 scoped 的 `cordis`/`schemastery` 不在安装闭包内，已迁移；
 - **客户端入口**：客户端插件就是普通 Cordis 插件（`Context` 来自 `@deepseek-ai/cordis`；`@deepseek-ai/dsh-client-runtime` 在 0.1.5 已移除）；UI 注册表 `ctx.slots` 由 `@deepseek-ai/dsh-client-ui-renderer` 提供；只 type-only 跨插件导入，运行时只 require 基线 `react`；
-- **适配验证（2026-09-10，dsh 0.1.5-rc.1）**：`typecheck` / `build` / `test`（12/12）/ `check:deps` / `check-meta` 全绿；实机装配下 vault 扫描、会话事件采集与 `record_turn_selfcheck` 工具均正常；隔离 `DSH_HOME` 的入口冒烟（Standard Schema 校验 + 8 路由 + 1 工具 + 2 事件订阅）通过。
+- **适配验证（2026-09-13，dsh 0.1.5-rc.2）**：先做契约面对照——rc.1→rc.2 的 `dsh-host-webserver` / `dsh-session` / `dsh-tools` / `dsh-client-ui-renderer` / `dsh-client-ui-conversation` 产物除版本号外逐字节一致（无接口变更，故不改码）；devDep 精确 pin 升 `0.1.5-rc.2`（cordis 4.0.2 / schemastery 3.18.2 与 rc.2 依赖一致）；`typecheck` / `build` / `test`（12/12）/ `check:deps` / `check-meta` / client shim 全绿；隔离 `DSH_HOME` 的入口冒烟通过（Standard Schema 默认值与非法值拒绝 + 8 路由 + 1 工具 + 2 事件订阅 + 6 disposer + 新库 schema v3/9 表）。上一轮 0.1.5-rc.1（2026-09-10）同为全绿。
 
 ## 安装
 
