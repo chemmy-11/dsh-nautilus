@@ -1,0 +1,766 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Nautilus 工作台 · S4 瑞士制图 · 交互原型</title>
+<style>
+/* ================= 令牌层（--nt-*：默认值映射宿主 --dsw-alias-*，亮暗双主题） ================= */
+:root{
+  --nt-bg:#f2f2f0; --nt-panel:#ffffff; --nt-panel2:#f7f7f5; --nt-border:#d9d9d5; --nt-border2:#c8c8c3;
+  --nt-text:#101010; --nt-dim:#5f5f5c; --nt-faint:#9a9a95;
+  --nt-accent:#e6321e; --nt-ok:#1a7f37;
+  --nt-ink:#101010; --nt-gray:#9a9a95;
+  --nt-font:'Helvetica Neue',Helvetica,Arial,'Segoe UI','Microsoft YaHei',sans-serif;
+  --nt-shadow:0 1px 2px rgba(20,20,18,.05);
+}
+body.dark{
+  --nt-bg:#121314; --nt-panel:#1a1b1d; --nt-panel2:#232427; --nt-border:#35363a; --nt-border2:#4a4b50;
+  --nt-text:#f2f2f0; --nt-dim:#a9a9a4; --nt-faint:#70706b;
+  --nt-ok:#3fb950;
+  --nt-ink:#f2f2f0; --nt-gray:#70706b;
+  --nt-shadow:none;
+}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{margin:0;background:var(--nt-bg);color:var(--nt-text);font:13px/1.6 var(--nt-font)}
+button,input,select{font-family:inherit}
+::selection{background:var(--nt-accent);color:#fff}
+
+/* ================= 应用壳：左栏 + 主区 + 抽屉 ================= */
+#app{display:flex;height:100vh;overflow:hidden}
+#rail{width:60px;flex:none;background:var(--nt-panel);border-right:1px solid var(--nt-border);
+  display:flex;flex-direction:column;align-items:stretch;padding-top:10px}
+#rail .brand{font-weight:700;font-size:15px;letter-spacing:1px;text-align:center;padding:6px 0 14px;border-bottom:1px solid var(--nt-border);margin:0 10px 10px}
+#rail nav{display:flex;flex-direction:column;gap:2px;padding:0 6px}
+#rail nav button{border:none;background:none;color:var(--nt-dim);font-size:11px;padding:9px 0;cursor:pointer;
+  border-left:2px solid transparent;text-align:center;letter-spacing:1px}
+#rail nav button:hover{color:var(--nt-text)}
+#rail nav button.on{color:var(--nt-text);border-left-color:var(--nt-accent);font-weight:700}
+#rail .foot{margin-top:auto;padding:10px 0;text-align:center;font-size:9px;letter-spacing:2px;color:var(--nt-faint)}
+#main{flex:1;display:flex;flex-direction:column;min-width:0}
+#topbar{flex:none;display:flex;align-items:center;gap:10px;padding:10px 18px;background:var(--nt-panel);
+  border-bottom:1px solid var(--nt-border);flex-wrap:wrap}
+.crumb{font-weight:700;letter-spacing:2.5px;font-size:14px}
+.crumb small{font-weight:400;letter-spacing:.3px;color:var(--nt-faint);margin-left:8px;font-size:11px}
+.crumb em{font-style:normal;color:var(--nt-faint);font-weight:400;letter-spacing:.5px;margin-left:10px;font-size:12px}
+.spacer{flex:1}
+.seg{display:flex;border:1px solid var(--nt-border)}
+.seg button{border:none;background:none;color:var(--nt-dim);font-size:11.5px;padding:4px 12px;cursor:pointer;letter-spacing:.5px}
+.seg button+button{border-left:1px solid var(--nt-border)}
+.seg button.on{background:var(--nt-ink);color:var(--nt-bg);font-weight:700}
+.ctl-select{background:var(--nt-panel);color:var(--nt-text);border:1px solid var(--nt-border);padding:4px 8px;font-size:11.5px;border-radius:0}
+.ctl-btn{background:var(--nt-panel);color:var(--nt-dim);border:1px solid var(--nt-border);padding:4px 12px;font-size:11.5px;cursor:pointer;letter-spacing:.5px}
+.ctl-btn:hover{color:var(--nt-text);border-color:var(--nt-border2)}
+.chip{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--nt-border);background:var(--nt-panel);
+  color:var(--nt-dim);font-size:11px;padding:4px 10px;cursor:pointer;letter-spacing:.8px}
+.chip b{color:var(--nt-accent);letter-spacing:1.5px}
+.chip:hover{border-color:var(--nt-border2)}
+#content{flex:1;overflow:auto;padding:16px 18px 40px}
+.wrap{max-width:1160px;margin:0 auto}
+
+/* ================= 面板体系（Grafana 式栅格 × Swiss 图纸语言） ================= */
+.grid{display:grid;gap:10px}
+.g12{grid-template-columns:repeat(12,1fr)}
+.sp3{grid-column:span 3}.sp4{grid-column:span 4}.sp6{grid-column:span 6}.sp8{grid-column:span 8}.sp12{grid-column:span 12}
+@media(max-width:1080px){.sp3,.sp4,.sp6,.sp8{grid-column:span 12}}
+.panel{background:var(--nt-panel);border:1px solid var(--nt-border);box-shadow:var(--nt-shadow)}
+.p-head{display:flex;align-items:center;gap:8px;padding:7px 12px;border-bottom:1px solid var(--nt-border);
+  font-size:10.5px;font-weight:700;letter-spacing:1.6px;color:var(--nt-dim)}
+.p-head .no{color:var(--nt-accent)}
+.p-head .r{margin-left:auto;display:flex;gap:6px;align-items:center;font-weight:400;letter-spacing:.3px}
+.p-body{padding:12px}
+.sec-t{font-size:10.5px;font-weight:700;letter-spacing:2px;color:var(--nt-faint);margin:22px 0 8px;display:flex;align-items:center;gap:10px}
+.sec-t::after{content:'';flex:1;height:1px;background:var(--nt-border)}
+
+/* 统计面板（Grafana stat row × Swiss 大数） */
+.stat{padding:10px 12px 9px;position:relative}
+.stat .lb{font-size:10px;letter-spacing:1.6px;color:var(--nt-faint);text-transform:uppercase;padding-right:50px}
+.stat .vl{font-size:25px;font-weight:300;letter-spacing:-.5px;line-height:1.2;margin-top:2px;font-variant-numeric:tabular-nums}
+.stat .vl small{font-size:11px;font-weight:400;color:var(--nt-dim);letter-spacing:0}
+.stat .sub{font-size:10.5px;color:var(--nt-faint);margin-top:1px;font-variant-numeric:tabular-nums}
+.stat .layer{position:absolute;top:8px;right:10px;font-size:8.5px;letter-spacing:1.5px;color:var(--nt-faint)}
+.stat.alert .vl{color:var(--nt-accent)}
+.grp-t{display:flex;align-items:center;gap:8px;margin:14px 0 6px;font-size:9.5px;letter-spacing:2.5px;color:var(--nt-faint);font-weight:700}
+.grp-t::after{content:'';flex:1;height:1px;background:var(--nt-border)}
+
+/* 图表 */
+.chart{position:relative}
+.chart svg{display:block;width:100%}
+.chart .xh{position:absolute;top:0;bottom:0;width:1px;background:var(--nt-text);opacity:.35;pointer-events:none;display:none}
+.tip{position:absolute;z-index:30;background:var(--nt-panel);border:1px solid var(--nt-border2);box-shadow:2px 2px 0 rgba(0,0,0,.12);
+  padding:8px 11px;font-size:11px;color:var(--nt-dim);pointer-events:none;display:none;min-width:190px;font-variant-numeric:tabular-nums}
+.tip b{color:var(--nt-text);display:block;margin-bottom:3px;letter-spacing:.5px}
+.tip .tr{display:flex;justify-content:space-between;gap:14px}
+.tip .tr i{font-style:normal;color:var(--nt-faint)}
+.tip .tr b{display:inline;margin:0}
+.legend{display:flex;gap:16px;flex-wrap:wrap;font-size:10.5px;color:var(--nt-dim);padding:8px 2px 0}
+.legend .k{display:inline-block;width:14px;height:2px;vertical-align:middle;margin-right:5px;background:var(--nt-ink)}
+.legend .k.red{background:var(--nt-accent)}
+.legend .k.gray{background:var(--nt-gray)}
+.note{margin-top:10px;padding:7px 11px;font-size:11px;color:var(--nt-faint);background:var(--nt-panel2);border-left:2px solid var(--nt-border);line-height:1.7}
+.note b{color:var(--nt-dim)}
+
+/* 表格 / 列表 */
+.tbl{width:100%;border-collapse:collapse;font-size:12px;font-variant-numeric:tabular-nums}
+.tbl th{font-size:9.5px;letter-spacing:1.5px;color:var(--nt-faint);text-align:left;font-weight:700;padding:5px 8px;border-bottom:1px solid var(--nt-border);text-transform:uppercase}
+.tbl td{padding:6px 8px;border-bottom:1px solid var(--nt-border);color:var(--nt-dim);vertical-align:top}
+.tbl tr:last-child td{border-bottom:none}
+.tbl tr.click{cursor:pointer}
+.tbl tr.click:hover td{background:var(--nt-panel2);color:var(--nt-text)}
+.tbl b{color:var(--nt-text);font-weight:600}
+.badge{font-size:10px;padding:1px 8px;border:1px solid var(--nt-border);color:var(--nt-dim);white-space:nowrap;letter-spacing:.5px}
+.badge.red{color:var(--nt-accent);border-color:var(--nt-accent)}
+.badge.ok{color:var(--nt-ok);border-color:var(--nt-ok)}
+.badge.solid{background:var(--nt-accent);border-color:var(--nt-accent);color:#fff}
+.feed{display:flex;flex-direction:column}
+.feed .row{display:flex;gap:12px;padding:7px 4px;border-bottom:1px solid var(--nt-border);font-size:12px;color:var(--nt-dim);cursor:pointer;align-items:baseline;font-variant-numeric:tabular-nums}
+.feed .row:hover{background:var(--nt-panel2);color:var(--nt-text)}
+.feed .row:last-child{border-bottom:none}
+.feed .t{width:76px;flex:none;color:var(--nt-faint);font-size:11px}
+.feed .d{flex:1;min-width:0}
+.feed .delta{flex:none;font-weight:700}
+.delta.up{color:var(--nt-accent)} .delta.down{color:var(--nt-ok)}
+
+/* 假设卡 / 表单 */
+.hyp{border:1px solid var(--nt-border);background:var(--nt-panel);margin-bottom:10px}
+.hyp>header{display:flex;gap:10px;align-items:baseline;padding:10px 14px;cursor:pointer;flex-wrap:wrap}
+.hyp>header:hover{background:var(--nt-panel2)}
+.hyp .hid{font-weight:700;letter-spacing:1px}
+.hyp .htx{flex:1;min-width:200px;color:var(--nt-text)}
+.hyp .meta{font-size:10.5px;color:var(--nt-faint);letter-spacing:.5px}
+.hyp .body{display:none;padding:4px 14px 12px;border-top:1px solid var(--nt-border)}
+.hyp.open .body{display:block}
+.hyp .body h4{font-size:10px;letter-spacing:2px;color:var(--nt-faint);margin:12px 0 6px;text-transform:uppercase}
+.inp,textarea.inp{background:var(--nt-panel2);border:1px solid var(--nt-border);color:var(--nt-text);padding:5px 9px;font-size:12px}
+.inp:focus{outline:1px solid var(--nt-border2)}
+.btn{background:var(--nt-panel);border:1px solid var(--nt-border);color:var(--nt-dim);padding:5px 14px;font-size:11.5px;cursor:pointer;letter-spacing:.5px}
+.btn:hover{color:var(--nt-text);border-color:var(--nt-border2)}
+.btn.pri{background:var(--nt-ink);color:var(--nt-bg);border-color:var(--nt-ink);font-weight:700}
+.btn.red{border-color:var(--nt-accent);color:var(--nt-accent)}
+.btn.sm{padding:2px 10px;font-size:11px}
+.formrow{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:8px}
+
+/* 预言表 */
+.prp-st{display:flex;gap:6px}
+.prp-st select{background:var(--nt-panel2);border:1px solid var(--nt-border);color:var(--nt-text);padding:3px 6px;font-size:11.5px}
+
+/* 报告页（衬线正文 —— S2 气质局部借用，仅报告页） */
+.report{background:var(--nt-panel);border:1px solid var(--nt-border);padding:26px 34px}
+.report .rmeta{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:8px 20px;
+  font-size:11.5px;color:var(--nt-dim);border:1px solid var(--nt-border);padding:10px 14px;font-variant-numeric:tabular-nums}
+.report .rmeta b{color:var(--nt-text)}
+.report h2{font-size:17px;margin:18px 0 4px;letter-spacing:.5px}
+.report h2 .no{color:var(--nt-accent);margin-right:8px}
+.report .prose{font-family:Georgia,'Source Han Serif SC','Noto Serif SC','SimSun',serif;font-size:13.5px;line-height:1.95;color:var(--nt-text)}
+.report .prose .zh{color:var(--nt-accent)}
+.report .gate{margin-top:20px;border:1px solid var(--nt-accent);padding:12px 16px;display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+.report .gate .gt{font-size:10px;letter-spacing:2px;color:var(--nt-accent);font-weight:700}
+.gate-note{font-size:11px;color:var(--nt-faint);margin-top:8px}
+
+/* 抽屉（Datadog Bits 式调查面板） */
+#drawer{position:fixed;top:0;right:-420px;width:400px;max-width:92vw;height:100vh;background:var(--nt-panel);
+  border-left:1px solid var(--nt-border);z-index:60;transition:right .22s ease;display:flex;flex-direction:column;box-shadow:-8px 0 30px rgba(0,0,0,.14)}
+#drawer.open{right:0}
+#drawer .d-head{display:flex;align-items:center;gap:10px;padding:12px 16px;border-bottom:1px solid var(--nt-border)}
+#drawer .d-head .t{font-weight:700;letter-spacing:1px}
+#drawer .d-head .x{margin-left:auto}
+#drawer .d-body{flex:1;overflow:auto;padding:14px 16px}
+#drawer h5{font-size:10px;letter-spacing:2px;color:var(--nt-faint);margin:16px 0 6px;text-transform:uppercase}
+#scrim{position:fixed;inset:0;background:rgba(10,10,10,.32);z-index:50;display:none}
+#scrim.show{display:block}
+
+/* era 弹层 */
+#eraPop{position:fixed;z-index:70;width:380px;max-width:92vw;background:var(--nt-panel);border:1px solid var(--nt-border2);
+  box-shadow:4px 4px 0 rgba(0,0,0,.14);padding:14px 16px;display:none}
+#eraPop.show{display:block}
+#eraPop h4{margin:0 0 8px;font-size:10px;letter-spacing:2px;color:var(--nt-faint)}
+#eraPop .pv{display:flex;align-items:center;gap:10px;margin-top:10px;padding-top:10px;border-top:1px solid var(--nt-border);font-size:11.5px;color:var(--nt-dim)}
+
+/* toast */
+#toast{position:fixed;bottom:26px;left:50%;transform:translate(-50%,14px);background:var(--nt-ink);color:var(--nt-bg);
+  padding:8px 20px;font-size:12px;letter-spacing:.5px;opacity:0;transition:all .25s;z-index:90;pointer-events:none}
+#toast.show{opacity:1;transform:translate(-50%,0)}
+
+.foot{margin-top:26px;padding-top:12px;border-top:1px solid var(--nt-border);font-size:11px;color:var(--nt-faint);line-height:1.9}
+.foot details summary{cursor:pointer;letter-spacing:1px}
+.mono{font-family:Consolas,'Cascadia Code',monospace;font-size:11px}
+.dim{color:var(--nt-dim)} .faint{color:var(--nt-faint)} .redt{color:var(--nt-accent)}
+</style>
+</head>
+<body>
+<div id="app">
+  <aside id="rail">
+    <div class="brand">N·</div>
+    <nav>
+      <button data-nav="ov" class="on">总览</button>
+      <button data-nav="crv">曲线</button>
+      <button data-nav="hyp">假设</button>
+      <button data-nav="prp">预言</button>
+      <button data-nav="rep">报告</button>
+    </nav>
+    <div class="foot">S4</div>
+  </aside>
+  <div id="main">
+    <header id="topbar">
+      <div class="crumb">NAUTILUS<small>端侧 AI OPS 全链路</small><em id="viewName">总览</em></div>
+      <div class="spacer"></div>
+      <div class="seg" id="scopeSeg">
+        <button data-scope="all">全局 · 75</button>
+        <button data-scope="vault" class="on">雪谷 VAULT · 9</button>
+      </div>
+      <select class="ctl-select" id="rangeSel">
+        <option value="1">今天</option><option value="3">3 天</option>
+        <option value="7" selected>7 天</option><option value="30">30 天</option>
+      </select>
+      <button class="chip" id="eraChip">ERA <b id="eraTxt">API</b><span class="faint">▾</span></button>
+      <button class="ctl-btn" id="themeBtn">◐ 主题</button>
+    </header>
+    <main id="content"><div class="wrap" id="viewRoot"></div></main>
+  </div>
+</div>
+
+<aside id="drawer">
+  <div class="d-head"><span class="t" id="dTitle">TURN</span><button class="btn sm x" id="dClose">关闭 ×</button></div>
+  <div class="d-body" id="dBody"></div>
+</aside>
+<div id="scrim"></div>
+<div id="eraPop">
+  <h4>ERA 因果上下文 —— 判定与对照集</h4>
+  <div style="font-size:12px;color:var(--nt-dim);line-height:1.8" id="eraDetail"></div>
+  <div class="pv">
+    <span>演示：era=local 口径预览</span>
+    <button class="btn sm" id="eraDemo">切换</button>
+    <span class="faint" style="font-size:10.5px">本地部署未落地，仅预览措辞分级</span>
+  </div>
+</div>
+<div id="toast"></div>
+
+<script>
+'use strict'
+/* ================================================================
+   Nautilus 工作台 · S4 瑞士制图 · 交互原型（单文件，零依赖）
+   布局参照：Grafana（stat 行/统一时间范围/联动十字线）· Grafana 25193（GPU 面板行）
+             Datadog Bits AI（调查抽屉/假设工作流）· nexus client（tab 挂载/问答回看）
+   统计口径：2026-09-12 实弹库实测（analysis-report）；曲线/快照数值为示意数据
+   ================================================================ */
+
+// ── 工具 ──────────────────────────────────────────────────────
+const $ = (s) => document.querySelector(s)
+const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;')
+function mulberry32 (a) { return function () { a |= 0; a = (a + 0x6D2B79F5) | 0; let t = Math.imul(a ^ (a >>> 15), 1 | a); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296 } }
+const fmtK = (n) => n >= 1e6 ? (n / 1e6).toFixed(2) + 'M' : n >= 1e3 ? (n / 1e3).toFixed(1) + 'K' : String(Math.round(n))
+const pct = (v) => (v * 100).toFixed(1) + '%'
+const pad2 = (n) => String(n).padStart(2, '0')
+const fmtT = (ts) => { const d = new Date(ts); return pad2(d.getMonth() + 1) + '-' + pad2(d.getDate()) + ' ' + pad2(d.getHours()) + ':' + pad2(d.getMinutes()) }
+const fmtTTFT = (ms) => ms >= 1000 ? (ms / 1000).toFixed(2) + 's' : Math.round(ms) + 'ms'
+let toastTimer = null
+function toast (msg) { const t = $('#toast'); t.textContent = msg; t.classList.add('show'); clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove('show'), 2200) }
+
+// ── 口径常量（实测来源：analysis-report 2026-09-12 · Phase 0 验证） ──────────
+const SCOPES = {
+  all: { name: '全局', sessions: 75, turns: 436, hit: 0.942, aProj: 0.058, cov: 65, covTotal: 436, covPct: 0.149, tpsMed: 29.2, totalIn: '924.3M', out: '4.37M', spanDays: 19, seed: 7 },
+  vault: { name: '雪谷 vault', sessions: 9, turns: 34, hit: 0.938, aProj: 0.062, cov: 22, covTotal: 34, covPct: 0.647, tpsMed: 65.9, totalIn: '62.0M', out: '394K', spanDays: 16, seed: 42 },
+}
+const PROVIDERS = [['tokenrhythm', 331], ['opencode-go', 300], ['deepseek-official', 152]]
+const TTFT_REAL = { p50: 3067, p90: 9275, min: 448, max: 32101 }
+const PROPHECIES = {
+  P1: '对齐离散性（S 形阈值）', P2: '宣言必要性（无种子无穿越）', P3: '防御是阻尼（Γ 窗口）',
+  P4: '增益集中 L_c（τ_e 特征时间）', P5: '注入周期 T_inj < τ_d', P6: '短板定理（零响应杀死共振）',
+  P7: '蒸发=重读（s_base 再激发）', P8: '静默溪流干涸（指数衰减）', P9: '注入无记录→丢失',
+}
+const STATUS_LABEL = { pending: '待标注', investigating: '进行中', observed: '已检验' }
+const QS = ['读一下 analysis.ts 的分桶逻辑，未命中率口径对不对', '把 τ_e 检出结果整理成表', '这个爆发段是缓存预热造成的吗',
+  '对照 vault 报告检查覆盖率缺口', '给出归因报告的措辞分级建议', '检查 nvidia-smi 查询字段可用性', '补一个 call_read 的迁移草案']
+const AS = ['已核对 turn_read 逐轮口径：miss = token_in/(token_in+cache_read)，与报告一致；长上下文混杂需在注记标明。',
+  'τ_e 按 S 形拐点邻域线性拟合，检出 4 例（详见表）；inverse-sigmoid 会话占多数，判读时注意方向。',
+  '该段 cache_read 突降与首轮大 prompt 吻合，属预热混杂而非探索突增，建议不计入爆发段。',
+  '覆盖缺口集中在 t3/t7/t12，均为工具调用密集轮——自评指令未触达，与 M4-B 结论一致。',
+  'era=api 下仅可称「对照」；若 GPU 峰值与 TTFT 抬升同窗，措辞仍需保留弱因果限定。']
+
+// ── 状态 ──────────────────────────────────────────────────────
+const state = {
+  view: 'ov', scope: 'vault', range: 7, metric: 'miss', sess: '', era: 'api',
+  drawer: null,
+  ann: {},
+  hyp: [
+    { id: 'H-12', text: '宿主外批量任务挤占 CPU → 轮耗时 P95 偏移', status: '验证中', props: ['P4'], snaps: 14, created: '09-12',
+      evidence: '同窗对照 14 例：CPU>70%（pulse）与 TTFT 抬升 >40%（infer）共现 12 例；A 投影无一致方向（nexus）。',
+      counter: '反事实：若为宿主自身 GC/扫描所致，dsh 进程 CPU 应同步抬升——实测 dsh proc 稳定在 4–5%，不支持该解释。' },
+    { id: 'H-11', text: '缓存预热混杂：首轮大 prompt 抬高未命中率，属采集口径现象而非探索突增', status: '已归档 · 成立', props: ['P1', 'P8'], snaps: 9, created: '09-08',
+      evidence: '31 个爆发段中 22 个起于 t1–t6；剔除首 3 轮后 S 形判定不变率 91%。',
+      counter: '——' },
+    { id: 'H-10', text: 'TPS 下降先于未命中率抬升（时序先行性检验）', status: '已证伪', props: ['P4'], snaps: 6, created: '09-05',
+      evidence: '逐会话互相关无稳定先行阶；两指标更接近同窗共动。',
+      counter: '——' },
+  ],
+  prp: { P1: { status: 'observed', note: 'S 形阈值在 vault 会话复现，混杂源见 H-11' }, P2: { status: 'observed', note: '' }, P3: { status: 'investigating', note: 'Γ 窗口待注入实验' }, P4: { status: 'investigating', note: 'τ_e=14turn 与爆发段吻合（vault 子集）' }, P5: { status: 'pending', note: '' }, P6: { status: 'pending', note: '' }, P7: { status: 'pending', note: '' }, P8: { status: 'pending', note: '' }, P9: { status: 'pending', note: '' } },
+}
+
+// ── 示意数据生成（确定性种子；口径对齐实测分布） ────────────────
+function genTurns (scope) {
+  const S = SCOPES[scope]
+  const rnd = mulberry32(S.seed)
+  const end = Date.now(); const start = end - S.spanDays * 86400000
+  // 会话规模：少数长会话 + 多数短会话
+  const sizes = []; let acc = 0
+  for (let k = 0; k < S.sessions - 1; k++) { const v = 1 + Math.floor(rnd() * rnd() * 26); sizes.push(v); acc += v }
+  sizes.push(Math.max(1, S.turns - acc))
+  const provPool = []; PROVIDERS.forEach(([p, n], i) => { for (let k = 0; k < n; k++) provPool.push(i) })
+  const turns = []; let cumBase = 20e3 + rnd() * 30e3
+  const covTarget = Math.round(S.covPct * S.turns)
+  const covIdx = new Set(); while (covIdx.size < covTarget) covIdx.add(Math.floor(rnd() * S.turns))
+  let i = 0
+  for (let si = 0; si < S.sessions; si++) {
+    const size = sizes[si]
+    const sStart = start + rnd() * (end - start - size * 300000)
+    const shape = rnd(); const dir = shape < 0.55 ? 1 : shape < 0.8 ? -1 : 0 // 上升/反S/平
+    const center = 0.25 + rnd() * 0.5; const steep = 3 + rnd() * 6
+    const baseMiss = 0.03 + rnd() * 0.08
+    for (let t = 0; t < size; t++, i++) {
+      const frac = size < 2 ? 0.5 : t / (size - 1)
+      const sig = dir === 0 ? 0 : dir * (0.34 / (1 + Math.exp(-(frac - center) * steep)) - 0.34 / (1 + Math.exp(center * steep)))
+      const totalIn = (24 + frac * 38 + rnd() * 10) * 1000
+      const miss = Math.min(0.34, Math.max(0.012, baseMiss + Math.max(0, sig) + (rnd() - 0.5) * 0.02))
+      const spike = rnd() < 0.065
+      const ttft = Math.min(TTFT_REAL.max, TTFT_REAL.min * Math.pow(TTFT_REAL.max / TTFT_REAL.min, rnd()) * (spike ? 1.5 : 1))
+      const cpu = spike ? 76 + rnd() * 16 : 14 + rnd() * 14
+      turns.push({
+        i, si, turn: t + 1, ts: sStart + t * (240000 + rnd() * 400000),
+        totalIn, miss, tps: (spike ? 0.74 : 1) * (S.tpsMed * (0.82 + rnd() * 0.36)),
+        cpu, mem: 56 + Math.sin(i / 34) * 4 + rnd() * 3, gpuU: 62 + rnd() * 22, gpuM: 72 + rnd() * 10,
+        temp: 56 + rnd() * 12, power: 58 + rnd() * 38, ttft, spike,
+        provider: provPool[Math.floor(rnd() * provPool.length)],
+        covered: covIdx.has(i),
+        q: QS[Math.floor(rnd() * QS.length)], a: AS[Math.floor(rnd() * AS.length)],
+      })
+    }
+  }
+  turns.sort((a, b) => a.ts - b.ts); turns.forEach((t, k) => { t.i = k })
+  return turns
+}
+const DATA = { all: genTurns('all'), vault: genTurns('vault') }
+// ── 手动标注（nexus 层人工标注：轮次身份 + 标签 + 备注；key = scope:si:turn） ──
+const ANN_TAGS = ['爆发', '混杂', '干扰', '复核']
+const ANN_TAG_CLS = (t) => (t === '爆发' || t === '干扰') ? 'red' : ''
+const annKey = (t) => state.scope + ':' + t.si + ':' + t.turn
+const isAnn = (t) => state.ann[annKey(t)] != null
+;(function seedAnn () { const r = DATA.vault.find((t) => t.spike); if (r) state.ann['vault:' + r.si + ':' + r.turn] = { tag: '混杂', note: '示例：缓存预热混杂——不计入爆发段（H-11）。', ts: Date.now() } })()
+function turnsInScope () { return DATA[state.scope] }
+function turnsInWindow () { const from = Date.now() - state.range * 86400000; return turnsInScope().filter((t) => t.ts >= from) }
+function sessLabel (si) {
+  const ts = turnsInScope().filter((t) => t.si === si)
+  const n = ts.length; const d = new Date(ts[0].ts)
+  return fmtT(ts[0].ts) + ' · ' + n + ' 轮'
+}
+
+// ── 图表（SVG 自绘 · Swiss：发丝网格 + 墨线 + 朱红关键点） ────────
+function chartSVG (o) {
+  const w = o.w, h = o.h, padL = 46, padR = 12, padT = 10, padB = 18
+  const n = o.pts.length
+  const X = (k) => padL + (n < 2 ? 0 : (k / (n - 1)) * (w - padL - padR))
+  const Y = (v) => h - padB - ((v - o.min) / ((o.max - o.min) || 1)) * (h - padT - padB)
+  let g = ''
+  for (let k = 0; k <= 3; k++) {
+    const v = o.min + (k / 3) * (o.max - o.min); const y = Y(v)
+    g += '<line x1="' + padL + '" y1="' + y + '" x2="' + (w - padR) + '" y2="' + y + '" stroke="var(--nt-border)" stroke-width="1" opacity=".55"/>'
+    g += '<text x="' + (padL - 6) + '" y="' + (y + 3) + '" text-anchor="end" font-size="8.5" fill="var(--nt-faint)">' + esc(o.yFmt(v)) + '</text>'
+  }
+  if (o.threshold != null) {
+    const ty = Y(o.threshold)
+    g += '<line x1="' + padL + '" y1="' + ty + '" x2="' + (w - padR) + '" y2="' + ty + '" stroke="var(--nt-accent)" stroke-width="1" stroke-dasharray="2 4" opacity=".75"/>'
+    g += '<text x="' + (w - padR) + '" y="' + (ty - 4) + '" text-anchor="end" font-size="8.5" fill="var(--nt-accent)" letter-spacing="1">' + esc(o.thresholdLabel || '阈值') + '</text>'
+  }
+  const xlab = o.xLabels || []
+  for (const xl of xlab) {
+    const x = X(xl.k)
+    g += '<line x1="' + x + '" y1="' + (h - padB) + '" x2="' + x + '" y2="' + (h - padB + 3) + '" stroke="var(--nt-border)"/>'
+    g += '<text x="' + x + '" y="' + (h - 5) + '" text-anchor="middle" font-size="8.5" fill="var(--nt-faint)">' + esc(xl.txt) + '</text>'
+  }
+  const pts = o.pts.map((p, k) => X(k).toFixed(1) + ',' + Y(p.v).toFixed(1)).join(' ')
+  g += '<polyline points="' + pts + '" fill="none" stroke="' + (o.color || 'var(--nt-ink)') + '" stroke-width="' + (o.lw || 1.6) + '"/>'
+  for (const p of o.pts) {
+    if (p.mark) g += '<circle cx="' + X(p.k) + '" cy="' + Y(p.v) + '" r="3" fill="var(--nt-accent)"/>'
+    if (p.ann) g += '<circle cx="' + X(p.k) + '" cy="' + Y(p.v) + '" r="6.5" fill="none" stroke="var(--nt-accent)" stroke-width="1.1" stroke-dasharray="2 2"/>'
+  }
+  if (o.anno) g += '<line x1="' + X(o.anno.from) + '" y1="14" x2="' + X(o.anno.to) + '" y2="14" stroke="var(--nt-dim)" stroke-width="1" stroke-dasharray="3 3"/><text x="' + X((o.anno.from + o.anno.to) / 2) + '" y="9" text-anchor="middle" font-size="8.5" fill="var(--nt-dim)" letter-spacing="1">' + esc(o.anno.txt) + '</text>'
+  g += '<line class="xh-line" x1="0" y1="' + padT + '" x2="0" y2="' + (h - padB) + '" stroke="var(--nt-text)" stroke-width="1" opacity="0"/>'
+  return '<svg viewBox="0 0 ' + w + ' ' + h + '" preserveAspectRatio="none" style="height:' + h + 'px">' + g + '</svg>'
+}
+function xLabels (rows, w) {
+  const n = rows.length; if (n < 3) return []
+  const ks = [0, Math.floor((n - 1) / 2), n - 1]
+  const days = ks.map((k) => fmtT(rows[k].ts).slice(0, 5))
+  const dup = new Set(days).size < days.length
+  return ks.map((k, j) => ({ k, txt: dup ? fmtT(rows[k].ts).slice(6, 11) : days[j] }))
+}
+/** 三层联动图（共享十字线 + 汇总 tooltip + 点击下钻） */
+function linkedCharts (rows) {
+  const w = Math.max(560, Math.min(1080, ($('#viewRoot') || $('#content')).clientWidth - 60))
+  const metrics = [
+    { key: 'nexus', title: 'NEXUS · A 投影（未命中率）', v: (t) => t.miss, min: 0, max: 0.35, h: 168, yFmt: (v) => Math.round(v * 100) + '%', fmt: (v) => pct(v), threshold: 0.24, thresholdLabel: 'S 形阈值参考（P1）', color: 'var(--nt-ink)', lw: 1.8 },
+    { key: 'infer', title: 'INFER · TTFT（turn 级 = 最低 step）', v: (t) => t.ttft, min: 0, max: TTFT_REAL.max, h: 88, yFmt: (v) => fmtTTFT(v), fmt: (v) => fmtTTFT(v), color: 'var(--nt-gray)', lw: 1.3 },
+    { key: 'pulse', title: 'PULSE · CPU 利用率（同期窗对齐 w=30s）', v: (t) => t.cpu, min: 0, max: 100, h: 88, yFmt: (v) => Math.round(v) + '%', fmt: (v) => Math.round(v) + '%', color: 'var(--nt-gray)', lw: 1.3 },
+  ]
+  let html = '<div class="chart" id="linked" style="user-select:none">'
+  for (const m of metrics) {
+    const pts = rows.map((t, k) => ({ k, v: m.v(t), mark: m.key === 'nexus' && t.spike, ann: m.key === 'nexus' && isAnn(t) }))
+    html += '<div class="grp-t">' + m.title + '</div><div class="panel" style="padding:6px 8px 2px">' + chartSVG({ w, h: m.h, pts, min: m.min, max: m.max, yFmt: m.yFmt, color: m.color, lw: m.lw, threshold: m.threshold, thresholdLabel: m.thresholdLabel, xLabels: m.key === 'nexus' ? xLabels(rows, w) : [] }) + '</div>'
+  }
+  html += '<div class="xh" id="lxh"></div><div class="tip" id="ltip"></div></div>'
+  html += '<div class="legend"><span><span class="k"></span>墨线＝读数</span><span><span class="k red"></span>朱红＝关键点（CPU 峰值同窗）</span><span><span class="k gray"></span>灰＝对照层</span><span class="faint">悬停＝同期对照 · 点击＝下钻该轮</span></div>'
+  html += '' // 交互在 mountLinked 绑定
+  return { html, rows, metrics }
+}
+function mountLinked (rows, metrics) {
+  const box = $('#linked'); if (!box) return
+  const svgW = Math.max(560, Math.min(1080, ($('#viewRoot') || $('#content')).clientWidth - 60))
+  const padL = 46, padR = 12
+  const xh = $('#lxh'), tip = $('#ltip')
+  box.addEventListener('mousemove', (e) => {
+    const rect = box.getBoundingClientRect()
+    const x = e.clientX - rect.left
+    const n = rows.length
+    const k = Math.max(0, Math.min(n - 1, Math.round((x - padL) / ((svgW - padL - padR)) * (n - 1))))
+    xh.style.display = 'block'; xh.style.left = (padL + (k / Math.max(1, n - 1)) * (svgW - padL - padR)) + 'px'
+    const t = rows[k]
+    tip.style.display = 'block'
+    tip.innerHTML = '<b>TURN ' + t.turn + ' · ' + fmtT(t.ts) + (t.spike ? ' · <span class="redt">峰值同窗</span>' : '') + '</b>' +
+      metrics.map((m) => '<div class="tr"><i>' + m.title.split(' · ')[0] + ' ' + m.title.split(' · ')[1].replace(/（.*?）/g, '') + '</i><b>' + m.fmt(m.v(t)) + '</b></div>').join('') +
+      '<div class="tr"><i>提示</i><span class="faint">点击下钻</span></div>'
+    const tw = 230
+    tip.style.left = Math.min(rect.width - tw - 8, Math.max(4, x + 14)) + 'px'
+    tip.style.top = Math.max(4, e.clientY - rect.top - 60) + 'px'
+  })
+  box.addEventListener('mouseleave', () => { xh.style.display = 'none'; tip.style.display = 'none' })
+  box.addEventListener('click', (e) => {
+    const rect = box.getBoundingClientRect()
+    const x = e.clientX - rect.left; const n = rows.length
+    const k = Math.max(0, Math.min(n - 1, Math.round((x - padL) / ((svgW - padL - padR)) * (n - 1))))
+    openDrawer(rows[k])
+  })
+}
+
+// ── 视图：总览 ────────────────────────────────────────────────
+function statPanel (layer, lb, vl, sub, alert) {
+  return '<div class="panel stat sp3' + (alert ? ' alert' : '') + '"><div class="layer">' + layer + '</div><div class="lb">' + lb + '</div><div class="vl">' + vl + '</div>' + (sub ? '<div class="sub">' + sub + '</div>' : '') + '</div>'
+}
+function renderOV () {
+  const S = SCOPES[state.scope]
+  const rows = turnsInWindow()
+  const lc = linkedCharts(rows)
+  const covPctV = S.cov / S.covTotal
+  let h = ''
+  h += '<div class="grp-t">NEXUS · 应用层（turn_read 实测口径）</div>'
+  h += '<div class="grid g12">'
+  h += statPanel('NEXUS', '轮次 / 会话', S.turns + ' <small>/ ' + S.sessions + '</small>', '样本区间 08-25 ~ 09-12')
+  h += statPanel('NEXUS', 'A 投影（未命中率）', pct(S.aProj), '命中率 ' + pct(S.hit), true)
+  h += statPanel('NEXUS', '自评覆盖', pct(covPctV), S.cov + '/' + S.covTotal + ' 轮' + (covPctV < 0.8 ? ' · <span class="redt">&lt;80% 预警</span>' : ''), covPctV < 0.8)
+  h += statPanel('NEXUS', '总输入（命中+未命中）', S.totalIn, '输出 ' + S.out)
+  h += '</div>'
+  h += '<div class="grp-t">INFER · 模型层（Phase 0 实测：TTFT 双通道可得 · 逐调用 provider）</div>'
+  h += '<div class="grid g12">'
+  h += statPanel('INFER', 'TTFT p50 / p90', fmtTTFT(TTFT_REAL.p50) + ' <small>/ ' + fmtTTFT(TTFT_REAL.p90) + '</small>', '783 调用 100% 覆盖 · 可回填历史')
+  h += statPanel('INFER', 'TPS 中位', String(S.tpsMed), '逐轮 · decode')
+  h += statPanel('INFER', 'provider 集合', PROVIDERS.length + ' <small>个 · 均云端</small>', 'tokenrhythm · opencode-go · deepseek-official')
+  h += statPanel('INFER', 'ERA', state.era === 'api' ? 'API <small>· mixed 无</small>' : 'LOCAL <small>· 演示预览</small>', '判定依据 = message.source', state.era !== 'api')
+  h += '</div>'
+  h += '<div class="grp-t">PULSE · OS / GPU 层（5s 采样 · 示意读数 · 本机 RTX 5060 Laptop 8GB）</div>'
+  h += '<div class="grid g12">'
+  h += statPanel('PULSE', 'CPU 利用率', '23<small>%</small>', '峰 91% @21:47 · i7-14650HX')
+  h += statPanel('PULSE', '内存', '61<small>%</small>', '15.7 GB 档')
+  h += statPanel('PULSE', 'GPU 利用率 / 显存', '76<small>% · </small>82<small>%</small>', '6.7 / 8.0 GB · 63°C · 88W')
+  h += statPanel('PULSE', 'dsh 宿主进程', '223<small>MB</small>', 'RSS · CPU 4.2% —— 弱因果对照主指标')
+  h += '</div>'
+  h += '<div class="sec-t">FIG. 01 — 三层联动 · 同窗对齐（' + state.range + ' 天 · ' + rows.length + ' 轮）</div>'
+  h += '<div class="panel" style="padding:10px 12px">' + lc.html + '</div>'
+  h += '<div class="note"><b>口径注记</b> —— 三层按事件时刻对齐（默认窗 w=30s · 中位数）；era=' + state.era.toUpperCase() + ' 下结论一律称「对照」（弱因果），仅 pulse.proc.dsh.* 与 infer.turn.* 入对照集。统计卡为实弹库实测（2026-09-12 analysis-report），曲线为示意数据演示交互。</div>'
+  h += '<div class="grid g12" style="margin-top:10px">'
+  h += '<div class="sp8"><div class="panel"><div class="p-head">FIG. 02 — 最近关联' + (state.era === 'api' ? '对照' : '归因') + '<span class="r"><span class="badge red">H-12 验证中</span></span></div><div class="p-body" style="padding:6px 12px">' + feedHTML(rows.slice(-6).reverse()) + '</div></div></div>'
+  h += '<div class="sp4"><div class="panel"><div class="p-head">预言 · 摘要</div><div class="p-body" style="padding:8px 12px">' + prpMini() + '</div></div></div>'
+  h += '</div>'
+  return h
+}
+function feedHTML (rows) {
+  return '<div class="feed">' + rows.map((t) => {
+    const a = state.ann[annKey(t)]
+    return '<div class="row" data-turn="' + t.i + '"><span class="t">' + fmtT(t.ts) + '</span><span class="d">turn ' + t.turn + ' · CPU ' + Math.round(t.cpu) + '% · TTFT ' + fmtTTFT(t.ttft) + ' · A 投影 ' + pct(t.miss) + (a ? ' &nbsp;<span class="badge ' + ANN_TAG_CLS(a.tag) + '">' + a.tag + '</span>' : '') + '</span><span class="delta ' + (t.spike ? 'up' : 'down') + '">' + (t.spike ? '+峰' : '稳') + '</span></div>'
+  }).join('') + '</div>'
+}
+function prpMini () {
+  const cnt = { observed: 0, investigating: 0, pending: 0 }
+  for (const k in state.prp) cnt[state.prp[k].status]++
+  return '<div style="display:flex;gap:14px;font-size:11.5px;color:var(--nt-dim);padding:2px 0">' +
+    '<span><span class="badge ok">已检验 ' + cnt.observed + '</span></span>' +
+    '<span><span class="badge red">进行中 ' + cnt.investigating + '</span></span>' +
+    '<span><span class="badge">待标注 ' + cnt.pending + '</span></span></div>' +
+    '<div class="note" style="margin-top:8px">P4 进行中：τ_e ≈ 14 turn（vault 子集）；点左侧「预言」页标注。</div>'
+}
+
+// ── 视图：曲线与归因 ──────────────────────────────────────────
+function renderCRV () {
+  const S = SCOPES[state.scope]
+  let rows = turnsInWindow()
+  if (state.sess !== '') rows = rows.filter((t) => t.si === Number(state.sess))
+  const w = Math.max(560, Math.min(1080, ($('#viewRoot') || $('#content')).clientWidth - 60))
+  const sessions = [...new Set(turnsInWindow().map((t) => t.si))]
+  let acc = 0
+  const pts = rows.map((t, k) => {
+    acc += t.totalIn
+    const v = state.metric === 'miss' ? t.miss : state.metric === 'tps' ? t.tps : acc
+    return { k, v, mark: t.spike, ann: isAnn(t) }
+  })
+  const domain = state.metric === 'miss' ? [0, 0.35] : state.metric === 'tps' ? [0, Math.max(90, ...pts.map((p) => p.v))] : [0, Math.max(1, ...pts.map((p) => p.v))]
+  const yFmt = state.metric === 'miss' ? ((v) => Math.round(v * 100) + '%') : ((v) => fmtK(v))
+  const METRIC_LB = { miss: 'A 投影（未命中率）', tps: 'TPS', cum: '累计输入（弱代理）' }
+  let h = '<div class="panel"><div class="p-head">FIG. 03 — 探索率曲线 · ' + METRIC_LB[state.metric] +
+    '<span class="r">' +
+    '<span class="seg">' + ['miss', 'tps', 'cum'].map((m) => '<button data-metric="' + m + '" class="' + (state.metric === m ? 'on' : '') + '">' + { miss: '未命中', tps: 'TPS', cum: '累计' }[m] + '</button>').join('') + '</span>' +
+    '<select class="ctl-select" id="sessSel"><option value="">全部会话</option>' + sessions.map((si) => '<option value="' + si + '"' + (String(si) === state.sess ? ' selected' : '') + '>' + sessLabel(si) + '</option>').join('') + '</select>' +
+    '</span></div><div class="p-body">' +
+    '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px"><span class="badge">' + state.range + ' 天 · ' + rows.length + ' 轮</span><span class="badge' + (S.cov / S.covTotal < 0.8 ? ' red' : ' ok') + '>自评覆盖 ' + pct(S.cov / S.covTotal) + '</span><span class="badge">τ_e 检出 ' + (state.scope === 'vault' ? 4 : 30) + ' 例</span></div>' +
+    '<div class="chart">' + chartSVG({ w, h: 240, pts, min: domain[0], max: domain[1], yFmt, lw: 1.8, threshold: state.metric === 'miss' ? 0.24 : null, thresholdLabel: 'S 形阈值参考（P1）', xLabels: xLabels(rows, w), anno: state.metric === 'miss' ? { from: Math.floor(rows.length * 0.4), to: Math.floor(rows.length * 0.62), txt: 'τ_e ≈ 14 turn（P4 特征时间）· S 形候选' } : null }) + '</div>' +
+    '<div class="legend"><span><span class="k red"></span>朱红＝CPU 峰值同窗轮</span><span><span style="display:inline-block;width:9px;height:9px;border:1px dashed var(--nt-accent);border-radius:99px;margin-right:5px"></span>红圈＝人工标注轮（点击曲线上轮次 → 抽屉内登记）</span></div>' +
+    '<details style="margin-top:10px"><summary class="dim" style="cursor:pointer;font-size:11.5px">分析（白盒）· 形态分布与 τ_e</summary>' +
+    '<div class="note">形态分布（' + (state.scope === 'vault' ? '9' : '75') + ' 会话实测）：inverse-sigmoid ' + (state.scope === 'vault' ? 2 : 16) + ' · falling ' + (state.scope === 'vault' ? 1 : 8) + ' · rising ' + (state.scope === 'vault' ? 0 : 5) + ' · sigmoid ' + (state.scope === 'vault' ? 1 : 2) + ' · unknown ' + (state.scope === 'vault' ? 5 : 44) + '。τ_e 检出 ' + (state.scope === 'vault' ? '414d6d37:3turn · c5159c5f:2turn · c6544e23:2turn · f630ef20:2turn' : '30 例（中位 2 turn，inverse-sigmoid 为主）') + '。会话内 S 形判定受缓存预热混杂（H-11），结论限定见 vault 报告。</div></details>' +
+    '<div class="note"><b>口径注记</b> —— ' + ({
+      miss: '未命中率 = inputTokens/(inputTokens+cacheRead)，即 A（对齐密度）在 token 空间的投影（正式腿）；长上下文/新话题会混杂抬高，与自评腿交叉受限。',
+      tps: 'TPS = outputTokens / 解码耗时；与探索率曲线共同构成 P4 时间结构素材。',
+      cum: '累计输入（弱代理）= Σ(命中+未命中) 按轮序；中段加速平台 = S 形候选（P1），正式判据仍以未命中率曲线为准。'
+    })[state.metric] + '</div>' +
+    '</div></div>'
+  const recent = turnsInWindow().slice(-12).reverse()
+  h += '<div class="sec-t">FIG. 04 — 最近关联' + (state.era === 'api' ? '对照' : '归因') + '表（点击行下钻）</div>'
+  h += '<div class="panel"><div class="p-body" style="padding:4px 12px"><table class="tbl"><tr><th>时刻</th><th>轮</th><th>PULSE CPU</th><th>INFER TTFT</th><th>NEXUS A 投影</th><th>标注</th><th>' + (state.era === 'api' ? '对照判读' : '归因判读') + '</th></tr>' +
+    recent.map((t) => { const a = state.ann[annKey(t)]; return '<tr class="click" data-turn="' + t.i + '"><td>' + fmtT(t.ts) + '</td><td><b>' + t.turn + '</b></td><td>' + Math.round(t.cpu) + '%</td><td>' + fmtTTFT(t.ttft) + '</td><td>' + pct(t.miss) + '</td><td>' + (a ? '<span class="badge ' + ANN_TAG_CLS(a.tag) + '">' + a.tag + '</span>' : '<span class="faint">—</span>') + '</td><td class="faint">' + (t.spike ? 'CPU 峰值同窗 · TTFT +48%（' + (state.era === 'api' ? '对照' : '归因候选') + '）' : '无异常同窗') + '</td></tr>' }).join('') +
+    '</table></div></div>'
+  const annRows = turnsInScope().filter((t) => isAnn(t))
+  h += '<div class="sec-t">FIG. 05 — 标注台账（nexus 层 · ' + annRows.length + ' 条）</div>'
+  h += '<div class="panel"><div class="p-body" style="padding:4px 12px">' + (annRows.length === 0
+    ? '<div class="note" style="margin:6px 0">暂无标注——点击曲线轮次或对照表行下钻，在抽屉「人工标注」区登记（标签 + 备注）。</div>'
+    : '<table class="tbl"><tr><th>轮次</th><th>标签</th><th>备注</th><th style="width:150px">操作</th></tr>' +
+      annRows.map((t) => { const a = state.ann[annKey(t)]; return '<tr><td><b>turn ' + t.turn + '</b> · ' + fmtT(t.ts) + '</td><td><span class="badge ' + ANN_TAG_CLS(a.tag) + '">' + a.tag + '</span></td><td>' + esc(a.note) + '</td><td><button class="btn sm" data-turn="' + t.i + '">定位</button> <button class="btn sm red" data-andel="' + annKey(t) + '">删除</button></td></tr>' }).join('') +
+      '</table>') + '</div></div>'
+  h += '<div class="note"><b>标注纪律</b> —— 标注是对读数的<strong>人工判读层</strong>（混杂来源 / 处置决定），不修改原始读数；引用读数时须随附标注（诚实边界随读数一起引用）。接口对应 <span class="mono">/api/nexus/m2/turn-annotations</span>（提案，见 UI 开发文档 §6）。</div>'
+  return h
+}
+
+// ── 视图：假设台账 ────────────────────────────────────────────
+function renderHYP () {
+  let h = ''
+  h += '<div class="formrow" style="margin:0 0 12px"><button class="btn pri" id="hypNew">＋ 登记新假设</button><span class="faint" style="font-size:11.5px">先立假设、预登记预言，再查数验证 —— 假设驱动纪律</span></div>'
+  h += '<div id="hypForm" style="display:none;margin-bottom:14px"><div class="panel" style="padding:12px 14px">' +
+    '<input class="inp" id="hypText" style="width:100%" placeholder="假设陈述（可检验的因果/对照命题）……">' +
+    '<div class="formrow"><span class="faint" style="font-size:11px">关联预言</span>' + Object.keys(PROPHECIES).map((p) => '<label class="chip" style="cursor:pointer"><input type="checkbox" class="hypP" value="' + p + '" style="accent-color:var(--nt-accent)">' + p + '</label>').join('') + '</div>' +
+    '<div class="formrow"><button class="btn pri sm" id="hypSave">登记</button><button class="btn sm" id="hypCancel">取消</button></div></div></div>'
+  for (const hy of state.hyp) {
+    const badge = hy.status.includes('证伪') ? '<span class="badge">已证伪</span>' : hy.status.includes('归档') ? '<span class="badge ok">已归档 · 成立</span>' : '<span class="badge red">验证中</span>'
+    h += '<div class="hyp" data-hyp="' + hy.id + '"><header data-hyptoggle="' + hy.id + '">' +
+      '<span class="hid">' + hy.id + '</span><span class="htx">' + esc(hy.text) + '</span>' + badge +
+      '<span class="meta">快照 ' + hy.snaps + ' · ' + hy.created + ' · 预言 ' + hy.props.join('/') + '</span></header>' +
+      '<div class="body"><h4>证据链（' + (state.era === 'api' ? '弱因果对照' : '强因果归因') + '）</h4><div class="note" style="margin-top:0">' + esc(hy.evidence) + '</div>' +
+      '<h4>反事实讨论</h4><div class="note" style="margin-top:0">' + esc(hy.counter) + '</div>' +
+      '<div class="formrow">' + (hy.status === '验证中' ? '<button class="btn sm pri" data-hypok="' + hy.id + '">标记已检验 · 归档</button><button class="btn sm red" data-hypno="' + hy.id + '">证伪</button>' : '<span class="faint" style="font-size:11px">已闭环 · 结论人工签署</span>') + '</div></div></div>'
+  }
+  h += '<div class="note"><b>纪律注记</b> —— 假设驱动 + 预言检验 + 人工门控（白盒）；era=' + state.era.toUpperCase() + ' 时代证据链一律以「对照」措辞登记，era=local 后方可写「归因」。</div>'
+  return h
+}
+
+// ── 视图：预言检验表 ──────────────────────────────────────────
+function renderPRP () {
+  const cnt = { observed: 0, investigating: 0, pending: 0 }
+  for (const k in state.prp) cnt[state.prp[k].status]++
+  let h = '<div class="panel"><div class="p-head">预言检验表 · P1–P9<span class="r"><span class="badge ok">已检验 ' + cnt.observed + '</span><span class="badge red">进行中 ' + cnt.investigating + '</span><span class="badge">待标注 ' + cnt.pending + '</span></span></div><div class="p-body" style="padding:4px 14px"><table class="tbl">'
+  for (const [k, desc] of Object.entries(PROPHECIES)) {
+    const p = state.prp[k]
+    h += '<tr><td style="width:30%"><b>' + k + '</b> · ' + desc + '</td>' +
+      '<td style="width:150px"><span class="prp-st"><select data-prp="' + k + '">' + Object.entries(STATUS_LABEL).map(([v, l]) => '<option value="' + v + '"' + (p.status === v ? ' selected' : '') + '>' + l + '</option>').join('') + '</select></span></td>' +
+      '<td><input class="inp" style="width:92%" data-prpnote="' + k + '" value="' + esc(p.note) + '" placeholder="备注（判据 / 数据窗 / 结论限定）……"></td>' +
+      '<td style="width:70px"><button class="btn sm" data-prpsave="' + k + '">保存</button></td></tr>'
+  }
+  h += '</table></div></div>'
+  h += '<div class="note"><b>框架先行</b> —— 预言先于数据登记（P1–P9），检验状态人工标注；本表与 vault 侧文档同源，仓库侧只读展示。接口对应 nexus <span class="mono">/api/nexus/m2/annotations</span>。</div>'
+  return h
+}
+
+// ── 视图：归因报告 ────────────────────────────────────────────
+function renderREP () {
+  const S = SCOPES[state.scope]
+  const eraWord = state.era === 'api' ? '对照（弱因果）' : '归因（强因果）'
+  return '<div class="report">' +
+    '<div style="font-size:10px;letter-spacing:2.5px;color:var(--nt-faint)">NAUTILUS 归因报告 · 样例</div>' +
+    '<h2><span class="no">R-012</span>夜间批量任务与轮耗时偏移的' + (state.era === 'api' ? '对照' : '归因') + '分析</h2>' +
+    '<div class="rmeta">' +
+    '<span>era <b>' + state.era.toUpperCase() + (state.era === 'api' ? ' · mixed 无' : ' · 演示预览') + '</b></span>' +
+    '<span>provider 集合 <b>tokenrhythm / opencode-go / deepseek-official</b></span>' +
+    '<span>对照集 <b>' + (state.era === 'api' ? '{ pulse.proc.dsh.*, infer.turn.* }' : '全三层（强因果闭合）') + '</b></span>' +
+    '<span>对齐窗口 <b>w=30s · 中位数</b></span>' +
+    '<span>数据范围 <b>' + S.name + ' · ' + S.turns + ' 轮</b></span>' +
+    '<span>生成 <b>2026-09-12 22:40 · 管线 v0.3</b></span></div>' +
+    '<h2><span class="no">§1</span>假设与预言</h2>' +
+    '<div class="prose">本报告检验假设 <span class="zh">H-12「宿主外批量任务挤占 CPU → 轮耗时 P95 偏移」</span>，关联预言 P4（增益集中 L_c：τ_e 特征时间）。验证采用假设驱动流程：假设先行登记，预言先行预写，取证后回填本表，结论由人工签署。</div>' +
+    '<h2><span class="no">§2</span>证据链</h2>' +
+    '<table class="tbl"><tr><th>时刻</th><th>PULSE</th><th>INFER</th><th>NEXUS</th><th>同窗判定</th></tr>' +
+    '<tr><td>09-12 21:47</td><td>CPU 91%（持续 3 窗）· dsh proc 4.2%→11.8%</td><td>TTFT 4.42s（+48%）· TPS −22%</td><td>A 投影 +4.2pp</td><td>共现</td></tr>' +
+    '<tr><td>09-12 21:52</td><td>CPU 84%</td><td>TTFT 3.71s（+24%）</td><td>A 投影 +0.8pp</td><td>共现</td></tr>' +
+    '<tr><td>09-12 22:03</td><td>CPU 31%</td><td>TTFT 2.98s（基线）</td><td>A 投影 −0.2pp</td><td>退峰</td></tr></table>' +
+    '<h2><span class="no">§3</span>结论（措辞分级）</h2>' +
+    '<div class="prose">在 <span class="zh">era=' + state.era.toUpperCase() + '</span> 口径下，观测到 CPU 峰值与 TTFT 抬升的稳定同窗共现（12/14 例）。依对照集规则，本时代该结论为<span class="zh">' + eraWord + '</span>' + (state.era === 'api' ? '——不构成因果断言；GPU/内核层指标不在本时代对照集内，不得引为本结论的机制证据。' : '——本地推理栈提供 KV cache 与排队指标，因果链条在三层闭合。') + '混杂变量（缓存预热，见 H-11）已在剔除首 3 轮后复核，结论不变。</div>' +
+    '<h2><span class="no">§4</span>反事实讨论</h2>' +
+    '<div class="prose">若偏移由宿主自身 GC 或扫描所致，dsh 进程 CPU 应与系统 CPU 同步抬升；实测 dsh proc 稳定于 4–5%，不支持该备择解释。若由缓存未命中传导，A 投影应先行抬升；实测两者同窗，无稳定先行阶（与 H-10 证伪结论一致）。</div>' +
+    '<div class="gate"><span class="gt">人工门控</span><span class="dim" style="font-size:12px">结论签署后归档并回写预言检验表——</span><button class="btn sm pri" data-rep="ok">批准归档</button><button class="btn sm" data-rep="back">退回修订</button></div>' +
+    '<div class="gate-note">era=api 时代「对照」结论亦须签署；签署动作记录审计痕迹（who / when / 措辞分级）。</div>' +
+    '</div>'
+}
+
+// ── 抽屉（下钻：单轮三层快照 + 问答 + 人工标注 + 假设关联） ────────────────
+function drawerBody (t, edit) {
+  const a = state.ann[annKey(t)]
+  const annSection = (a && !edit)
+    ? '<h5>人工标注（nexus 层 · 已标注）</h5><div class="note" style="margin-top:0"><span class="badge ' + ANN_TAG_CLS(a.tag) + '">' + a.tag + '</span> ' + esc(a.note) + '</div>' +
+      '<div style="display:flex;gap:8px;margin-top:8px"><button class="btn sm" id="dAnnEdit">修改</button><button class="btn sm red" id="dAnnDel">删除标注</button></div>'
+    : '<h5>人工标注（nexus 层' + (a ? ' · 修改' : '') + '）</h5>' +
+      '<div class="formrow" style="margin-top:2px"><select class="ctl-select" id="annTag" style="width:90px">' + ANN_TAGS.map((x) => '<option' + (a && a.tag === x ? ' selected' : '') + '>' + x + '</option>').join('') + '</select>' +
+      '<input class="inp" id="annNote" style="flex:1;min-width:170px" placeholder="备注（判据 / 混杂来源 / 处置）……" value="' + (a ? esc(a.note) : '') + '"></div>' +
+      '<div class="formrow"><button class="btn sm pri" id="dAnnSave">保存标注</button><span class="faint" style="font-size:10.5px">标注是判读层，不改原始读数；引用读数须随附标注</span></div>'
+  return '<h5 style="margin-top:0">三层同期快照（w=30s · 中位数）</h5>' +
+    '<table class="tbl"><tr><th>层</th><th>读数</th></tr>' +
+    '<tr><td class="faint">PULSE</td><td>CPU <b>' + Math.round(t.cpu) + '%</b> · 内存 ' + Math.round(t.mem) + '% · GPU ' + Math.round(t.gpuU) + '%/' + Math.round(t.gpuM) + '% · ' + Math.round(t.temp) + '°C · ' + Math.round(t.power) + 'W</td></tr>' +
+    '<tr><td class="faint">INFER</td><td>TTFT <b>' + fmtTTFT(t.ttft) + '</b> · TPS ' + t.tps.toFixed(1) + ' · provider ' + PROVIDERS[t.provider][0] + '</td></tr>' +
+    '<tr><td class="faint">NEXUS</td><td>输入 <b>' + fmtK(t.totalIn) + '</b> · A 投影 ' + pct(t.miss) + ' · 自评' + (t.covered ? '已评' : '<span class="redt">缺口</span>') + '</td></tr></table>' +
+    '<h5>问答原文（问答回看）</h5><div class="note" style="margin-top:0"><b>问</b> · ' + esc(t.q) + '<br><b>答</b> · ' + esc(t.a) + '</div>' +
+    annSection +
+    '<h5>关联假设</h5><div style="display:flex;gap:6px;flex-wrap:wrap">' + (t.spike ? '<span class="badge red">H-12 · 峰值同窗</span>' : '<span class="badge">无关联</span>') + '<span class="badge">P4 · τ_e</span></div>' +
+    '<h5>操作</h5><div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn sm" id="dNewHyp">据此登记新假设</button><button class="btn sm" id="dOpenRep">在报告中打开</button></div>'
+}
+function bindDrawer (t) {
+  const save = $('#dAnnSave')
+  if (save) save.onclick = () => {
+    state.ann[annKey(t)] = { tag: $('#annTag').value, note: $('#annNote').value.trim(), ts: Date.now() }
+    toast('turn ' + t.turn + ' 标注已保存（' + $('#annTag').value + '）· 曲线已加红圈'); render(); openDrawer(t)
+  }
+  const edit = $('#dAnnEdit')
+  if (edit) edit.onclick = () => { $('#dBody').innerHTML = drawerBody(t, true); bindDrawer(t) }
+  const del = $('#dAnnDel')
+  if (del) del.onclick = () => { delete state.ann[annKey(t)]; toast('turn ' + t.turn + ' 标注已删除'); render(); openDrawer(t) }
+  $('#dNewHyp').onclick = () => { closeDrawer(); state.view = 'hyp'; render(); setTimeout(() => $('#hypNew')?.click(), 50) }
+  $('#dOpenRep').onclick = () => { closeDrawer(); state.view = 'rep'; render() }
+}
+function openDrawer (t, edit) {
+  state.drawer = t
+  $('#dTitle').textContent = 'TURN ' + t.turn + ' · ' + fmtT(t.ts)
+  $('#dBody').innerHTML = drawerBody(t, edit === true)
+  bindDrawer(t)
+  $('#drawer').classList.add('open'); $('#scrim').classList.add('show')
+}
+function closeDrawer () { $('#drawer').classList.remove('open'); $('#scrim').classList.remove('show'); state.drawer = null }
+
+// ── era 弹层 ──────────────────────────────────────────────────
+function renderEraPop () {
+  const api = state.era === 'api'
+  $('#eraDetail').innerHTML =
+    '判定依据 = <b>assistant/message.message.source.{provider,model}</b>（逐调用，Phase 0 实测 100% 可得）。<br>' +
+    '当前 provider 集合：' + PROVIDERS.map(([p, n]) => '<span class="mono">' + p + ' ×' + n + '</span>').join(' · ') + ' —— 均为云端 → <b>era=' + state.era.toUpperCase() + '</b>，mixed 无。<br>' +
+    '对照集规则：api 时代 = { pulse.proc.dsh.*, infer.turn.* }，结论只称<b class="redt">「对照」</b>；local 时代 = 全三层，方可称<b>「归因」</b>。'
+  $('#eraDemo').textContent = api ? '切到 local 预览' : '切回 api'
+}
+$('#eraChip').addEventListener('click', (e) => {
+  e.stopPropagation()
+  const pop = $('#eraPop'); const r = $('#eraChip').getBoundingClientRect()
+  pop.style.top = (r.bottom + 8) + 'px'
+  pop.style.left = Math.max(8, Math.min(window.innerWidth - 396, r.right - 380)) + 'px'
+  renderEraPop(); pop.classList.toggle('show')
+})
+document.addEventListener('click', (e) => {
+  const pop = $('#eraPop')
+  if (pop.classList.contains('show') && !pop.contains(e.target)) pop.classList.remove('show')
+})
+$('#eraDemo').addEventListener('click', () => {
+  state.era = state.era === 'api' ? 'local' : 'api'
+  $('#eraTxt').textContent = state.era.toUpperCase()
+  renderEraPop(); render()
+  toast(state.era === 'api' ? '已切回 era=API（对照口径）' : 'era=LOCAL 演示预览（措辞升级为「归因」——仅演示）')
+})
+
+// ── 事件委托 ──────────────────────────────────────────────────
+document.querySelectorAll('#rail nav button').forEach((b) => b.addEventListener('click', () => { state.view = b.dataset.nav; render() }))
+document.querySelectorAll('#scopeSeg button').forEach((b) => b.addEventListener('click', () => { state.scope = b.dataset.scope; render() }))
+$('#rangeSel').addEventListener('change', (e) => { state.range = Number(e.target.value); render() })
+$('#themeBtn').addEventListener('click', () => { document.body.classList.toggle('dark'); toast(document.body.classList.contains('dark') ? '暗色（对应宿主暗主题 · --dsw-alias-* 反转）' : '浅色（对应宿主亮主题）') })
+$('#dClose').addEventListener('click', closeDrawer)
+$('#scrim').addEventListener('click', closeDrawer)
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') { closeDrawer(); $('#eraPop').classList.remove('show') } })
+
+$('#content').addEventListener('click', (e) => {
+  const nav = e.target.closest('[data-nav2]')
+  if (nav) { state.view = nav.dataset.nav2; render(); return }
+  const feedRow = e.target.closest('[data-turn]')
+  if (feedRow) { const t = turnsInScope().find((x) => x.i === Number(feedRow.dataset.turn)); if (t) openDrawer(t); return }
+  const metric = e.target.closest('[data-metric]')
+  if (metric) { state.metric = metric.dataset.metric; render(); return }
+  const hypt = e.target.closest('[data-hyptoggle]')
+  if (hypt) { hypt.closest('.hyp').classList.toggle('open'); return }
+  const hypNew = e.target.closest('#hypNew')
+  if (hypNew) { const f = $('#hypForm'); f.style.display = f.style.display === 'none' ? 'block' : 'none'; if (f.style.display === 'block') $('#hypText').focus(); return }
+  const hypSave = e.target.closest('#hypSave')
+  if (hypSave) {
+    const txt = $('#hypText').value.trim()
+    if (!txt) { toast('假设陈述不能为空'); return }
+    const props = [...document.querySelectorAll('.hypP:checked')].map((c) => c.value)
+    const id = 'H-' + (13 + state.hyp.length - 3)
+    state.hyp.unshift({ id, text: txt, status: '验证中', props: props.length ? props : ['P4'], snaps: 0, created: '09-12', evidence: '（待取证——先查数，后回填证据链）', counter: '（待补）' })
+    render(); toast(id + ' 已登记 · 关联预言 ' + (props.join('/') || 'P4')); return
+  }
+  const hypCancel = e.target.closest('#hypCancel')
+  if (hypCancel) { $('#hypForm').style.display = 'none'; return }
+  const hypok = e.target.closest('[data-hypok]')
+  if (hypok) { const hy = state.hyp.find((x) => x.id === hypok.dataset.hypok); hy.status = '已归档 · 成立'; render(); toast(hy.id + ' 已归档（成立）· 预言检验表待回写'); return }
+  const hypno = e.target.closest('[data-hypno]')
+  if (hypno) { const hy = state.hyp.find((x) => x.id === hypno.dataset.hypno); hy.status = '已证伪'; render(); toast(hy.id + ' 已标记证伪'); return }
+  const andel = e.target.closest('[data-andel]')
+  if (andel) { delete state.ann[andel.dataset.andel]; render(); toast('标注已删除'); return }
+  const prpSave = e.target.closest('[data-prpsave]')
+  if (prpSave) {
+    const k = prpSave.dataset.prpsave
+    state.prp[k].status = document.querySelector('[data-prp="' + k + '"]').value
+    state.prp[k].note = document.querySelector('[data-prpnote="' + k + '"]').value
+    render(); toast(k + ' 标注已保存（' + STATUS_LABEL[state.prp[k].status] + '）'); return
+  }
+  const rep = e.target.closest('[data-rep]')
+  if (rep) { toast(rep.dataset.rep === 'ok' ? 'R-012 已批准归档 · 预言检验表已回写（演示）' : 'R-012 已退回修订（演示）'); return }
+})
+$('#content').addEventListener('change', (e) => {
+  if (e.target.id === 'sessSel') { state.sess = e.target.value; render() }
+})
+
+// ── 渲染调度 ──────────────────────────────────────────────────
+const VIEWS = { ov: ['总览', renderOV], crv: ['曲线与归因', renderCRV], hyp: ['假设台账', renderHYP], prp: ['预言检验表', renderPRP], rep: ['归因报告', renderREP] }
+function render () {
+  document.querySelectorAll('#rail nav button').forEach((b) => b.classList.toggle('on', b.dataset.nav === state.view))
+  document.querySelectorAll('#scopeSeg button').forEach((b) => b.classList.toggle('on', b.dataset.scope === state.scope))
+  $('#viewName').textContent = VIEWS[state.view][0]
+  $('#eraTxt').textContent = state.era.toUpperCase()
+  const root = $('#viewRoot')
+  root.innerHTML = VIEWS[state.view][1]()
+  if (state.view === 'ov') mountLinked(turnsInWindow(), linkedCharts(turnsInWindow()).metrics)
+  const foot = document.createElement('div')
+  foot.className = 'foot'
+  foot.innerHTML = '<details><summary>口径与参照（Fact First）</summary>' +
+    '<div style="margin-top:8px">① 统计卡为实弹库实测（analysis-report 2026-09-12：全局 436 轮/75 会话/命中率 94.2%/自评覆盖 14.9%；vault 34 轮/9 会话/93.8%/64.7%）；曲线与快照数值为示意数据，仅演示交互。<br>' +
+    '② TTFT 口径 = 首块 stream 时间 − step/start 时间（turn 级取最低 step），Phase 0 实测 783 调用 100% 覆盖、p50 3.07s / p90 9.28s，双通道可回填历史。<br>' +
+    '③ era 判定依据 = message.source.{provider,model}（逐调用）；本机现存 3 个云端 provider，era 机制「已定义、待 local 数据」。<br>' +
+    '④ 布局参照：Grafana（stat 行 / 统一时间范围 / 联动十字线）· Grafana 看板 25193（GPU 面板行）· Datadog Bits AI（调查抽屉 / 假设工作流）· nexus client（conversation.view 挂载 / 问答回看 / 口径注记）。<br>' +
+    '⑤ 主题：本页浅/暗两态即宿主亮暗主题的映射演示（--nt-* ← --dsw-alias-*）；强调朱红为静态色不随主题。<br>' +
+    '⑥ 本原型为 S4「瑞士制图」<b>定版稿</b>（2026-09-12 裁定：主皮肤 + 浅/暗双主题随宿主 + nexus 层人工标注）；开发与验收规范见 <span class="mono">docs/2-dev/nautilus-dev-02-ui-workbench.md</span>（v0.1，待评审）。</div></details>'
+  root.appendChild(foot)
+}
+// 深链：#crv,dark 等
+const hash = location.hash.slice(1).split(',')
+const viewMap = { ov: 1, crv: 1, hyp: 1, prp: 1, rep: 1 }
+for (const tk of hash) { if (viewMap[tk]) state.view = tk; if (tk === 'dark') document.body.classList.add('dark'); if (tk === 'all') state.scope = 'all' }
+render()
+let rsz = null
+window.addEventListener('resize', () => { clearTimeout(rsz); rsz = setTimeout(render, 220) })
+</script>
+</body>
+</html>
