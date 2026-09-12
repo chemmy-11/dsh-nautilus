@@ -1,6 +1,6 @@
 <!-- 标题格式：<type>(<scope>): <一句话改动>——与 squash 后的提交信息一致，保持 main 线性可读 -->
 
-<!-- 目标分支：线内子任务 → 所在线（feat/nexus 插件线 / feat/nautilus Nautilus 主线）；线 → main 的收敛 PR 直接对 main。跨线公共约定（AGENTS.md / CI / 模板 / docs 结构）先落 main，再合并进两条线。 -->
+<!-- 目标分支：线内子任务 → 所在线（feat/nexus 插件线 / feat/ui UI 支线 / feat/nautilus Nautilus 主线）；UI 线验收节点收敛 → feat/nautilus；线 → main 的收敛 PR 直接对 main。跨线公共约定（AGENTS.md / CI / 模板 / docs 结构）先落一条线，再合并进其余线。 -->
 
 ## 背景与动机
 

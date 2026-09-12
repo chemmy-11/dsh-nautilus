@@ -5,10 +5,12 @@
 ## 分支与提交
 
 - `main` 为主干，保持线性；小步本地提交，**push 时机按用户明确指令**（本地领先 origin 是常态）。
-- **两条长驻开发线**，各自一条分支、互不混提：
+- **三条长驻开发线**，各自一条分支、互不混提：
   - `feat/nexus` —— **插件线**：应用层观测插件本体（采集 / 存储 / 路由 / 面板 / 宿主适配）；
-  - `feat/nautilus` —— **Nautilus 主线**：三层指标（pulse / infer / nexus）、era 因果上下文、Agentic Ops 工作台；**包含**插件线全部内容，插件线前进后用 `git merge feat/nexus` 同步（不 rebase，保留既有提交 hash）。
-  两条线各自 squash 进 `main`；跨线公共约定（AGENTS.md / CI / PR 模板 / docs 结构）**改动先落一条线、随即 `merge` 进另一条线**，保证两边始终同一份（`main` 尚未被线合并前，模板 / CONTRIBUTING 以线为准；GitHub 上 PR 模板取**目标分支**、issue 模板取**默认分支**，故对 `main` 的 PR 会在 `main` 追平后才看到新模板）。
+  - `feat/nautilus` —— **Nautilus 主线**：三层指标（pulse / infer / nexus）、era 因果上下文、Agentic Ops 工作台；**包含**插件线全部内容，插件线前进后用 `git merge feat/nexus` 同步（不 rebase，保留既有提交 hash）；
+  - `feat/ui` —— **UI 支线**：工作台 UI（`--nt-*` 令牌层、S4「瑞士制图」皮肤、五视图、人工标注 UI，规范见 `docs/2-dev/nautilus-dev-02-ui-workbench.md`）；自 `feat/nautilus` 分出、**包含**主线全部内容，主线前进后 `git merge feat/nautilus` 跟随（同样不 rebase）。改动边界 = `src/client/**` 与 UI 文档（`docs/2-dev/ui-*`）；涉 host 半区的配套改动（store / routes / 迁移）仍归插件线。
+  同步方向（一律 `merge`，不 rebase）：`feat/nexus` → `feat/nautilus`（常规收敛）；`feat/ui` → `feat/nautilus`（按 UI 开发文档验收节点收敛，如 U1 令牌层、U5 标注闭环达成时）；`feat/nautilus` → `feat/ui`（支线跟随主线）。
+  各线收敛 `main` 仍走 squash；跨线公共约定（AGENTS.md / CI / PR 模板 / docs 结构）**改动先落一条线、随即 `merge` 进其余线**，保证各线始终同一份（`main` 尚未被线合并前，模板 / CONTRIBUTING 以线为准；GitHub 上 PR 模板取**目标分支**、issue 模板取**默认分支**，故对 `main` 的 PR 会在 `main` 追平后才看到新模板）。
 - 分支命名：`feat/<slug>` / `fix/<slug>` / `chore/<slug>`，与 PR 主题一致（如 `chore/dsh-0.1.5-compat`）；线内子任务挂在线名之后（如 `feat/nexus-m5`）。
 - 提交信息：`<type>(<scope>): <中文描述>——<为什么/细节>`；type ∈ feat / fix / refactor / docs / test / ci / chore / build；scope 用里程碑子项（如 `M4-A`、`N1-x`）、模块名或面（`contributing` / `deps` / `client` / `routes`）。
 - **宿主适配类提交**（依赖升级 / 契约面适配）的描述必须写明目标宿主版本（如 `dsh 0.1.5-rc.1`），便于按版本回溯。
@@ -18,10 +20,10 @@
 
 - 有风险 / 多步改动走功能分支 + PR，描述按模板（背景 / 改动 / 验证 / 自查）。
 - 合并一律 **squash**，提交信息即 PR 标题；issue 关联用 `Closes #N` / `Refs #N`。
-- **base 约定**：线内子任务 PR 对所在线（`feat/nexus` / `feat/nautilus`）；线 → `main` 的收敛 PR 直接对 `main`，同样 squash。
+- **base 约定**：线内子任务 PR 对所在线（`feat/nexus` / `feat/ui` / `feat/nautilus`）；UI 线验收节点收敛 PR 对 `feat/nautilus`；线 → `main` 的收敛 PR 直接对 `main`，同样 squash。
 - issue 先行：里程碑子项、缺陷、技术债开 issue 记账，完成在 issue 下留结论后关闭。
 
-## CI 门禁（`ci.yml`：push = `main` / `feat/nexus` / `feat/nautilus`，PR = 全部分支）
+## CI 门禁（`ci.yml`：push = `main` / `feat/nexus` / `feat/nautilus` / `feat/ui`，PR = 全部分支）
 
 1. `actionlint` 工作流静态检查（YAML 语义 / 表达式 / shell 语法）。解析失败表现为 **0 jobs 静默无检查**（2026-08-28 事故形态），CI 内自查救不了本文件——推工作流改动前本地跑一次：`go install github.com/rhysd/actionlint/cmd/actionlint@latest` 或直接下载 release 二进制。**注意需同时装 shellcheck 才与 runner 等效**（runner 自带；本机缺失时 SC 系告警漏检，2026-09-04 首跑即栽在 SC2035）。
 2. `npm run typecheck`（tsc --noEmit）；
