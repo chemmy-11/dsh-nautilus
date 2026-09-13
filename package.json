@@ -42,6 +42,10 @@
       "types": "./lib/types/client/index.d.ts",
       "default": "./lib/client.js"
     },
+    "./pulse": {
+      "types": "./lib/types/pulse/index.d.ts",
+      "default": "./lib/pulse/index.js"
+    },
     "./package.json": "./package.json"
   },
   "dsh": {

@@ -3,3 +3,6 @@
 - insert:
     - id: nexus
       name: '@dsh-external/dsh-nexus'
+    # Nautilus OS/GPU 层（Phase 1）：独立插件入口，与 nexus 同包不同行、同库不同表。
+    - id: pulse
+      name: '@dsh-external/dsh-nexus/pulse'
