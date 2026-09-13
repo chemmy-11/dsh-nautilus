@@ -296,6 +296,10 @@ client-modules: package @dsh-external/dsh-nexus resolves from multiple active Lo
 - `lib/client.js` 96500 → **106327 B**；新标记命中：`getDerivedStateFromError` · `nt-btn.on` · `selectPanel`。
 - profile 副本已刷新：`dsh plugin --profile web add file:L:/dsh-nautilus`（2.1 s）。
 
+**必须重启（实测）**：副本刷新后启动图 **rev 不变**（仍为 `eaeacfa059478926-47`），下发的仍是**旧字节**（`getDerivedStateFromError` / `nt-btn.on` / `selectPanel` 三个新标记均为 false）。即：**bundle 安装下 client-modules 在启动时缓存产物**，替换 `file:` 副本不会触发 rebuild 通知。
+
+> **对 §E10 观察 1 的限定**：那条「改客户端半区只需 `npm run build` + 刷新页面、不必重启」只在 **patch 热装配**（Loader 条目指向仓库路径）下成立；改走 bundle 安装后，**每次客户端改动都要 `build` → `dsh plugin add file:` → 重启宿主**。
+
 **环境四元组**：dsh `0.1.5-rc.2` · profile `web` · 装配方式 = **bundle（`file:` 安装副本）** · 结果：产物级通过；**端上可见性待重启后由守谷人确认**。
 
 **诚实边界**：本节结论到「产物字节 + 门禁 + 组合路径」为止。DOM 渲染（返回会话按钮是否出现、OS 面板是否有数、切视图是否正常）**仍需人在重启后的既有页面确认**——§E12 的 OQ-U6 未闭合。
