@@ -116,6 +116,42 @@ RSS：64.6MB → 65.3MB
 
 ---
 
+## E9 端上装配实测（2026-09-13，热装配）
+
+**命令**：在 profile `web` 的 `cordis.patch.yml` 用户层插入 pulse 行（绝对路径 + `patchReload: live`），保存后等待 25 s，再读库与 API：
+
+```yaml
+- insert:
+    - id: nexus
+      name: 'L:/dsh-nautilus/lib/index.js'
+    - id: pulse
+      name: 'L:/dsh-nautilus/lib/pulse/index.js'
+```
+
+**环境四元组**：dsh `0.1.5-rc.1`（运行中的宿主）· profile `web` · 装配方式 = **patch 热装配（用户层 insert 绝对路径）** · 结果 **通过**
+
+**实际（真实库 `~/.dsh/nexus/nexus.db`，只读查询）**
+```
+tables: annotation,edit_event,lfield_config,metric_sample,session_root,step_seen,turn_read,turn_text,vault_config,vault_meta
+user_version: 4
+metric_sample: rows=69  first=2026-09-13T03:38:17.900Z  last=2026-09-13T03:38:52.905Z
+metrics: cpu.ctx_switches(3) cpu.utilization(7) disk.io_rate(3) disk.queue(3) gpu.mem.total(4) gpu.mem.used(4)
+         gpu.power(4) gpu.temp(4) gpu.util(4) mem.swap.used(3) mem.total(7) mem.used(7) net.io_rate(3)
+         proc.dsh.cpu(6) proc.dsh.rss(7)
+nexus 侧 turn_read: 446（最新 2026-09-13T03:38:55Z，未受影响）
+```
+
+**API（带 `Origin` 头过同源守卫）**
+- `GET /api/nexus/pulse/state` → **200**；`collector: ticks=5 shell=powershell countersOk=True gpuOk=True execAvailable=True`；`db.rows=49`（当时）`schemaVersion=4`；15 条 latest 值齐全。
+- `GET /api/nexus/m2/state`（nexus 面板）→ **200**，同步核对：patch 重载未影响既有插件。
+
+**观察结论**
+1. 宿主路径全链路成立：**`ctx.subprocess` seam 可用**（`execAvailable=True`）、计数器助手在宿主内起的是 `powershell`、GPU 族在场。
+2. pulse 与 nexus 同库共存、互不干扰（`user_version` 已为 4，nexus 的 turn 采集持续增长）。
+3. **遗留（必须收口）**：本次是热装配例外，重启前要按 CONTRIBUTING 工程红线 5 收敛为 `dsh plugin --profile web add`，否则 patch 层与 bundle 层同 `id` 双挂载（`webServer.register` 对重复 `(kind,path)` 直接抛错）。
+
+---
+
 ## E8 诚实边界（引用本归档时必须一并引用）
 
 1. **未经宿主**：本层尚未装配进 profile（无 `id: pulse` patch 行），全部证据来自离线探针；宿主路径的差异只有「子进程经 `ctx.subprocess` 起」——同一份 `lib/pulse/*`，尚无端上四元组读数（OQ-3）。

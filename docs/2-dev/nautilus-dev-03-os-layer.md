@@ -102,7 +102,7 @@ CREATE INDEX idx_sample_ts ON metric_sample(ts);
 
 - **OQ-1 分钟档聚合**：Phase 3（core 对齐管道）一并做，届时决定聚合表形态与保留分档。
 - **OQ-2 GPU 版本化快照测试**：当前只做「字段缺失即缺席」的软失败，未固化驱动输出样例（R8 的完整对策）。
-- **OQ-3 端上装配**：profile 的 `cordis.patch.yml` 目前只有 nexus 行；pulse 行（`name: 'L:/dsh-nautilus/lib/pulse/index.js'`）待守谷人确认后加（属热装配，重启前必须收敛——CONTRIBUTING 工程红线 5）。
+- ~~**OQ-3 端上装配**~~ **已完成（2026-09-13，热装配）**：profile `web` 的 `cordis.patch.yml` 已插入 pulse 行，宿主实时出数（环境四元组见证据 §E9）。**遗留**：属热装配例外，重启前收敛为 `dsh plugin --profile web add`（CONTRIBUTING 工程红线 5）。
 - **OQ-4 非 Windows**：计数器族缺席（本地族与 GPU 族仍可采）；若将来要跨平台，需为 Linux 写 `/proc` 通道（上游 §2.1 的 psutil 类接口）。
 - **OQ-5 采集与 UI 的联动**：UI 层导入时是否需要 `pulse.*` 的事件推送（现在只有轮询路由）。
 
