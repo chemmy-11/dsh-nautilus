@@ -294,7 +294,9 @@ client-modules: package @dsh-external/dsh-nexus resolves from multiple active Lo
 **实际**
 - 六件套全绿；`npm test` **20/20**。其中 client bundle 用例因新增类组件**先失败一次**（测试的 react shim 缺 `Component`，材料化即 `extends undefined`），补 shim 后通过——这条反向证明该用例确实在断言产物，而不是自我报告。
 - `lib/client.js` 96500 → **106327 B**；新标记命中：`getDerivedStateFromError` · `nt-btn.on` · `selectPanel`。
-- profile 副本已刷新：`dsh plugin --profile web add file:L:/dsh-nautilus`（2.1 s）。
+- profile 副本已刷新：`dsh plugin --profile web add file:L:/dsh-nautilus`（2.1 s）——**事后证明这次 add 是空操作**，见下条。
+
+- profile 装配通道修正（同日）：`dsh plugin add file:` **不会刷新已有副本**（pnpm `added 0`，副本停在 12:11 的 96500 B），因此重启后「毫无变化」；已改为 `dsh plugin remove` + `dsh plugin add link:L:/dsh-nautilus`，profile 内变为 **Junction → 仓库**（经 profile 路径看到的 `client.js` = 仓库当前产物 106501 B），此后 `npm run build` 即回流。`--dump-config` 仍为单条目 `id: nexus`。
 
 **必须重启（实测）**：副本刷新后启动图 **rev 不变**（仍为 `eaeacfa059478926-47`），下发的仍是**旧字节**（`getDerivedStateFromError` / `nt-btn.on` / `selectPanel` 三个新标记均为 false）。即：**bundle 安装下 client-modules 在启动时缓存产物**，替换 `file:` 副本不会触发 rebuild 通知。
 
