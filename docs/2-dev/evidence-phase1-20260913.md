@@ -271,6 +271,37 @@ client-modules: package @dsh-external/dsh-nexus resolves from multiple active Lo
 
 ---
 
+## E13 端上首轮问题修复（2026-09-13，守谷人复核后）
+
+**现象（守谷人刷新页面后反馈）**
+1. **缺少返回会话按键**——工作台是 `main` 全局面板，选中后会话列不可见，面板内没有回程入口；
+2. **OS 层数据没显示**——总览只显示了采集器心跳，15 条 PULSE 指标一条都没呈现；
+3. **点「预言」等分段按钮后页面不正常**——点击即无内容 / 白屏。
+
+**根因**
+- 现象 3 是 React 使用姿势错误：五个视图组件被**当普通函数直接调用**（如 `CurveView({...})`）而不是渲染为元素，子组件的 hooks 因此算进父组件 `Workbench`。切换视图时 hooks 数量变化（曲线 3 个、预言 3 个、抽屉 2 个 ↔ 总览 0 个），React 抛 Rendered more hooks than during the previous render，**整页渲染失败**——症状「按钮点了没反应」正是这个。
+- 现象 2 不是数据问题（`/api/nexus/pulse/state` 一直是 200、15 指标齐全），是 **UI 缺口**：总览只用了 `collector` 与 `db` 两个字段，`latest[]` 从未渲染。
+- 现象 1 是**设计缺口**：布局契约里 `selectPanel(null)` 才是「显示当前会话」，而侧栏壳的行只做 `selectPanel(id)`——回程入口必须由面板自己提供。
+
+**修法**
+- 五个视图与抽屉一律改 `createElement(View, props)`。
+- 工作台头部加「← 返回会话」按钮 → `ctx.layout.selectPanel(null)`；客户端插件 `inject` 加 `layout`（必需服务：主区与侧栏图标两个槽位本就由它声明）。
+- 总览新增「系统层读数（PULSE · 本机）」面板：4 张头条读数（CPU 利用率 / 内存占用 / GPU 利用率 / 宿主进程 RSS）+ 15 条指标全表（分组 / 最新值 / 采样时刻）+ 采集健康行。**量纲逐个取自 `src/pulse/{collect,counters}.ts` 的构造点**（utilization 与 proc.cpu 换算百分比、io_rate 字节/秒、gpu.mem MiB、temp/power °C/W），未知指标原样加「量纲未知」标注而不是猜。
+- 曲线视图新增数据源切换：NEXUS 轮次 / PULSE 采样；后者带指标下拉 + `/api/nexus/pulse/series?windowMs=3600000&maxPoints=240` 的等间隔曲线，并写明「这里时间轴均匀、斜率可读」，与轮次曲线的非等间隔形成对照。
+- 新增 `ViewBoundary` 类组件隔离单个视图的渲染异常（显示错误原文 + 重试），避免再出现「一个视图挂掉整页白屏」。
+- era 切换按钮补 `.on` 高亮。
+
+**实际**
+- 六件套全绿；`npm test` **20/20**。其中 client bundle 用例因新增类组件**先失败一次**（测试的 react shim 缺 `Component`，材料化即 `extends undefined`），补 shim 后通过——这条反向证明该用例确实在断言产物，而不是自我报告。
+- `lib/client.js` 96500 → **106327 B**；新标记命中：`getDerivedStateFromError` · `nt-btn.on` · `selectPanel`。
+- profile 副本已刷新：`dsh plugin --profile web add file:L:/dsh-nautilus`（2.1 s）。
+
+**环境四元组**：dsh `0.1.5-rc.2` · profile `web` · 装配方式 = **bundle（`file:` 安装副本）** · 结果：产物级通过；**端上可见性待重启后由守谷人确认**。
+
+**诚实边界**：本节结论到「产物字节 + 门禁 + 组合路径」为止。DOM 渲染（返回会话按钮是否出现、OS 面板是否有数、切视图是否正常）**仍需人在重启后的既有页面确认**——§E12 的 OQ-U6 未闭合。
+
+---
+
 ## E8 诚实边界（引用本归档时必须一并引用）
 
 1. **端上读数口径**：§E8 初稿时本层尚未装配（证据全来自离线探针）；**§E9 起已热装配进 profile `web`**，宿主路径已有端上四元组读数（OQ-3 收敛）。但 E5 的 1 小时档仍只有中间读数，且「连续 1 小时无内存增长」尚未给出完整序列。

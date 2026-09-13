@@ -306,6 +306,8 @@ test('client bundle：ModuleLoader 往返 + 命名导出面 + 面板注册契约
 
   const react = {
     createElement: (type, props, ...kids) => ({ type, props, kids }),
+    // 错误隔离用的是类组件：材料化时就会 extends Component，shim 必须给到
+    Component: class { constructor(props) { this.props = props; this.state = {} } setState() {} },
     useEffect: () => {},
     useState: (v) => [typeof v === 'function' ? v() : v, () => {}],
     Fragment: 'Fragment',
@@ -318,10 +320,11 @@ test('client bundle：ModuleLoader 往返 + 命名导出面 + 面板注册契约
   assert.deepEqual(Object.keys(exportsObj).sort(), ['apply', 'inject'])
   assert.equal(Object.prototype.hasOwnProperty.call(exportsObj, 'default'), false)
   // 跨 realm：vm 里造出来的数组原型不同，deepStrictEqual 会因此报错——先摊平成宿主数组
-  assert.deepEqual([...exportsObj.inject], ['slots'])
+  assert.deepEqual([...exportsObj.inject], ['slots', 'layout'])
 
   const calls = []
   const ctx = {
+    layout: { selectPanel: (id) => { calls.push('selectPanel:' + String(id)) } },
     effect: (cb, name) => { calls.push('effect:' + name); cb() },
     slots: {
       inject: (key, cb) => { calls.push('inject:' + key); cb(); return () => {} },
@@ -332,6 +335,12 @@ test('client bundle：ModuleLoader 往返 + 命名导出面 + 面板注册契约
         assert.ok(identity !== undefined, 'register 必须带槽位标识（list→id / keyed→key）')
         calls.push('register:' + def.name + '|' + String(identity))
         assert.equal(typeof comp, 'function')
+        if (def.name === 'main') {
+          // main 的组件是注册闭包包出来的宿主组件：渲染它不应触发导航（只有点了「返回会话」才调 selectPanel(null)）
+          const el = comp({})
+          assert.ok(el !== null && el !== undefined, 'main 组件必须能产出元素')
+          assert.equal(calls.some((c) => c.startsWith('selectPanel:')), false, '渲染不应触发导航')
+        }
         return () => {}
       },
     },

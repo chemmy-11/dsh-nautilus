@@ -902,7 +902,9 @@ function NexusLFieldView(): ReactNode {
 
 // ── tab 注册 ─────────────────────────────────────────────────────────────────
 
-export const inject = ['slots']
+// layout 是**必需**服务（主区面板的返回会话要走 ctx.layout.selectPanel(null)）；
+// 它同时是 main / sidebar.panellist 两个槽位的声明方，缺席时本插件本就无法工作。
+export const inject = ['slots', 'layout']
 
 export function apply(ctx: {
   effect(callback: () => unknown, name: string): unknown
@@ -910,6 +912,7 @@ export function apply(ctx: {
     inject(key: string, callback: () => unknown): unknown
     register(def: Record<string, unknown>, component: unknown): unknown
   }
+  layout: { selectPanel(id: unknown): void }
 }): void {
   injectStyle()
   ctx.effect(
@@ -954,7 +957,10 @@ export function apply(ctx: {
       // 主区槽位是 keyed 槽（DSH contract: { kind: 'keyed', scope: 'root' }），
       // 必须给 options.key；给 id 会抛 "keyed slot main requires options.key"
       // 并让整个浏览器半区插件集挂载失败。key 与 sidebar.panellist 的 id 同值。
-      ctx.slots.register({ name: 'main', key: panelId }, Workbench),
+      // 注入「返回会话」：主区一旦选中全局面板，会话列就不再可见，必须有回到 Conversation 的入口
+      // （layout 契约：selectPanel(null) = 显示当前会话）。
+      ctx.slots.register({ name: 'main', key: panelId }, (): ReactNode =>
+        createElement(Workbench, { onExitToConversation: () => { ctx.layout.selectPanel(null) } })),
     ),
     '@dsh-external/dsh-nexus: workbench panel',
   )

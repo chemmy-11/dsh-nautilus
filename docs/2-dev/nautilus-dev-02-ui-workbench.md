@@ -189,7 +189,12 @@
 | 唯一写路径 | `POST /api/nexus/m2/annotations`（预言标注） | ✅ 失败 toast 不静默 |
 | 缺席态 | INFER 层未接入 / 无数据 → 缺席文案与诚实边界，不写 0 | ✅ 全视图覆盖 |
 | 浏览器渲染确认 | 既有页面刷新后人工确认（device-auth 门，无自动化） | ⏳ 待守谷人 |
-| `dsh.client.inject` 新值生效 | 下次 `dsh web` 重启（client-modules 按进程缓存包元数据） | ⏳ 无功能影响 |
+| `dsh.client.inject` 新值生效 | 重启后已生效（启动图行含 layout/sidebar 两条边，§E12） | ✅ 收敛 |
+| 返回会话入口 | `src/client/workbench.ts` 头部「← 返回会话」→ `ctx.layout.selectPanel(null)`；客户端 `inject` 加 `layout` | ✅ 端上首轮反馈修复（§E13） |
+| OS 层读数呈现 | 总览「系统层读数（PULSE · 本机）」面板：4 头条 + 15 指标全表 + 采集健康行；量纲取自 `src/pulse/{collect,counters}.ts` | ✅ §E13 |
+| PULSE 采样曲线 | 曲线视图数据源切换（NEXUS 轮次 / PULSE 采样）+ 指标下拉 + `/pulse/series?windowMs=3600000&maxPoints=240` | ✅ §E13 |
+| 视图错误隔离 | `ViewBoundary`（类组件）：单视图抛错只替换该视图并显示错误原文 + 重试 | ✅ §E13 |
+| **视图必须渲染为元素** | 禁 `CurveView({...})` 直调——子组件 hooks 会算进父组件，切视图即 hooks 数量变化 → 整页渲染失败 | ⚠️ 硬教训，见 §E13 |
 
 ---
 

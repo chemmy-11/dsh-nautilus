@@ -10,7 +10,7 @@
  *   · INFER 层：Phase 2a 才落库（TTFT/provider）——当前所有视图显示缺席态，不编造、不写 0 假读数
  * 空数据是正常态（本阶段允许）。
  */
-import { createElement, useEffect, useState, type ReactNode } from 'react'
+import { Component, createElement, useEffect, useState, type ReactNode } from 'react'
 
 export const WORKBENCH_ID = 'nautilus-workbench'
 
@@ -70,6 +70,7 @@ const CSS_LINES = [
   '.nt-report .gate{margin-top:14px;border:1px solid var(--nt-accent,#e6321e);padding:10px 12px;font-size:11px;display:flex;gap:10px;align-items:center}',
   '.nt-btn{border:1px solid var(--nt-border2,#c8c8c3);background:transparent;color:var(--nt-text,#101010);font-size:11px;padding:3px 9px;cursor:pointer;border-radius:2px}',
   '.nt-btn:hover{border-color:var(--nt-text,#101010)}',
+  '.nt-btn.on{border-color:var(--nt-accent,#e6321e);color:var(--nt-accent,#e6321e)}',
   '.nt-select,.nt-input{border:1px solid var(--nt-border2,#c8c8c3);background:var(--nt-panel,#fff);color:var(--nt-text,#101010);font-size:11px;padding:3px 6px;border-radius:2px}',
 ]
 
@@ -118,10 +119,15 @@ export function useJson<T>(url: string, paused: boolean, intervalMs = 120000, no
 
 // ── 数据面类型（只取用到的字段）─────────────────────────────────────────────────
 
+/** 单条最新采样（pulse store latest() 的行形状 + 路由 tags 解码结果）。 */
+export type PulsePoint = { metric: string; value: number | null; ts: number; tags: unknown }
+/** 单指标序列（pulse store series()：桶均值 + 桶内样本数）。 */
+export type PulseSeries = { metric: string; from: number; to: number; windowMs: number; maxPoints: number; bucketMs: number; points: Array<{ ts: number; value: number; n: number }> }
+
 export type PulseState = {
   collector: { ticks: number; lastTickTs: number | null; countersOk: boolean; gpuOk: boolean; shellPath: string | null; execAvailable: boolean; lastError: string | null }
   db: { rows: number; oldestTs: number | null; newestTs: number | null; schemaVersion: number }
-  latest: Array<{ metric: string; value: number | null; ts: number; tags: unknown }>
+  latest: PulsePoint[]
 }
 export type DaySummary = { edits: number; created: number; modified: number; deleted: number }
 export type NexusState = { activeRoot: string; totals: { totalFiles: number; totalChars: number }; today: DaySummary; week: DaySummary; recent: Array<{ ts: number; path: string; kind: string }> }
@@ -161,6 +167,53 @@ export const fmtBytes = (n: number): string => {
 export const fmtTime = (ts: number | null | undefined): string => ts === null || ts === undefined ? '—' : new Date(ts).toLocaleTimeString('zh-CN', { hour12: false })
 export const fmtNum = (n: number | null | undefined, d = 2): string => n === null || n === undefined || !Number.isFinite(n) ? '—' : n.toFixed(d)
 
+/** 指标名 → 中文标签（未知指标原样返回，不猜语义）。 */
+export function metricLabel(metric: string): string {
+  const table: Record<string, string> = {
+    'cpu.utilization': 'CPU 利用率',
+    'cpu.ctx_switches': '上下文切换',
+    'mem.used': '内存占用',
+    'mem.total': '内存总量',
+    'mem.swap.used': '交换区占用',
+    'disk.io_rate': '磁盘吞吐',
+    'disk.queue': '磁盘队列',
+    'net.io_rate': '网络吞吐',
+    'proc.dsh.rss': '宿主进程 RSS',
+    'proc.dsh.cpu': '宿主进程 CPU',
+    'gpu.util': 'GPU 利用率',
+    'gpu.mem.used': '显存占用',
+    'gpu.mem.total': '显存总量',
+    'gpu.temp': 'GPU 温度',
+    'gpu.power': 'GPU 功耗',
+  }
+  const m = metric.replace(/^pulse[.]/, '')
+  return table[m] ?? m
+}
+
+/** 指标名 → 分组（用于分组呈现与排序）。 */
+export function metricGroup(metric: string): string {
+  const m = metric.replace(/^pulse[.]/, '')
+  const head = m.slice(0, m.indexOf('.'))
+  const groups: Record<string, string> = { cpu: 'CPU', mem: '内存', disk: '磁盘', net: '网络', proc: '进程', gpu: 'GPU' }
+  return groups[head] ?? '其他'
+}
+
+/** 值 → 带量纲字符串。量纲逐个取自 src/pulse/collect.ts 与 src/pulse/counters.ts 的构造点；未知指标不猜，原样加标注。 */
+export function fmtMetricValue(metric: string, v: number | null | undefined): string {
+  if (v === null || v === undefined || !Number.isFinite(v)) return '—'
+  const m = metric.replace(/^pulse[.]/, '')
+  if (m === 'gpu.util') return v.toFixed(0) + '%'
+  if (m === 'cpu.utilization' || m === 'proc.dsh.cpu') return (v * 100).toFixed(1) + '%'
+  if (m === 'gpu.mem.used' || m === 'gpu.mem.total') return v.toFixed(0) + ' MiB'
+  if (m === 'gpu.temp') return v.toFixed(0) + ' °C'
+  if (m === 'gpu.power') return v.toFixed(1) + ' W'
+  if (m === 'cpu.ctx_switches') return v.toFixed(0) + ' /s'
+  if (m === 'disk.queue') return v.toFixed(0)
+  if (m === 'disk.io_rate' || m === 'net.io_rate') return fmtBytes(v) + '/s'
+  if (m === 'mem.used' || m === 'mem.total' || m === 'mem.swap.used' || m === 'proc.dsh.rss') return fmtBytes(v)
+  return String(v) + '（量纲未知）'
+}
+
 // ── 公共组件（§4）──────────────────────────────────────────────────────────
 
 export function Stat(props: { layer: string; label: string; value: string; note?: string; warn?: boolean }): ReactNode {
@@ -181,6 +234,31 @@ export function Panel(props: { title: string; fig?: string; note?: string; child
 }
 
 export function Empty(props: { text: string }): ReactNode { return createElement('div', { className: 'nt-empty' }, props.text) }
+
+/**
+ * 视图错误隔离：单个视图渲染抛错时只替换该视图，其余视图与 era 条照常可用。
+ * 教训（2026-09-13 端上实测）：视图组件若被当普通函数调用，hooks 会算进父组件，
+ * 切视图时 hooks 数量变化 → React 抛错 → **整页白屏**，症状是「按钮点了没反应」。
+ */
+export class ViewBoundary extends Component<{ label?: string; children?: ReactNode }, { error: string | null }> {
+  constructor(props: { label?: string; children?: ReactNode }) {
+    super(props)
+    this.state = { error: null }
+  }
+  static getDerivedStateFromError(err: unknown): { error: string } { return { error: String(err) } }
+  render(): ReactNode {
+    if (this.state.error !== null) {
+      return createElement('div', { className: 'nt-panel' },
+        createElement('h4', null, '视图渲染失败 · ' + String(this.props.label ?? '')),
+        createElement('div', { className: 'body' },
+          createElement('p', { className: 'nt-note' }, '该视图渲染时抛错，已隔离——其它视图与数据不受影响。错误原文：' + this.state.error),
+          createElement('button', { className: 'nt-btn', onClick: () => this.setState({ error: null }) }, '重试渲染'),
+        ),
+      )
+    }
+    return this.props.children
+  }
+}
 
 /** 单层曲线（SVG 自绘；点数不足 2 → 空态）。 */
 export function Spark(props: { points: Array<{ x: number; y: number | null }>; h?: number; threshold?: number; label?: string }): ReactNode {
@@ -229,6 +307,10 @@ export function OverviewView(props: { nexus: NexusState | null; m2: M2State | nu
     { layer: 'SELF', label: '自评覆盖率', value: m2 === null ? '—' : String(m2.selfcheck.checked) + ' / ' + String(m2.selfcheck.total), note: '每轮 record_turn_selfcheck 落盘比例' },
   ]
   const recent = m2?.recent ?? []
+  const latest = pulse?.latest ?? []
+  const HEADLINE = ['pulse.cpu.utilization', 'pulse.mem.used', 'pulse.gpu.util', 'pulse.proc.dsh.rss']
+  const headline = HEADLINE.map((name) => latest.find((l) => l.metric === name)).filter((x): x is PulsePoint => x !== undefined)
+  const sorted = latest.slice().sort((a, b) => (metricGroup(a.metric) + a.metric).localeCompare(metricGroup(b.metric) + b.metric, 'zh-Hans-CN'))
   return createElement('div', null,
     createElement('div', { className: 'nt-note', style: { marginTop: 0 } },
       '读数为观测所得，非评价：本面板只呈现「发生了什么」。三层齐备前（INFER 缺席），任何跨层结论都只能用「对照」措辞。'),
@@ -252,6 +334,28 @@ export function OverviewView(props: { nexus: NexusState | null; m2: M2State | nu
             createElement('td', null, fmtNum(p.tps, 1)),
           )))),
     }),
+    Panel({
+      title: '系统层读数（PULSE · 本机）', fig: 'FIG.07',
+      note: '量纲取自 src/pulse/{collect,counters}.ts 的构造点：utilization / proc.cpu 是「占单核比」已换算为百分比，io_rate 为字节/秒，gpu.mem 为 MiB，temp/power 为 °C/W。本机读数与云端缓存之间在 era=api 下没有因果通路——此处只作对照，不作归因。',
+      children: latest.length === 0
+        ? Empty({ text: pulse === null ? 'PULSE 层缺席：宿主内子插件未挂载或接口不可达' : '尚无采样——等待采集器首个 tick' })
+        : createElement('div', null,
+          headline.length > 0
+            ? createElement('div', { className: 'nt-wb-grid' }, ...headline.map((m) => Stat({ layer: 'PULSE', label: metricLabel(m.metric), value: fmtMetricValue(m.metric, m.value), note: metricGroup(m.metric) + ' · ' + fmtTime(m.ts) })))
+            : null,
+          createElement('table', { className: 'nt-tbl', style: { marginTop: 10 } },
+            createElement('thead', null, createElement('tr', null,
+              ...['指标', '分组', '最新值', '采样时刻'].map((h) => createElement('th', { key: h }, h)))),
+            createElement('tbody', null, ...sorted.map((m) => createElement('tr', { key: m.metric },
+              createElement('td', null, metricLabel(m.metric)),
+              createElement('td', null, createElement('span', { className: 'nt-tag' }, metricGroup(m.metric))),
+              createElement('td', null, fmtMetricValue(m.metric, m.value)),
+              createElement('td', null, fmtTime(m.ts)),
+            )))),
+          createElement('p', { className: 'nt-note' },
+            '采集健康：tick ' + String(pulse?.collector.ticks ?? 0) + ' · 库内 ' + String(pulse?.db.rows ?? 0) + ' 行 ' + String(latest.length) + ' 指标 · shell=' + String(pulse?.collector.shellPath ?? '无') + ' · 计数器 ' + (pulse?.collector.countersOk === true ? '正常' : '不可用') + ' · GPU ' + (pulse?.collector.gpuOk === true ? '正常' : '不可用') + ' · 助手重启 ' + String(pulse?.collector.countersRestarts ?? 0) + ' 次' + (pulse?.collector.lastError === null || pulse?.collector.lastError === undefined ? '' : ' · 最近错误：' + pulse.collector.lastError)),
+        ),
+    }),
   )
 }
 
@@ -269,27 +373,54 @@ export function curveValue(p: M2Point, key: CurveKey): number | null {
 export function curveUnit(key: CurveKey): string { return key === 'miss' ? '%' : key === 'ms' ? 'ms' : 'tok/s' }
 export function curveLabel(key: CurveKey): string { return key === 'miss' ? '未命中率' : key === 'ms' ? '每轮时长' : '解码速度' }
 
-export function CurveView(props: { m2: M2State | null; era: Era }): ReactNode {
+export function CurveView(props: { m2: M2State | null; era: Era; pulse: PulseState | null }): ReactNode {
   const [key, setKey] = useState<CurveKey>('miss')
   const [scope, setScope] = useState<string>('all')
+  // 数据源：NEXUS 轮次（事件驱动，非等间隔）/ PULSE 采样（等间隔，斜率可读）
+  const [source, setSource] = useState<'nexus' | 'pulse'>('nexus')
+  const metrics = (props.pulse?.latest ?? []).map((l) => l.metric)
+  const [picked, setPicked] = useState<string>('')
+  const metric = picked !== '' && metrics.includes(picked) ? picked : (metrics[0] ?? '')
+  const series = useJson<PulseSeries>('/api/nexus/pulse/series?metric=' + encodeURIComponent(metric) + '&windowMs=3600000&maxPoints=240', metric === '' || source !== 'pulse', 60000)
   const curve = props.m2?.curve ?? []
   const sessions = Array.from(new Set(curve.map((p) => p.session)))
   const scoped = scope === 'all' ? curve : curve.filter((p) => p.session === scope)
   const pts = scoped.map((p) => ({ x: p.ts, y: curveValue(p, key) }))
   const scaled = key === 'miss' ? pts.map((p) => ({ x: p.x, y: p.y === null ? null : p.y * 100 })) : pts
   const threshold = key === 'miss' ? 50 : undefined
+  const pulsePts = (series?.points ?? []).map((p) => ({ x: p.ts, y: p.value }))
   return createElement('div', null,
     createElement('div', { className: 'nt-wb-seg', style: { marginBottom: 10 } },
-      ...(['miss', 'ms', 'tps'] as CurveKey[]).map((k) => createElement('button', { key: k, className: k === key ? 'on' : '', onClick: () => setKey(k) }, curveLabel(k))),
-      createElement('span', { style: { width: 12 } }),
-      createElement('button', { className: scope === 'all' ? 'on' : '', onClick: () => setScope('all') }, '全会话'),
-      ...sessions.slice(0, 6).map((s) => createElement('button', { key: s, className: s === scope ? 'on' : '', onClick: () => setScope(s) }, s.slice(0, 8))),
+      createElement('button', { className: source === 'nexus' ? 'on' : '', onClick: () => setSource('nexus') }, 'NEXUS 轮次'),
+      createElement('button', { className: source === 'pulse' ? 'on' : '', onClick: () => setSource('pulse') }, 'PULSE 采样'),
     ),
-    Panel({
-      title: curveLabel(key) + ' 时序曲线', fig: 'FIG.02',
-      note: '时间轴为记录时间戳（非等间隔）：轮次并非均匀采样，曲线的斜率不代表速率；阈值线 ' + (threshold === undefined ? '本指标不设阈值' : String(threshold) + curveUnit(key) + ' 为参考线') + '。',
-      children: Spark({ points: scaled, threshold, label: curveLabel(key) }),
-    }),
+    source === 'nexus'
+      ? createElement('div', null,
+        createElement('div', { className: 'nt-wb-seg', style: { marginBottom: 10 } },
+          ...(['miss', 'ms', 'tps'] as CurveKey[]).map((k) => createElement('button', { key: k, className: k === key ? 'on' : '', onClick: () => setKey(k) }, curveLabel(k))),
+          createElement('span', { style: { width: 12 } }),
+          createElement('button', { className: scope === 'all' ? 'on' : '', onClick: () => setScope('all') }, '全会话'),
+          ...sessions.slice(0, 6).map((s) => createElement('button', { key: s, className: s === scope ? 'on' : '', onClick: () => setScope(s) }, s.slice(0, 8))),
+        ),
+        Panel({
+          title: curveLabel(key) + ' 时序曲线', fig: 'FIG.02',
+          note: '时间轴为记录时间戳（非等间隔）：轮次并非均匀采样，曲线的斜率不代表速率；阈值线 ' + (threshold === undefined ? '本指标不设阈值' : String(threshold) + curveUnit(key) + ' 为参考线') + '。',
+          children: Spark({ points: scaled, threshold, label: curveLabel(key) }),
+        }),
+      )
+      : createElement('div', null,
+        createElement('div', { className: 'nt-wb-seg', style: { marginBottom: 10 } },
+          createElement('select', { className: 'nt-select', value: metric, onChange: (e: { target: { value: string } }) => setPicked(e.target.value) },
+            ...metrics.map((m) => createElement('option', { key: m, value: m }, metricLabel(m) + '（' + metricGroup(m) + '）'))),
+        ),
+        Panel({
+          title: '本机采样曲线 · ' + (metric === '' ? '无指标' : metricLabel(metric)), fig: 'FIG.02',
+          note: 'PULSE 是等间隔采样（默认 5 s 一采，桶均值聚合到最多 240 点）：与 NEXUS 轮次曲线不同，这里的时间轴均匀，斜率可读。窗口 1 小时；每 60 s 刷新一次。',
+          children: metrics.length === 0
+            ? Empty({ text: 'PULSE 层缺席：无指标可选（宿主内子插件未挂载）' })
+            : Spark({ points: pulsePts, label: metricLabel(metric) }),
+        }),
+      ),
     Panel({
       title: '三层同窗对齐', fig: 'FIG.03',
       note: 'PULSE 采样间隔与 NEXUS 轮次不同步，当前只能做「邻近对照」，不能做同窗归因——跨越这条线的任何结论都必须降级为对照措辞。',
@@ -541,7 +672,8 @@ export type ViewKey = 'overview' | 'curve' | 'hypotheses' | 'prophecy' | 'report
 export const VIEW_LABEL: Record<ViewKey, string> = { overview: '总览', curve: '曲线', hypotheses: '假设', prophecy: '预言', report: '报告' }
 export const WORKBENCH_LABEL = 'Nautilus 工作台'
 
-export function Workbench(): ReactNode {
+/** 工作台根组件。onExitToConversation 由宿主半区注入（ctx.layout.selectPanel(null)），用于回到会话。 */
+export function Workbench(props: { onExitToConversation?: () => void } = {}): ReactNode {
   injectWorkbenchStyle()
   const [view, setView] = useState<ViewKey>('overview')
   const [drawer, setDrawer] = useState<DrawerTarget | null>(null)
@@ -560,13 +692,18 @@ export function Workbench(): ReactNode {
   }, [toast])
   const point = drawer === null || m2 === null ? null : (m2.curve.concat(m2.recent).find((p) => p.session === drawer.session && p.turn === drawer.turn) ?? null)
   const ok = (v: unknown): string => (v === null ? '缺席' : '在场')
-  const body = view === 'overview' ? OverviewView({ nexus, m2, pulse, onOpenTurn: (s, t) => setDrawer({ session: s, turn: t }) })
-    : view === 'curve' ? CurveView({ m2, era })
-    : view === 'hypotheses' ? HypothesesView({ m2, ann, onProphecy: (id) => { setView('prophecy'); setToast('已跳到预言标注：' + id) } })
-    : view === 'prophecy' ? ProphecyView({ ann, m2, toast: setToast, reload: () => setNonce((v) => v + 1) })
-    : ReportView({ nexus, m2, pulse, era, ann })
+  // 用 createElement 渲染视图组件（**不可**写成 OverviewView({...}) 直接调用）：
+  // 直接调用会把子组件的 hooks 算进父组件，切换视图时 hooks 数量变化 → React 抛错、整页渲染失败。
+  const body = view === 'overview' ? createElement(OverviewView, { nexus, m2, pulse, onOpenTurn: (s: string, t: number) => setDrawer({ session: s, turn: t }) })
+    : view === 'curve' ? createElement(CurveView, { m2, era, pulse })
+    : view === 'hypotheses' ? createElement(HypothesesView, { m2, ann, onProphecy: (id: string) => { setView('prophecy'); setToast('已跳到预言标注：' + id) } })
+    : view === 'prophecy' ? createElement(ProphecyView, { ann, m2, toast: setToast, reload: () => setNonce((v) => v + 1) })
+    : createElement(ReportView, { nexus, m2, pulse, era, ann })
   return createElement('div', { className: 'nt-wb' },
     createElement('div', { className: 'nt-wb-top' },
+      props.onExitToConversation !== undefined
+        ? createElement('button', { className: 'nt-btn', style: { marginRight: 2 }, onClick: () => { if (props.onExitToConversation !== undefined) props.onExitToConversation() } }, '← 返回会话')
+        : null,
       createElement('div', { className: 'nt-wb-brand' }, 'NAUTILUS', createElement('small', null, 'Observation Workbench')),
       createElement('div', { className: 'nt-wb-seg' }, ...(['overview', 'curve', 'hypotheses', 'prophecy', 'report'] as ViewKey[]).map((k) => createElement('button', { key: k, className: k === view ? 'on' : '', onClick: () => setView(k) }, VIEW_LABEL[k]))),
       createElement('div', { className: 'nt-wb-right' },
@@ -579,12 +716,12 @@ export function Workbench(): ReactNode {
       createElement('span', { className: 'badge' }, 'ERA · ' + era.toUpperCase()),
       createElement('span', null, '措辞档位：' + eraWord(era) + '（' + (era === 'api' ? '弱因果' : '强因果') + '）'),
       createElement('span', { style: { marginLeft: 'auto', display: 'flex', gap: 6 } },
-        createElement('button', { className: 'nt-btn' + (era === 'api' ? '' : ''), onClick: () => setEra('api') }, 'api 对照'),
-        createElement('button', { className: 'nt-btn', onClick: () => setEra('local') }, 'local 归因'),
+        createElement('button', { className: 'nt-btn' + (era === 'api' ? ' on' : ''), onClick: () => setEra('api') }, 'api 对照'),
+        createElement('button', { className: 'nt-btn' + (era === 'local' ? ' on' : ''), onClick: () => setEra('local') }, 'local 归因'),
       ),
     ),
-    createElement('div', { className: 'nt-wb-body' }, body),
-    drawer !== null ? Drawer({ target: drawer, point, onClose: () => setDrawer(null) }) : null,
+    createElement('div', { className: 'nt-wb-body' }, createElement(ViewBoundary, { key: view, label: VIEW_LABEL[view] }, body)),
+    drawer !== null ? createElement(Drawer, { target: drawer, point, onClose: () => setDrawer(null) }) : null,
     toast !== null ? createElement('div', { className: 'nt-toast' }, toast) : null,
   )
 }
