@@ -45,6 +45,7 @@
 | 路径 | 构建由谁触发 | 说明 |
 |---|---|---|
 | 本地开发 | `npm run build` | **始终构建**；构建链纯 Node（`scripts/prepare.mjs` + `scripts/build-client.mjs`） |
+| 本地 dev 循环（装进 profile 后） | `npm run build` + 重跑 `dsh plugin --profile web add file:<仓库路径>` | profile 里是**安装副本**（非符号链接），重建仓库产物**不会**回流到 profile；重跑一次 add（实测 1.8 s）刷新副本，再重启宿主。宿主**启动中**时它只加载启动那一刻的产物 |
 | **git 安装**（`dsh plugin add github:chemmy-11/dsh-nautilus`） | `prepare`（条件）+ `prepack` | 实测（pnpm 11.24）：pnpm 对 git 依赖**两个钩子都会跑**；真正构建的是 `prepack`，条件 `prepare`（`--if-dependency`）在被安装的副本（无 `.git`）里也构建、本地检出跳过，并让 allowBuilds 门**响亮报错**而非静默跳过。构建必须自包含，不得依赖旁边的 monorepo / 项目引用 |
 | npm / tarball | `prepack`（`npm pack` / `publish` 前） | 无条件构建，产物随 tarball 分发 |
 
