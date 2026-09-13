@@ -14,6 +14,9 @@ import { missRateOf, smoothedMissRate, detectBurst, estimateTauE, analyzeSession
 import { processSelfCheck, buildSelfCheckTool } from '../lib/selfcheck.js'
 import { openStore } from '../lib/store.js'
 import { scanVault } from '../lib/scan.js'
+import { DatabaseSync } from 'node:sqlite'
+import { cpuTimes, cpuUtilization, parseCounters, parseNvidiaSmi, collectLocal } from '../lib/pulse/collect.js'
+import { openPulseStore } from '../lib/pulse/store.js'
 
 // ── analysis.ts ───────────────────────────────────────────────────────────────
 
@@ -190,3 +193,95 @@ test('scanVault: 基线创建 → 未变跳过（R4）→ 改动更新', async (
     rmSync(tmp, { recursive: true, force: true })
   }
 })
+
+// ── pulse（OS 层）：采集纯函数 ────────────────────────────────────────────────
+
+test('cpuUtilization: 差值算使用率；零增量/回绕 → null（缺席而非 0）', () => {
+  const a = { user: 100, nice: 0, sys: 100, idle: 800, irq: 0 }
+  const b = { user: 150, nice: 0, sys: 150, idle: 900, irq: 0 } // busy 100 / idle 100 → 0.5
+  assert.equal(cpuUtilization(a, b), 0.5)
+  assert.equal(cpuUtilization(a, a), null)
+  assert.equal(cpuUtilization(b, a), null)
+})
+
+test('parseCounters: 合法 JSON 映射（字符串数字 + MiB→bytes）；空/非法/全缺 → null', () => {
+  const ok = parseCounters(JSON.stringify({ ctxSwitchesPerSec: '43001', diskBytesPerSec: 24855079, diskQueueLength: 0, netBytesPerSec: 1102, pageFileUsedMiB: 2 }))
+  assert.equal(ok.ctxSwitchesPerSec, 43001)
+  assert.equal(ok.diskQueueLength, 0)
+  assert.equal(ok.pageFileUsedBytes, 2 * 1024 * 1024)
+  assert.equal(parseCounters(''), null)
+  assert.equal(parseCounters('not json'), null)
+  assert.equal(parseCounters(JSON.stringify({ unrelated: 1 })), null)
+})
+
+test('parseNvidiaSmi: CSV 解析（N/A → null）；垃圾行跳过；空输出 → []', () => {
+  const out = parseNvidiaSmi('0, NVIDIA GeForce RTX 5060 Laptop GPU, 8, 1503, 8151, 64, 24.67\n1, Fake, N/A, N/A, N/A, N/A, N/A\n')
+  assert.equal(out.length, 2)
+  assert.deepEqual(
+    { index: out[0].index, util: out[0].util, memUsedMiB: out[0].memUsedMiB, powerW: out[0].powerW },
+    { index: 0, util: 8, memUsedMiB: 1503, powerW: 24.67 },
+  )
+  assert.equal(out[1].util, null)
+  assert.equal(parseNvidiaSmi('garbage line without commas').length, 0)
+  assert.equal(parseNvidiaSmi('').length, 0)
+})
+
+test('collectLocal: 首轮无 CPU 使用率；进程级 CPU 按单核分数口径', () => {
+  const t = cpuTimes()
+  const first = collectLocal(null, t, { user: 0, system: 0 }, 5000, 12345)
+  assert.deepEqual(first.map((s) => s.metric), ['pulse.mem.used', 'pulse.mem.total', 'pulse.proc.dsh.rss', 'pulse.proc.dsh.cpu'])
+  const prev = { user: t.user - 100, nice: t.nice, sys: t.sys - 100, idle: t.idle - 800, irq: t.irq }
+  const second = collectLocal(prev, t, { user: 5000, system: 5000 }, 5000, 12345)
+  assert.ok(second.some((s) => s.metric === 'pulse.cpu.utilization'))
+  assert.equal(second.find((s) => s.metric === 'pulse.proc.dsh.cpu').value, 10000 / 1000 / 5000)
+})
+
+// ── pulse（OS 层）：存储与迁移 ──────────────────────────────────────────────
+
+test('PulseStore: 全新库只建表不抢版本；v3 库推进到 v4 且幂等', () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'pulse-store-'))
+  try {
+    const fresh = join(tmp, 'fresh.db')
+    const s1 = openPulseStore(fresh)
+    assert.equal(s1.schemaVersion(), 0)
+    s1.close()
+    const s1b = openPulseStore(fresh)
+    assert.equal(s1b.schemaVersion(), 0)
+    s1b.insert(1000, 'pulse', [{ metric: 'pulse.cpu.utilization', value: 0.5, tags: { host: 'h' } }])
+    assert.equal(s1b.status().rows, 1)
+    s1b.close()
+
+    const v3 = join(tmp, 'v3.db')
+    const raw = new DatabaseSync(v3)
+    raw.exec('PRAGMA user_version = 3')
+    raw.close()
+    const s2 = openPulseStore(v3)
+    assert.equal(s2.schemaVersion(), 4)
+    s2.close()
+    const s3 = openPulseStore(v3)
+    assert.equal(s3.schemaVersion(), 4)
+    s3.close()
+    // Windows：SQLite 关闭后 wal/shm 可能被短暂占用 → 带重试清理
+  } finally { rmSync(tmp, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }) }
+})
+
+test('PulseStore: insert/latest/series 桶均值/prune 保留', () => {
+  // 用内存库：同一套 SQL，避开 Windows 上「语句未 GC → 文件句柄滞留」的清理竞态
+  {
+    const store = openPulseStore(':memory:')
+    store.insert(1000, 'pulse', [{ metric: 'm', value: 1, tags: {} }, { metric: 'm2', value: 10, tags: {} }])
+    store.insert(2000, 'pulse', [{ metric: 'm', value: 3, tags: {} }])
+    store.insert(9000, 'pulse', [{ metric: 'm', value: 5, tags: {} }])
+    const latest = store.latest().filter((r) => r.metric === 'm')
+    assert.equal(latest.length, 1)
+    assert.equal(latest[0].value, 5)
+    const series = store.series('m', 0, 10000, 2)
+    assert.equal(series.length, 2)
+    assert.equal(series[0].value, 2)
+    assert.equal(series[1].value, 5)
+    assert.equal(store.prune(5000), 3) // ts<5000 的三行：m@1000、m2@1000、m@2000
+    assert.equal(store.status().rows, 1)
+    store.close()
+  }
+})
+
