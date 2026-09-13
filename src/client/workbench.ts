@@ -453,7 +453,9 @@ export function CurveChart(props: {
   }, [drag, n])
   if (n < 2) return Empty({ text: '暂无数据' })
   const W = Math.max(560, cw)
-  const [a, b] = win
+  // 渲染期钳制窗口：切档/数据刷新后点数骤减时，effect 复位前的这一帧里旧 win 会越界（base[b] undefined 崩溃）
+  const a = Math.max(0, Math.min(win[0], n - 2))
+  const b = Math.max(a + 1, Math.min(win[1], n - 1))
   const hv = hover !== null && hover >= a && hover <= b ? hover : null
   const plotW = W - padL - padR
   const sx = (gi: number): number => padL + ((gi - a) / Math.max(1, b - a)) * plotW
@@ -766,18 +768,27 @@ export function CurveView(props: {
     const my = props.m2?.sessionMeta[y]?.startTs ?? 0
     return my - mx
   })
-  const scopeLabel = (sid: string): string => {
+  // 会话显示名 =「工作区目录名 · 会话标题」——两者都有才拼接，缺一回退（cwd 缺 → 标题/短 id）
+  const trunc = (s: string, n: number): string => (s.length > n ? s.slice(0, n) + '…' : s)
+  const sessionDisplay = (sid: string): { ws: string; title: string } => {
     const info = props.sessionNameOf?.(sid) ?? null
-    if (info !== null && info.name !== '') return info.name
+    const title = info?.title ?? ''
+    if (info === null || info.name === '') return { ws: title === '' ? sid.slice(0, 10) : '', title: title === '' ? '' : title }
+    return { ws: info.name, title }
+  }
+  const displayName = (sid: string): string => {
+    const d = sessionDisplay(sid)
+    if (d.ws === '') return d.title
+    return d.title === '' ? d.ws : d.ws + ' · ' + trunc(d.title, 28)
+  }
+  const scopeLabel = (sid: string): string => {
     const meta = props.m2?.sessionMeta[sid]
-    return (info?.title ?? '') + '（' + fmtDayTime(meta?.startTs) + '）'
+    return displayName(sid) + '（' + fmtDayTime(meta?.startTs) + '）'
   }
   const tipOf = (m: M2Point): { head: string; lines: string[] } => {
-    const info = props.sessionNameOf?.(m.session) ?? null
-    const nm = info === null || info.name === '' ? m.session.slice(0, 10) : info.name
     const mr = curveValue(m, 'miss')
     return {
-      head: fmtDayTime(m.ts) + ' · turn ' + String(m.turn) + ' · ' + nm,
+      head: fmtDayTime(m.ts) + ' · turn ' + String(m.turn) + ' · ' + displayName(m.session),
       lines: [
         '输入(未命中) ' + String(m.tokenIn) + ' · 缓存读 ' + String(m.cacheRead) + ' · 输出 ' + String(m.tokenOut),
         '未命中率 ' + (mr === null ? '—' : (mr * 100).toFixed(1) + '%') + ' · TPS ' + fmtNum(m.tps, 1) + ' · 时长 ' + (m.durationMs === null ? '—' : String(Math.round(m.durationMs)) + ' ms'),
@@ -798,16 +809,13 @@ export function CurveView(props: {
         createElement('div', { className: 'row' + (scope === 'all' ? ' on' : ''), onClick: () => { setScope('all'); setPickOpen(false) } },
           createElement('div', { className: 'nm' }, '全部会话'),
           createElement('div', { className: 'mt' }, String(sessions.length) + ' 个会话 · ' + String(curve.length) + ' 轮')),
-        ...sortedSessions.map((s) => {
-          const meta = props.m2?.sessionMeta[s]
-          const info = props.sessionNameOf?.(s) ?? null
-          const nm = info === null || info.name === '' ? s.slice(0, 10) : info.name
-          const title = info?.title ?? ''
-          return createElement('div', { key: s, className: 'row' + (scope === s ? ' on' : ''), onClick: () => { setScope(s); setPickOpen(false) } },
-            createElement('div', { className: 'nm' }, nm),
-            createElement('div', { className: 'mt' }, fmtDayTime(meta?.startTs) + ' · ' + String(meta?.turns ?? '—') + ' 轮' + (title !== '' && title !== nm ? ' · ' + title.slice(0, 26) : '')),
-          )
-        }),
+                ...sortedSessions.map((s) => {
+                  const meta = props.m2?.sessionMeta[s]
+                  return createElement('div', { key: s, className: 'row' + (scope === s ? ' on' : ''), onClick: () => { setScope(s); setPickOpen(false) } },
+                    createElement('div', { className: 'nm' }, displayName(s)),
+                    createElement('div', { className: 'mt' }, fmtDayTime(meta?.startTs) + ' · ' + String(meta?.turns ?? '—') + ' 轮 · ' + s.slice(0, 10)),
+                  )
+                }),
       )
       : null,
   )
