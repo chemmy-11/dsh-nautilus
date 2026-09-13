@@ -1,7 +1,7 @@
 /**
  * @dsh-external/dsh-nexus — client panels (conversation.view tabs, official contract).
- * M3-UI: 主题令牌化（--dsw-alias-*）+ 卡片化布局 + 图表升级（网格/渐变/分色/图例）+ 交互增补。
- * 零新依赖：样式经组件内 <style> 注入（一次性，class 前缀 xg-）；SVG 自绘。
+ * M3-UI: 主题令牌化（--nt-* 层，默认映射 --dsw-alias-*，U1 起——映射表见 docs/2-dev/nautilus-dev-02-ui-workbench.md §2）+ 卡片化布局 + 图表升级（网格/渐变/分色/图例）+ 交互增补。
+ * 零新依赖：样式经组件内 <style> 注入（一次性，class 前缀 nt-）；SVG 自绘。
  *
  * dsh 0.1.5-rc.1 客户端入口契约（本文件据此核对）：
  *  - 客户端插件就是普通 Cordis 插件（Context 来自 @deepseek-ai/cordis；@deepseek-ai/dsh-client-runtime 已移除）；
@@ -98,56 +98,75 @@ const METRIC_LABEL: Record<string, string> = { miss: '未命中率', tps: 'TPS',
 
 // ── 样式（主题令牌；零硬编码色） ───────────────────────────────────────────────
 
-const STYLE_ID = 'xg-theme-style'
+const STYLE_ID = 'nt-theme-style'
+/* U1 令牌层（docs/2-dev/nautilus-dev-02-ui-workbench.md §2.1）：面板样式只取 --nt-*。
+   --nt-* 默认值 = var(--dsw-alias-*, fallback)——宿主令牌优先，随宿主亮暗主题切换组件零改动；
+   fallback 为 S4 浅色纸面值，仅宿主令牌缺席时兜底。唯一静态色：--nt-accent 朱红（S4 唯一颜色主张）。 */
 const STYLE = `
-.xg-cards { display:flex; flex-direction:column; gap:12px; padding:12px; font-family:var(--dsw-font-family); }
-.xg-card { border:1px solid var(--dsw-alias-border-l2); border-radius:10px; background:var(--dsw-alias-bg-layer-2); box-shadow:var(--dsw-shadow-lv2); overflow:hidden; }
-.xg-card-head { padding:7px 14px; font:var(--dsw-font-xs-strong-13); color:var(--dsw-alias-label-secondary); border-bottom:1px solid var(--dsw-alias-border-l2); display:flex; justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap; }
-.xg-card-body { padding:10px 14px; }
-.xg-num { font-size:22px; font-weight:600; color:var(--dsw-alias-label-primary); font-family:var(--dsw-font-family); line-height:1.1; }
-.xg-label { font:var(--dsw-font-xxs-12); color:var(--dsw-alias-label-tertiary); }
-.xg-row { display:flex; gap:20px; flex-wrap:wrap; }
-.xg-kv { display:flex; flex-direction:column; gap:2px; }
-.xg-list { display:flex; flex-direction:column; gap:4px; font:var(--dsw-font-xxs-12); color:var(--dsw-alias-label-secondary); }
-.xg-path { font-family:Consolas,Menlo,monospace; color:var(--dsw-alias-label-secondary); word-break:break-all; }
-.xg-badge { padding:1px 8px; border-radius:99px; font-size:11px; white-space:nowrap; }
-.xg-badge-modified { background:var(--dsw-alias-state-business-tertiary); color:var(--dsw-alias-state-business-primary); }
-.xg-badge-created { background:var(--dsw-alias-state-success-tertiary); color:var(--dsw-alias-state-success-primary); }
-.xg-badge-deleted { background:var(--dsw-alias-state-warn-tertiary); color:var(--dsw-alias-state-warn-label); }
-.xg-btn { border:1px solid var(--dsw-alias-border-l2); background:transparent; color:var(--dsw-alias-label-secondary); border-radius:6px; padding:2px 10px; font:var(--dsw-font-xxs-12); cursor:pointer; }
-.xg-btn:hover { background:var(--dsw-alias-interactive-bg-hover); color:var(--dsw-alias-label-primary); }
-.xg-btn-active { border-color:var(--dsw-alias-state-business-primary); color:var(--dsw-alias-state-business-primary); }
-.xg-btn:disabled { opacity:.45; cursor:default; }
-.xg-select { background:var(--dsw-alias-bg-layer-1); color:var(--dsw-alias-label-primary); border:1px solid var(--dsw-alias-border-l2); border-radius:6px; padding:2px 6px; font:var(--dsw-font-xxs-12); }
-.xg-input { background:var(--dsw-alias-bg-layer-1); color:var(--dsw-alias-label-primary); border:1px solid var(--dsw-alias-border-l2); border-radius:6px; padding:2px 6px; font:var(--dsw-font-xxs-12); min-width:180px; }
-.xg-table { width:100%; border-collapse:collapse; font:var(--dsw-font-xxs-12); }
-.xg-table td { padding:5px 8px; border-bottom:1px solid var(--dsw-alias-border-l1); color:var(--dsw-alias-label-secondary); vertical-align:middle; }
-.xg-tooltip { position:absolute; background:var(--dsw-alias-bg-layer-3); border:1px solid var(--dsw-alias-border-l2); border-radius:8px; box-shadow:var(--dsw-shadow-lv3); padding:8px 10px; font:var(--dsw-font-xxs-12); color:var(--dsw-alias-label-primary); z-index:5; pointer-events:none; white-space:pre-wrap; }
-.xg-empty { padding:10px 0; font:var(--dsw-font-xxs-12); color:var(--dsw-alias-label-tertiary); }
+.nt-cards {
+  --nt-bg: var(--dsw-alias-bg-layer-1, #f2f2f0);
+  --nt-panel: var(--dsw-alias-bg-layer-2, #ffffff);
+  --nt-panel2: var(--dsw-alias-bg-layer-3, #f7f7f5);
+  --nt-border: var(--dsw-alias-border-l1, #d9d9d5);
+  --nt-border2: var(--dsw-alias-border-l2, #c8c8c3);
+  --nt-text: var(--dsw-alias-label-primary, #101010);
+  --nt-dim: var(--dsw-alias-label-secondary, #5f5f5c);
+  --nt-faint: var(--dsw-alias-label-tertiary, #9a9a95);
+  --nt-ok: var(--dsw-alias-state-success-primary, #1a7f37);
+  --nt-warn: var(--dsw-alias-state-warn-primary, #b42318);
+  --nt-accent: #e6321e;
+  --nt-ink: var(--dsw-alias-label-primary, #101010);
+  --nt-gray: var(--dsw-alias-label-tertiary, #9a9a95);
+  --nt-font: var(--dsw-font-family, 'Helvetica Neue', Helvetica, Arial, 'Segoe UI', 'Microsoft YaHei', sans-serif);
+}
+.nt-cards { display:flex; flex-direction:column; gap:12px; padding:12px; font-family:var(--nt-font); }
+.nt-card { border:1px solid var(--nt-border2); border-radius:10px; background:var(--nt-panel); box-shadow:var(--dsw-shadow-lv2); overflow:hidden; }
+.nt-card-head { padding:7px 14px; font:var(--dsw-font-xs-strong-13); color:var(--nt-dim); border-bottom:1px solid var(--nt-border2); display:flex; justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap; }
+.nt-card-body { padding:10px 14px; }
+.nt-num { font-size:22px; font-weight:600; color:var(--nt-text); font-family:var(--nt-font); line-height:1.1; }
+.nt-label { font:var(--dsw-font-xxs-12); color:var(--nt-faint); }
+.nt-row { display:flex; gap:20px; flex-wrap:wrap; }
+.nt-kv { display:flex; flex-direction:column; gap:2px; }
+.nt-list { display:flex; flex-direction:column; gap:4px; font:var(--dsw-font-xxs-12); color:var(--nt-dim); }
+.nt-path { font-family:Consolas,Menlo,monospace; color:var(--nt-dim); word-break:break-all; }
+.nt-badge { padding:1px 8px; border-radius:99px; font-size:11px; white-space:nowrap; }
+.nt-badge-modified { background:var(--dsw-alias-state-business-tertiary); color:var(--dsw-alias-state-business-primary); }
+.nt-badge-created { background:var(--dsw-alias-state-success-tertiary); color:var(--dsw-alias-state-success-primary); }
+.nt-badge-deleted { background:var(--dsw-alias-state-warn-tertiary); color:var(--dsw-alias-state-warn-label); }
+.nt-btn { border:1px solid var(--nt-border2); background:transparent; color:var(--nt-dim); border-radius:6px; padding:2px 10px; font:var(--dsw-font-xxs-12); cursor:pointer; }
+.nt-btn:hover { background:var(--dsw-alias-interactive-bg-hover); color:var(--nt-text); }
+.nt-btn-active { border-color:var(--dsw-alias-state-business-primary); color:var(--dsw-alias-state-business-primary); }
+.nt-btn:disabled { opacity:.45; cursor:default; }
+.nt-select { background:var(--nt-bg); color:var(--nt-text); border:1px solid var(--nt-border2); border-radius:6px; padding:2px 6px; font:var(--dsw-font-xxs-12); }
+.nt-input { background:var(--nt-bg); color:var(--nt-text); border:1px solid var(--nt-border2); border-radius:6px; padding:2px 6px; font:var(--dsw-font-xxs-12); min-width:180px; }
+.nt-table { width:100%; border-collapse:collapse; font:var(--dsw-font-xxs-12); }
+.nt-table td { padding:5px 8px; border-bottom:1px solid var(--nt-border); color:var(--nt-dim); vertical-align:middle; }
+.nt-tooltip { position:absolute; background:var(--nt-panel2); border:1px solid var(--nt-border2); border-radius:8px; box-shadow:var(--dsw-shadow-lv3); padding:8px 10px; font:var(--dsw-font-xxs-12); color:var(--nt-text); z-index:5; pointer-events:none; white-space:pre-wrap; }
+.nt-empty { padding:10px 0; font:var(--dsw-font-xxs-12); color:var(--nt-faint); }
 /* M4.1：分栏栅格——6 列（摘要行 3+3；主区 4+2），<1200px 回退单列（占满不留白） */
-.xg-grid { display:grid; grid-template-columns:repeat(6, 1fr); gap:12px; }
-.xg-grid > .xg-span3 { grid-column:span 3; }
-.xg-grid > .xg-span4 { grid-column:span 4; }
-.xg-grid > .xg-span2 { grid-column:span 2; }
+.nt-grid { display:grid; grid-template-columns:repeat(6, 1fr); gap:12px; }
+.nt-grid > .nt-span3 { grid-column:span 3; }
+.nt-grid > .nt-span4 { grid-column:span 4; }
+.nt-grid > .nt-span2 { grid-column:span 2; }
 @media (max-width:1199px) {
-  .xg-grid { grid-template-columns:1fr; }
-  .xg-grid > .xg-span2, .xg-grid > .xg-span3, .xg-grid > .xg-span4 { grid-column:auto; }
+  .nt-grid { grid-template-columns:1fr; }
+  .nt-grid > .nt-span2, .nt-grid > .nt-span3, .nt-grid > .nt-span4 { grid-column:auto; }
 }
 /* M4.2：曲线放大覆盖层（fixed 悬浮，不动官方代码；z-index 高于 view 区） */
-.xg-overlay { position:fixed; inset:0; background:rgba(0,0,0,.55); display:flex; align-items:center; justify-content:center; z-index:1000; }
-.xg-overlay-inner { background:var(--dsw-alias-bg-layer-2); border:1px solid var(--dsw-alias-border-l2); border-radius:12px; padding:16px 20px; max-width:1180px; width:calc(100vw - 80px); max-height:calc(100vh - 80px); overflow:auto; }
-.xg-overlay-head { display:flex; align-items:center; justify-content:space-between; margin-bottom:10px; gap:12px; }
+.nt-overlay { position:fixed; inset:0; background:rgba(0,0,0,.55); display:flex; align-items:center; justify-content:center; z-index:1000; }
+.nt-overlay-inner { background:var(--nt-panel); border:1px solid var(--nt-border2); border-radius:12px; padding:16px 20px; max-width:1180px; width:calc(100vw - 80px); max-height:calc(100vh - 80px); overflow:auto; }
+.nt-overlay-head { display:flex; align-items:center; justify-content:space-between; margin-bottom:10px; gap:12px; }
 /* M4.4：口径注记（Fact First——图上明说事实与边界，镜 v0 启发） */
-.xg-note { padding:8px 12px; font:var(--dsw-font-xxs-12); color:var(--dsw-alias-label-tertiary); background:var(--dsw-alias-bg-layer-1); border-radius:6px; margin-top:10px; }
-.xg-warn { color:var(--dsw-alias-state-warn-primary); }
+.nt-note { padding:8px 12px; font:var(--dsw-font-xxs-12); color:var(--nt-faint); background:var(--nt-bg); border-radius:6px; margin-top:10px; }
+.nt-warn { color:var(--nt-warn); }
 /* M3-UI.2+: tab 激活时隐藏输入卡（[data-composer-seat] 为官方稳定锚点，皮肤同款选择器；
    组件挂载 ⇔ tab 激活（view ring only:activeId），body 类由 useHideComposer 挂/卸载。 */
-body.xg-hide-input [data-composer-seat] { display: none !important; }
+body.nt-hide-input [data-composer-seat] { display: none !important; }
 /* M4-L：L 场指向条 + 可展开分析 */
-.xg-lf-bar { grid-column:1 / -1; display:flex; align-items:center; gap:8px; flex-wrap:wrap; font:var(--dsw-font-xxs-12); color:var(--dsw-alias-label-secondary); }
-.xg-lf-bar b { color:var(--dsw-alias-label-primary); font-weight:600; }
-.xg-details { font:var(--dsw-font-xxs-12); color:var(--dsw-alias-label-secondary); margin-top:8px; }
-.xg-details summary { cursor:pointer; color:var(--dsw-alias-label-tertiary); user-select:none; }
+.nt-lf-bar { grid-column:1 / -1; display:flex; align-items:center; gap:8px; flex-wrap:wrap; font:var(--dsw-font-xxs-12); color:var(--nt-dim); }
+.nt-lf-bar b { color:var(--nt-text); font-weight:600; }
+.nt-details { font:var(--dsw-font-xxs-12); color:var(--nt-dim); margin-top:8px; }
+.nt-details summary { cursor:pointer; color:var(--nt-faint); user-select:none; }
 `
 
 let styleInjected = false
@@ -165,8 +184,8 @@ function injectStyle(): void {
 function useHideComposer(): void {
   useEffect(() => {
     if (typeof document === 'undefined') return undefined
-    document.body.classList.add('xg-hide-input')
-    return () => document.body.classList.remove('xg-hide-input')
+    document.body.classList.add('nt-hide-input')
+    return () => document.body.classList.remove('nt-hide-input')
   }, [])
 }
 
@@ -235,26 +254,26 @@ const colorOf = (session: string): string => PALETTE[hashIdx(session, PALETTE.le
 // ── 通用小组件 ───────────────────────────────────────────────────────────────
 
 function Card(props: { title: string; extra?: ReactNode; children: ReactNode }): ReactNode {
-  return createElement('div', { className: 'xg-card' },
-    createElement('div', { className: 'xg-card-head' },
+  return createElement('div', { className: 'nt-card' },
+    createElement('div', { className: 'nt-card-head' },
       createElement('span', undefined, props.title),
       props.extra ?? null,
     ),
-    createElement('div', { className: 'xg-card-body' }, props.children),
+    createElement('div', { className: 'nt-card-body' }, props.children),
   )
 }
 
 function Kv(props: { label: string; value: string; accent?: boolean }): ReactNode {
-  return createElement('div', { className: 'xg-kv' },
-    createElement('div', { className: 'xg-label' }, props.label),
-    createElement('div', { className: 'xg-num', style: props.accent ? { color: 'var(--dsw-alias-state-business-primary)' } : undefined }, props.value),
+  return createElement('div', { className: 'nt-kv' },
+    createElement('div', { className: 'nt-label' }, props.label),
+    createElement('div', { className: 'nt-num', style: props.accent ? { color: 'var(--dsw-alias-state-business-primary)' } : undefined }, props.value),
   )
 }
 
 function Badge(props: { kind: string }): ReactNode {
-  const cls = props.kind === 'created' ? 'xg-badge xg-badge-created'
-    : props.kind === 'deleted' ? 'xg-badge xg-badge-deleted'
-    : 'xg-badge xg-badge-modified'
+  const cls = props.kind === 'created' ? 'nt-badge nt-badge-created'
+    : props.kind === 'deleted' ? 'nt-badge nt-badge-deleted'
+    : 'nt-badge nt-badge-modified'
   return createElement('span', { className: cls }, props.kind)
 }
 
@@ -269,7 +288,7 @@ function LineChart(props: { series: Series[]; w: number; h: number; onOpenDetail
   const [tip, setTip] = useState<{ x: number; y: number } | null>(null)
   injectStyle()
   const all = series.flatMap((s) => s.points.map((p) => p.value))
-  if (all.length === 0) return createElement('div', { className: 'xg-empty' }, '（暂无数据）')
+  if (all.length === 0) return createElement('div', { className: 'nt-empty' }, '（暂无数据）')
 
   const max = Math.max(...all)
   const min = Math.min(...all)
@@ -304,7 +323,7 @@ function LineChart(props: { series: Series[]; w: number; h: number; onOpenDetail
   return createElement('div', { style: { position: 'relative', width: w } },
     createElement('svg', {
       width: w, height: h, viewBox: `0 0 ${w} ${h}`,
-      style: { background: 'var(--dsw-alias-bg-layer-1)', borderRadius: 8 },
+      style: { background: 'var(--nt-bg)', borderRadius: 8 },
       onMouseMove: (e: { clientX: number; clientY: number; currentTarget: { getBoundingClientRect(): { left: number; top: number } } }) => {
         const rect = e.currentTarget.getBoundingClientRect()
         const mx = e.clientX - rect.left
@@ -315,8 +334,8 @@ function LineChart(props: { series: Series[]; w: number; h: number; onOpenDetail
       onMouseLeave: () => { setHover(null); setTip(null) },
     },
       ticks.map((t) => createElement('g', { key: String(t) },
-        createElement('line', { x1: padL, y1: py(t), x2: w - padR, y2: py(t), stroke: 'var(--dsw-alias-border-l1)', strokeWidth: 1 }),
-        createElement('text', { x: padL - 6, y: py(t) + 3, fill: 'var(--dsw-alias-label-tertiary)', fontSize: 9, textAnchor: 'end' }, t >= 1e6 ? `${(t / 1e6).toFixed(1)}M` : t >= 1000 ? `${(t / 1000).toFixed(1)}K` : t.toFixed(2)),
+        createElement('line', { x1: padL, y1: py(t), x2: w - padR, y2: py(t), stroke: 'var(--nt-border)', strokeWidth: 1 }),
+        createElement('text', { x: padL - 6, y: py(t) + 3, fill: 'var(--nt-faint)', fontSize: 9, textAnchor: 'end' }, t >= 1e6 ? `${(t / 1e6).toFixed(1)}M` : t >= 1000 ? `${(t / 1000).toFixed(1)}K` : t.toFixed(2)),
       )),
       series.map((s, si) => {
         const pts = s.points
@@ -325,19 +344,19 @@ function LineChart(props: { series: Series[]; w: number; h: number; onOpenDetail
         const area = `${padL},${h - padB} ${poly} ${px(pts[pts.length - 1].x)},${h - padB}`
         return createElement('g', { key: s.id },
           createElement('defs', null,
-            createElement('linearGradient', { id: `xg-grad-${si}`, x1: 0, y1: 0, x2: 0, y2: 1 },
+            createElement('linearGradient', { id: `nt-grad-${si}`, x1: 0, y1: 0, x2: 0, y2: 1 },
               createElement('stop', { offset: '0%', stopColor: s.color, stopOpacity: 0.35 }),
               createElement('stop', { offset: '100%', stopColor: s.color, stopOpacity: 0.02 }),
             ),
           ),
-          createElement('polygon', { points: area, fill: `url(#xg-grad-${si})` }),
+          createElement('polygon', { points: area, fill: `url(#nt-grad-${si})` }),
           pts.length > 1 ? createElement('polyline', { points: poly, fill: 'none', stroke: s.color, strokeWidth: 1.6 }) : null,
           pts.map((p, pi) => createElement('circle', {
             key: `${s.id}-${pi}`,
             cx: px(p.x), cy: py(p.value),
             r: hover !== null && hover.si === si && hover.pi === pi ? 4.5 : 2.2,
             fill: s.color,
-            stroke: hover !== null && hover.si === si && hover.pi === pi ? 'var(--dsw-alias-label-primary)' : 'none',
+            stroke: hover !== null && hover.si === si && hover.pi === pi ? 'var(--nt-text)' : 'none',
             strokeWidth: hover !== null && hover.si === si && hover.pi === pi ? 1.2 : 0,
             cursor: 'pointer',
             onClick: () => { if (props.onOpenDetail) props.onOpenDetail(p.meta) },
@@ -347,7 +366,7 @@ function LineChart(props: { series: Series[]; w: number; h: number; onOpenDetail
     ),
     hovered !== null && hover !== null && tip !== null
       ? createElement('div', {
-          className: 'xg-tooltip',
+          className: 'nt-tooltip',
           style: {
             left: tip.x,
             top: tip.y > 96 ? tip.y - 10 : tip.y + 14,
@@ -355,13 +374,13 @@ function LineChart(props: { series: Series[]; w: number; h: number; onOpenDetail
           },
         },
           createElement('div', null, hovered.detail),
-          createElement('div', { style: { marginTop: 4, color: 'var(--dsw-alias-label-tertiary)' } },
+          createElement('div', { style: { marginTop: 4, color: 'var(--nt-faint)' } },
             props.onOpenDetail === undefined ? '（B 方案预留）' : '点击点位 → 查看完整问答'),
         )
       : null,
     series.length > 1
       ? createElement('div', { style: { display: 'flex', gap: 12, paddingTop: 4, flexWrap: 'wrap', fontSize: 11 } },
-          series.map((s) => createElement('span', { key: s.id, style: { color: 'var(--dsw-alias-label-secondary)' } },
+          series.map((s) => createElement('span', { key: s.id, style: { color: 'var(--nt-dim)' } },
             createElement('span', { style: { display: 'inline-block', width: 8, height: 8, borderRadius: 99, background: s.color, marginRight: 4 } }),
             s.label,
           )),
@@ -415,52 +434,52 @@ function NexusView(): ReactNode {
       .finally(() => setBusy(false))
   }
 
-  if (failed && state === null) return createElement('div', { className: 'xg-empty' }, 'Vault 观测数据不可用（/api/nexus/state）')
-  if (state === null) return createElement('div', { className: 'xg-empty' }, 'Vault 观测加载中...')
+  if (failed && state === null) return createElement('div', { className: 'nt-empty' }, 'Vault 观测数据不可用（/api/nexus/state）')
+  if (state === null) return createElement('div', { className: 'nt-empty' }, 'Vault 观测加载中...')
 
   const summary = range === 'today' ? state.today : state.week
   const recent = state.recent.filter((e) => kindFilter === 'all' || e.kind === kindFilter)
   // OQ-M4-1：总览卡标题 = 指向短名（displayName ?? 路径末段）+ 工作区（root 路径）
   const shortName = state.activeRoot === '' ? '未指向'
     : (vault?.known.find((k) => k.root === state.activeRoot)?.displayName ?? baseName(state.activeRoot))
-  return createElement('div', { className: 'xg-cards' },
+  return createElement('div', { className: 'nt-cards' },
     Card({
       title: '指向确认（Vault 观测）',
       extra: !editMode && state.activeRoot !== ''
-        ? createElement('button', { className: 'xg-btn', onClick: () => { setNewRoot(state.activeRoot); setEditMode(true) } }, '修改指向')
+        ? createElement('button', { className: 'nt-btn', onClick: () => { setNewRoot(state.activeRoot); setEditMode(true) } }, '修改指向')
         : null,
       children: vault === null
-        ? createElement('div', { className: 'xg-empty' }, '指向加载中...')
+        ? createElement('div', { className: 'nt-empty' }, '指向加载中...')
         : createElement('div', null,
-            createElement('div', { className: 'xg-row' },
-              createElement('div', { className: 'xg-list' },
-                createElement('span', { className: 'xg-label' }, '当前指向'),
-                createElement('span', { className: 'xg-path' }, vault.active === '' ? '（未指向）' : vault.active),
+            createElement('div', { className: 'nt-row' },
+              createElement('div', { className: 'nt-list' },
+                createElement('span', { className: 'nt-label' }, '当前指向'),
+                createElement('span', { className: 'nt-path' }, vault.active === '' ? '（未指向）' : vault.active),
               ),
               vault.active === ''
-                ? createElement('span', { className: 'xg-warn' }, '请先确认 vault 指向——观测数据将从指向后开始')
-                : createElement('div', { className: 'xg-list' },
-                    createElement('span', { className: 'xg-label' },
+                ? createElement('span', { className: 'nt-warn' }, '请先确认 vault 指向——观测数据将从指向后开始')
+                : createElement('div', { className: 'nt-list' },
+                    createElement('span', { className: 'nt-label' },
                       `${vault.exists ? '目录在' : '目录缺失'} · ${vault.readable ? '可读' : '不可读'}`,
                     ),
                     vault.known.find((k) => k.root === vault.active)?.confirmedAt
-                      ? createElement('span', { className: 'xg-label' },
+                      ? createElement('span', { className: 'nt-label' },
                           `确认于 ${fmtTime(vault.known.find((k) => k.root === vault.active)!.confirmedAt ?? 0)}`,
                         )
                       : null,
                   ),
             ),
-            createElement('div', { className: 'xg-note' },
+            createElement('div', { className: 'nt-note' },
               '数据口径：本页统计（文件/字数/编辑事件）仅来自指向 vault；L 场读数有独立指向（历史读数归属指向语境，基线见 L 场读数页）。',
             ),
             editMode
               ? createElement('div', { style: { marginTop: 8, display: 'flex', flexWrap: 'wrap', gap: 6 } },
                   createElement('input', {
-                    className: 'xg-input', value: newRoot, placeholder: '绝对路径（如 L:\\...\\L-theory）',
+                    className: 'nt-input', value: newRoot, placeholder: '绝对路径（如 L:\\...\\L-theory）',
                     onChange: (e: { target: { value: string } }) => setNewRoot(e.target.value),
                   }),
                   createElement('select', {
-                    className: 'xg-select', value: '',
+                    className: 'nt-select', value: '',
                     onChange: (e: { target: { value: string } }) => { if (e.target.value !== '') { setNewRoot(e.target.value) } },
                   },
                     createElement('option', { value: '' }, '最近指向…'),
@@ -468,24 +487,24 @@ function NexusView(): ReactNode {
                       createElement('option', { key: k.root, value: k.root }, k.displayName ?? baseName(k.root))),
                   ),
                   createElement('button', {
-                    className: 'xg-btn', disabled: busy || newRoot.trim() === '', onClick: () => applyVault(),
+                    className: 'nt-btn', disabled: busy || newRoot.trim() === '', onClick: () => applyVault(),
                   }, busy ? '切换中…' : '确认并重扫'),
-                  createElement('button', { className: 'xg-btn', onClick: () => { setEditMode(false); setNewRoot('') } }, '取消'),
+                  createElement('button', { className: 'nt-btn', onClick: () => { setEditMode(false); setNewRoot('') } }, '取消'),
                 )
               : null,
           ),
     }),
-    Card({ title: `Vault 总览 · ${shortName}${state.activeRoot !== '' ? `（${state.activeRoot}）` : ''}`, children: createElement('div', { className: 'xg-row' },
+    Card({ title: `Vault 总览 · ${shortName}${state.activeRoot !== '' ? `（${state.activeRoot}）` : ''}`, children: createElement('div', { className: 'nt-row' },
       Kv({ label: '文件总数', value: String(state.totals.totalFiles) }),
       Kv({ label: '总字数', value: fmtK(state.totals.totalChars) }),
     ) }),
     Card({
       title: '编辑统计',
       extra: createElement('div', null,
-        createElement('button', { className: `xg-btn${range === 'today' ? ' xg-btn-active' : ''}`, onClick: () => setRange('today'), style: { marginRight: 6 } }, '今日'),
-        createElement('button', { className: `xg-btn${range === 'week' ? ' xg-btn-active' : ''}`, onClick: () => setRange('week') }, '本周'),
+        createElement('button', { className: `nt-btn${range === 'today' ? ' nt-btn-active' : ''}`, onClick: () => setRange('today'), style: { marginRight: 6 } }, '今日'),
+        createElement('button', { className: `nt-btn${range === 'week' ? ' nt-btn-active' : ''}`, onClick: () => setRange('week') }, '本周'),
       ),
-      children: createElement('div', { className: 'xg-row' },
+      children: createElement('div', { className: 'nt-row' },
         Kv({ label: '编辑次数', value: String(summary.edits) }),
         Kv({ label: '修改文件', value: String(summary.modifiedFiles) }),
         Kv({ label: '新增文件', value: `+${summary.createdFiles}` }),
@@ -494,18 +513,18 @@ function NexusView(): ReactNode {
     Card({
       title: '活跃文件 Top 5',
       children: summary.topActive.length === 0
-        ? createElement('div', { className: 'xg-empty' }, '暂无')
-        : createElement('div', { className: 'xg-list' },
+        ? createElement('div', { className: 'nt-empty' }, '暂无')
+        : createElement('div', { className: 'nt-list' },
             summary.topActive.map((t) => createElement('div', { key: t.path },
-              createElement('span', { className: 'xg-label' }, `${t.edits} 次 · `),
-              createElement('span', { className: 'xg-path' }, t.path),
+              createElement('span', { className: 'nt-label' }, `${t.edits} 次 · `),
+              createElement('span', { className: 'nt-path' }, t.path),
             )),
           ),
     }),
     Card({
       title: '最近编辑流',
       extra: createElement('select', {
-        className: 'xg-select',
+        className: 'nt-select',
         value: kindFilter,
         onChange: (e: { target: { value: string } }) => setKindFilter(e.target.value as 'all' | 'created' | 'modified' | 'deleted'),
       },
@@ -515,13 +534,13 @@ function NexusView(): ReactNode {
         createElement('option', { value: 'deleted' }, '删除'),
       ),
       children: recent.length === 0
-        ? createElement('div', { className: 'xg-empty' }, '暂无')
-        : createElement('div', { className: 'xg-list' },
+        ? createElement('div', { className: 'nt-empty' }, '暂无')
+        : createElement('div', { className: 'nt-list' },
             recent.slice(0, 12).map((e) => createElement('div', { key: `${e.ts}-${e.path}` },
-              createElement('span', { className: 'xg-label' }, `[${fmtTime(e.ts)}] `),
+              createElement('span', { className: 'nt-label' }, `[${fmtTime(e.ts)}] `),
               createElement(Badge, { kind: e.kind }),
               createElement('span', { style: { marginLeft: 6 } }),
-              createElement('span', { className: 'xg-path' }, e.path),
+              createElement('span', { className: 'nt-path' }, e.path),
             )),
           ),
     }),
@@ -592,8 +611,8 @@ function NexusLFieldView(): ReactNode {
     return () => window.removeEventListener('keydown', h)
   }, [chartMode])
 
-  if (failed && state === null) return createElement('div', { className: 'xg-empty' }, 'L 场读数不可用（/api/nexus/m2/state）')
-  if (state === null) return createElement('div', { className: 'xg-empty' }, 'L 场读数加载中...')
+  if (failed && state === null) return createElement('div', { className: 'nt-empty' }, 'L 场读数不可用（/api/nexus/m2/state）')
+  if (state === null) return createElement('div', { className: 'nt-empty' }, 'L 场读数加载中...')
 
   // 口径：usage.inputTokens = 未命中；总输入 = input + cache
   const totalIn = (p: M2Point): number => p.tokenIn + p.cacheRead
@@ -677,13 +696,13 @@ function NexusLFieldView(): ReactNode {
     }).then((r) => { if (r.ok) { setViewMode('vault'); load() } }).catch(() => undefined)
   }
 
-  return createElement('div', { className: 'xg-cards xg-grid' },
-    createElement('div', { className: 'xg-lf-bar' },
+  return createElement('div', { className: 'nt-cards nt-grid' },
+    createElement('div', { className: 'nt-lf-bar' },
       createElement('span', null, 'L 场指向：'),
       createElement('b', null, lfieldLabel),
       lfield !== null && lfield.known.filter((k) => k.root !== lfield.active).length > 0
         ? createElement('select', {
-            className: 'xg-select', value: '',
+            className: 'nt-select', value: '',
             onChange: (e: { target: { value: string } }) => { if (e.target.value !== '') switchLfield(e.target.value) },
           },
             createElement('option', { value: '' }, '切换指向…'),
@@ -693,23 +712,23 @@ function NexusLFieldView(): ReactNode {
         : null,
       createElement('span', { style: { marginLeft: 8 } }, '视图'),
       createElement('select', {
-        className: 'xg-select', value: viewMode,
+        className: 'nt-select', value: viewMode,
         onChange: (e: { target: { value: string } }) => setViewMode(e.target.value as 'vault' | 'all'),
       },
         createElement('option', { value: 'vault' }, `${lfieldLabel}（${vaultSessions} 会话）`),
         createElement('option', { value: 'all' }, '全局'),
       ),
       viewMode === 'all'
-        ? createElement('span', { className: 'xg-label' }, '全局视图——全部工作区会话（含 vault 会话）。')
-        : createElement('span', { className: 'xg-label' }, `vault 视图——在 ${lfieldLabel} 工作区发起的会话。`),
+        ? createElement('span', { className: 'nt-label' }, '全局视图——全部工作区会话（含 vault 会话）。')
+        : createElement('span', { className: 'nt-label' }, `vault 视图——在 ${lfieldLabel} 工作区发起的会话。`),
     ),
-    createElement('div', { className: 'xg-span3' },
+    createElement('div', { className: 'nt-span3' },
     Card({
       title: '最新读数',
       children: latest === null
-        ? createElement('div', { className: 'xg-empty' }, '（等待知识库会话——在指向工作区发起的对话将归入此处）')
+        ? createElement('div', { className: 'nt-empty' }, '（等待知识库会话——在指向工作区发起的对话将归入此处）')
         : createElement('div', null,
-            createElement('div', { className: 'xg-row' },
+            createElement('div', { className: 'nt-row' },
               Kv({ label: `turn ${latest.turn} · ${shortSession(latest.session)}`, value: fmtK(totalIn(latest)) }),
               Kv({ label: '未命中 / 命中', value: `${fmtK(latest.tokenIn)} / ${fmtK(latest.cacheRead)}` }),
               Kv({ label: '输出', value: fmtK(latest.tokenOut) }),
@@ -718,8 +737,8 @@ function NexusLFieldView(): ReactNode {
               Kv({ label: 'TPS', value: latest.tps === null ? '—' : latest.tps.toFixed(1) }),
             ),
             latest.clarity !== null && latest.clarity !== undefined
-              ? createElement('div', { className: 'xg-list', style: { marginTop: 8 } },
-                  createElement('span', { className: 'xg-path' },
+              ? createElement('div', { className: 'nt-list', style: { marginTop: 8 } },
+                  createElement('span', { className: 'nt-path' },
                     `自评（M3-F.1）：clarity ${latest.clarity.toFixed(2)} · defense ${DEF_LABEL[latest.defense ?? 'none'] ?? latest.defense} · declaration ${latest.declaration === 1 ? '有' : '无'}`,
                   ),
                 )
@@ -727,10 +746,10 @@ function NexusLFieldView(): ReactNode {
           ),
     }),
     ),
-    createElement('div', { className: 'xg-span3' },
+    createElement('div', { className: 'nt-span3' },
     Card({
       title: `总量 · ${viewMode === 'all' ? '全局' : lfieldLabel}`,
-      children: createElement('div', { className: 'xg-row' },
+      children: createElement('div', { className: 'nt-row' },
         Kv({ label: '轮次', value: String(t.turns) }),
         Kv({ label: '输入（命中/未命中）', value: `${fmtK(t.cacheRead)} / ${fmtK(t.missToken)}` }),
         Kv({ label: '输出', value: fmtK(t.tokenOut) }),
@@ -739,51 +758,51 @@ function NexusLFieldView(): ReactNode {
       ),
     }),
     ),
-    createElement('div', { className: 'xg-span4' },
+    createElement('div', { className: 'nt-span4' },
     Card({
       title: `探索率曲线 · ${METRIC_LABEL[metric]}`,
       extra: createElement('div', null,
-        createElement('button', { className: `xg-btn${axis === 'date' ? ' xg-btn-active' : ''}`, onClick: () => setAxis('date'), style: { marginRight: 6 } }, '日期'),
-        createElement('button', { className: `xg-btn${axis === 'turn' ? ' xg-btn-active' : ''}`, onClick: () => setAxis('turn'), style: { marginRight: 6 } }, '轮次'),
-        createElement('button', { className: `xg-btn${metric === 'miss' ? ' xg-btn-active' : ''}`, onClick: () => setMetric(metric === 'miss' ? 'tps' : metric === 'tps' ? 'cum' : 'miss'), style: { marginRight: 6 } }, METRIC_LABEL[metric]),
-        createElement('select', { className: 'xg-select', value: String(windowDays), onChange: (e: { target: { value: string } }) => setWindowDays(Number(e.target.value)) },
+        createElement('button', { className: `nt-btn${axis === 'date' ? ' nt-btn-active' : ''}`, onClick: () => setAxis('date'), style: { marginRight: 6 } }, '日期'),
+        createElement('button', { className: `nt-btn${axis === 'turn' ? ' nt-btn-active' : ''}`, onClick: () => setAxis('turn'), style: { marginRight: 6 } }, '轮次'),
+        createElement('button', { className: `nt-btn${metric === 'miss' ? ' nt-btn-active' : ''}`, onClick: () => setMetric(metric === 'miss' ? 'tps' : metric === 'tps' ? 'cum' : 'miss'), style: { marginRight: 6 } }, METRIC_LABEL[metric]),
+        createElement('select', { className: 'nt-select', value: String(windowDays), onChange: (e: { target: { value: string } }) => setWindowDays(Number(e.target.value)) },
           createElement('option', { value: '1' }, '今天'),
           createElement('option', { value: '3' }, '3 天'),
           createElement('option', { value: '7' }, '7 天'),
           createElement('option', { value: '30' }, '30 天'),
         ),
-        createElement('button', { className: 'xg-btn', style: { marginLeft: 6 }, onClick: () => setChartMode(chartMode === 'expanded' ? 'compact' : 'expanded') }, chartMode === 'expanded' ? '还原' : '放大'),
+        createElement('button', { className: 'nt-btn', style: { marginLeft: 6 }, onClick: () => setChartMode(chartMode === 'expanded' ? 'compact' : 'expanded') }, chartMode === 'expanded' ? '还原' : '放大'),
       ),
       children: createElement('div', null,
         createElement('select', {
-          className: 'xg-select', value: sel ?? '', style: { marginBottom: 6 },
+          className: 'nt-select', value: sel ?? '', style: { marginBottom: 6 },
           onChange: (e: { target: { value: string } }) => setSessionSel(e.target.value),
         },
           createElement('option', { value: '' }, '全部会话'),
           sessions.map((s) => createElement('option', { key: s, value: s }, friendlyOf(s))),
         ),
-        createElement('div', { className: 'xg-list', style: { margin: '2px 0 6px' } },
+        createElement('div', { className: 'nt-list', style: { margin: '2px 0 6px' } },
           sc.total > 0
-            ? createElement('span', { className: scPct < 0.8 ? 'xg-warn' : 'xg-label' },
+            ? createElement('span', { className: scPct < 0.8 ? 'nt-warn' : 'nt-label' },
                 `自评覆盖 ${pct(scPct)}（${sc.checked}/${sc.total} 轮）`
                 + (scSel !== undefined
                     ? ` · 本会话 ${scSel.checked}/${scSel.total} 轮${scSel.missing.length > 0 ? ` · 缺 ${scSel.missing.map((n) => 't' + n).join(' ')}` : ' · 无缺口'}`
                     : ''),
               )
-            : createElement('span', { className: 'xg-label' }, '自评覆盖：本视图暂无轮次'),
+            : createElement('span', { className: 'nt-label' }, '自评覆盖：本视图暂无轮次'),
         ),
         createElement('div', { ref: chartRef },
           createElement(LineChart, { series, w: chartW, h: 200, onOpenDetail: openTurnText }),
         ),
         analysis !== null && analysis.length > 0
-          ? createElement('details', { key: 'xg-analysis', className: 'xg-details' },
+          ? createElement('details', { key: 'nt-analysis', className: 'nt-details' },
               createElement('summary', null, `分析（M3-F.3 白盒）· ${analysis.length} 会话`),
-              createElement('div', { className: 'xg-list', style: { marginTop: 6 } },
+              createElement('div', { className: 'nt-list', style: { marginTop: 6 } },
                 analysis.map((a) => {
                   const shapeLabel = { unknown: '—', rising: '上升', falling: '下降', sigmoid: 'S 形', 'inverse-sigmoid': '反 S 形' }[a.shape]
                   const burst = a.burst ? `爆发段 turn ${a.burst.fromTurn}→${a.burst.toTurn}（${a.burst.direction === 'down' ? '降' : '升'}）` : '无爆发段'
                   return createElement('span', { key: a.session },
-                    createElement('span', { className: 'xg-label' },
+                    createElement('span', { className: 'nt-label' },
                       `${serialShown ? shortSession(a.session) : friendlyOf(a.session)}：形态=${shapeLabel} · ${burst} · τ_e=${a.tauE === null ? '—' : a.tauE + ' turn'} · `,
                     ),
                   )
@@ -791,7 +810,7 @@ function NexusLFieldView(): ReactNode {
               ),
             )
           : null,
-        createElement('div', { className: 'xg-note' },
+        createElement('div', { className: 'nt-note' },
           metric === 'cum'
             ? '累计输入（弱代理）= Σ(命中+未命中) 按轮序；中段加速平台 = S 形候选（P1），正式判据仍以未命中率曲线为准。'
             : metric === 'miss'
@@ -799,26 +818,26 @@ function NexusLFieldView(): ReactNode {
               : 'TPS = outputTokens / 解码耗时；与探索率曲线共同构成 P4 时间结构素材。',
         ),
         textDetail !== null
-          ? createElement('div', { className: 'xg-card', style: { marginTop: 8 } },
-              createElement('div', { className: 'xg-card-head' },
+          ? createElement('div', { className: 'nt-card', style: { marginTop: 8 } },
+              createElement('div', { className: 'nt-card-head' },
                 createElement('span', undefined, `完整问答 · turn ${textDetail.turn} · ${textDetail.session ? shortSession(textDetail.session) : ''}`),
-                createElement('button', { className: 'xg-btn', onClick: () => setTextDetail(null) }, '关闭'),
+                createElement('button', { className: 'nt-btn', onClick: () => setTextDetail(null) }, '关闭'),
               ),
-              createElement('div', { className: 'xg-card-body', style: { maxHeight: 240, overflow: 'auto' } },
-                createElement('div', { className: 'xg-list' },
+              createElement('div', { className: 'nt-card-body', style: { maxHeight: 240, overflow: 'auto' } },
+                createElement('div', { className: 'nt-list' },
                   textDetail.found === false
-                    ? createElement('span', { className: 'xg-label' }, '该轮原文未采集（B 方案自 M3-F.2 部署起前向积累；此轮早于部署）')
+                    ? createElement('span', { className: 'nt-label' }, '该轮原文未采集（B 方案自 M3-F.2 部署起前向积累；此轮早于部署）')
                     : null,
                   textDetail.userText
                     ? createElement('span', null,
-                        createElement('span', { className: 'xg-label' }, '问：'),
-                        createElement('span', { className: 'xg-path' }, textDetail.userText),
+                        createElement('span', { className: 'nt-label' }, '问：'),
+                        createElement('span', { className: 'nt-path' }, textDetail.userText),
                       )
                     : null,
                   textDetail.assistantText
                     ? createElement('span', null,
-                        createElement('span', { className: 'xg-label' }, '答：'),
-                        createElement('span', { className: 'xg-path' }, textDetail.assistantText.slice(0, 4000)),
+                        createElement('span', { className: 'nt-label' }, '答：'),
+                        createElement('span', { className: 'nt-path' }, textDetail.assistantText.slice(0, 4000)),
                       )
                     : null,
                 ),
@@ -828,10 +847,10 @@ function NexusLFieldView(): ReactNode {
       ),
     }),
     ),
-    createElement('div', { className: 'xg-span2' },
+    createElement('div', { className: 'nt-span2' },
     Card({
       title: '预言检验表（框架先行 · 人工标注）',
-      children: createElement('table', { className: 'xg-table' },
+      children: createElement('table', { className: 'nt-table' },
         createElement('tbody', null,
           Object.entries(PROPHECIES).map(([key, desc]) => {
             const a = annMap.get(key)
@@ -841,7 +860,7 @@ function NexusLFieldView(): ReactNode {
               createElement('td', { style: { width: '42%' } }, `${key} ${desc}`),
               createElement('td', null,
                 createElement('select', {
-                  className: 'xg-select', value: status,
+                  className: 'nt-select', value: status,
                   onChange: (e: { target: { value: string } }) => saveAnn(key, e.target.value, note),
                 },
                   Object.entries(STATUS_LABEL).map(([v, l]) => createElement('option', { key: v, value: v }, l)),
@@ -849,11 +868,11 @@ function NexusLFieldView(): ReactNode {
               ),
               createElement('td', null,
                 createElement('input', {
-                  className: 'xg-input', value: note, placeholder: '备注…',
+                  className: 'nt-input', value: note, placeholder: '备注…',
                   onChange: (e: { target: { value: string } }) => setNotes({ ...notes, [key]: e.target.value }),
                 }),
                 createElement('button', {
-                  className: 'xg-btn', style: { marginLeft: 6 },
+                  className: 'nt-btn', style: { marginLeft: 6 },
                   onClick: () => saveAnn(key, status, note),
                 }, '保存'),
               ),
@@ -864,11 +883,11 @@ function NexusLFieldView(): ReactNode {
     }),
     ),
     chartMode === 'expanded'
-      ? createElement('div', { className: 'xg-overlay', onClick: () => setChartMode('compact') },
-          createElement('div', { className: 'xg-overlay-inner', onClick: (e: { stopPropagation(): void }) => e.stopPropagation() },
-            createElement('div', { className: 'xg-overlay-head' },
+      ? createElement('div', { className: 'nt-overlay', onClick: () => setChartMode('compact') },
+          createElement('div', { className: 'nt-overlay-inner', onClick: (e: { stopPropagation(): void }) => e.stopPropagation() },
+            createElement('div', { className: 'nt-overlay-head' },
               createElement('span', undefined, `${METRIC_LABEL[metric]}（放大）· ${axis === 'date' ? '日期视图' : '轮次视图'}`),
-              createElement('button', { className: 'xg-btn', onClick: () => setChartMode('compact') }, '还原（Esc）'),
+              createElement('button', { className: 'nt-btn', onClick: () => setChartMode('compact') }, '还原（Esc）'),
             ),
             createElement(LineChart, { series, w: 980, h: 460, onOpenDetail: openTurnText }),
           ),

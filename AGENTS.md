@@ -38,7 +38,7 @@
 - 客户端插件就是普通 Cordis 插件：`Context` 来自 `@deepseek-ai/cordis`（`@deepseek-ai/dsh-client-runtime` 在 0.1.5 已移除，属死名）；`ctx.slots` 由 `@deepseek-ai/dsh-client-ui-renderer` 提供，slot key 类型由归属 UI 包增强声明，`slots.inject(key)` + `slots.register(def, Component)`。
 - `dsh.client.inject` 是**信息性**包名边（列 UI 提供方包名）；`dsh.client.external` 才是**硬模块边**——非基线模块的同步 `require` 不列进去就是运行时模块缺失。
 - **只允许 type-only 跨插件导入**（bundle 纯净度门禁拒绝跨插件值导入）；运行时协作一律走 cordis 服务。
-- 呈现约定沿用：样式经组件内 `<style>` 一次性注入（class 前缀 `xg-`）、SVG 自绘、主题令牌化（`--dsw-alias-*`）、零新依赖。
+- 呈现约定沿用：样式经组件内 `<style>` 一次性注入（class 前缀 `nt-`）、SVG 自绘、主题令牌化（`--nt-*` 层，默认值映射 `--dsw-alias-*`，映射表见 `docs/2-dev/nautilus-dev-02-ui-workbench.md` §2）、零新依赖。
 
 ## 4. 工具、设置与卡片（做 L1/L2 与 pulse 采集时看）
 
