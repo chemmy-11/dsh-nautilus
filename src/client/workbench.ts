@@ -10,7 +10,7 @@
  *   · INFER 层：Phase 2a 才落库（TTFT/provider）——当前所有视图显示缺席态，不编造、不写 0 假读数
  * 空数据是正常态（本阶段允许）。
  */
-import { Component, createElement, useEffect, useRef, useState, type ReactNode } from 'react'
+import { Component, createElement, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 // OS 层心跳档位控件（1s / 5s / 手动）——独立文件，避免与并行 UI 改动冲突
 import { PulseHeartbeat } from './pulse-controls'
 
@@ -396,16 +396,17 @@ export function CurveChart(props: {
   const dragRef = useRef<{ x: number; a: number; b: number } | null>(null)
   const svgRef = useRef<SVGSVGElement | null>(null)
   const boxRef = useRef<HTMLDivElement | null>(null)
-  // viewBox 尺寸 = 容器实测尺寸（宽高都测）；svg 以 100%/100% + preserveAspectRatio:none 渲染——
-  // 任何容器尺寸下精确铺满、悬停命中按 rect 实测比例换算，指针与点位零偏差
-  const [size, setSize] = useState({ w: 1120, h: props.h ?? 320 })
-  useEffect(() => {
+  // viewBox 尺寸 = 容器实测尺寸（宽高都测，useLayoutEffect 在首帧绘制前完成实测）：
+  // svg 以 100%/100% + preserveAspectRatio:none 渲染，但尺寸永远等于实测值——不存在「以上一档尺寸被拉伸」的帧；
+  // 描边全部 non-scaling-stroke，线宽/圆点恒为屏幕像素，不随容器比例变形
+  const [size, setSize] = useState<{ w: number; h: number } | null>(null)
+  useLayoutEffect(() => {
     const el = boxRef.current
     if (el === null) return undefined
     const measure = (): void => {
       const w = el.clientWidth
       const hh = el.clientHeight
-      if (w > 0 && hh > 0) setSize((prev) => (prev.w === w && prev.h === hh ? prev : { w, h: hh }))
+      if (w > 0 && hh > 0) setSize((prev) => (prev !== null && prev.w === w && prev.h === hh ? prev : { w, h: hh }))
     }
     measure()
     if (typeof ResizeObserver === 'undefined') {
@@ -417,10 +418,11 @@ export function CurveChart(props: {
     return () => ro.disconnect()
   }, [])
   useEffect(() => { setWin([0, Math.max(0, n - 1)]); setHover(null) }, [n, props.resetKey])
-  // 滚轮放缩：以指针为锚点缩放窗口（min 4 点）
+  // 滚轮放缩：以指针为锚点缩放窗口（min 4 点）；svg 就绪后再挂非 passive 监听
+  const ready = n >= 2 && size !== null
   useEffect(() => {
     const el = svgRef.current
-    if (el === null || n < 5) return undefined
+    if (el === null || !ready) return undefined
     const onWheel = (e: WheelEvent): void => {
       e.preventDefault()
       const rect = el.getBoundingClientRect()
@@ -437,7 +439,7 @@ export function CurveChart(props: {
     }
     el.addEventListener('wheel', onWheel, { passive: false })
     return () => { el.removeEventListener('wheel', onWheel) }
-  }, [n])
+  }, [n, ready])
   // 右键拖动 = 平移时间窗（按下记录起点，window 级 move/up 保证拖出画布也持续）
   useEffect(() => {
     if (!drag) return undefined
@@ -457,7 +459,10 @@ export function CurveChart(props: {
     window.addEventListener('mouseup', up)
     return () => { window.removeEventListener('mousemove', move); window.removeEventListener('mouseup', up) }
   }, [drag, n])
-  if (n < 2) return Empty({ text: '暂无数据' })
+  if (n < 2 || size === null) {
+    // 实测未完成前只渲染占位容器（useLayoutEffect 在绘制前补实测，正常不产生可见空帧）
+    return createElement('div', { className: 'nt-chart', ref: boxRef, style: { height: fill ? '100%' : String(props.h ?? 320) + 'px' } })
+  }
   const W = size.w
   const h = size.h
   // 渲染期钳制窗口：切档/数据刷新后点数骤减时，effect 复位前的这一帧里旧 win 会越界（base[b] undefined 崩溃）
@@ -477,7 +482,7 @@ export function CurveChart(props: {
   for (const r of [0, 1 / 3, 2 / 3, 1]) {
     const v = min + span * r
     const y = sy(v)
-    kids.push(createElement('line', { key: 'g' + String(r), x1: padL, x2: W - padR, y1: y, y2: y, stroke: 'var(--nt-border,#d9d9d5)', strokeWidth: 1, opacity: 0.7 }))
+    kids.push(createElement('line', { key: 'g' + String(r), x1: padL, x2: W - padR, y1: y, y2: y, stroke: 'var(--nt-border,#d9d9d5)', strokeWidth: 1, opacity: 0.7, vectorEffect: 'non-scaling-stroke' }))
     kids.push(createElement('text', { key: 't' + String(r), x: padL - 6, y: y + 3, fontSize: 9.5, fill: 'var(--nt-faint,#9a9a95)', textAnchor: 'end' }, yf(v)))
   }
   {
@@ -496,7 +501,7 @@ export function CurveChart(props: {
   }
   if (props.threshold !== undefined && props.threshold >= min && props.threshold <= max) {
     const y = sy(props.threshold)
-    kids.push(createElement('line', { key: 'th', x1: padL, x2: W - padR, y1: y, y2: y, stroke: 'var(--nt-accent,#e6321e)', strokeWidth: 1, strokeDasharray: '2 4', opacity: 0.8 }))
+    kids.push(createElement('line', { key: 'th', x1: padL, x2: W - padR, y1: y, y2: y, stroke: 'var(--nt-accent,#e6321e)', strokeWidth: 1, strokeDasharray: '2 4', opacity: 0.8, vectorEffect: 'non-scaling-stroke' }))
     kids.push(createElement('text', { key: 'tht', x: W - padR, y: y - 4, fontSize: 9.5, fill: 'var(--nt-accent,#e6321e)', textAnchor: 'end', letterSpacing: 1 }, props.thresholdLabel ?? '阈值'))
   }
   if (props.anno !== undefined && b - a >= 3) {
@@ -505,12 +510,12 @@ export function CurveChart(props: {
     if (f1 > f0) {
       const x1 = sx(f0)
       const x2 = sx(f1)
-      kids.push(createElement('line', { key: 'an', x1, x2, y1: 16, y2: 16, stroke: 'var(--nt-dim,#5f5f5c)', strokeWidth: 1, strokeDasharray: '3 3' }))
+      kids.push(createElement('line', { key: 'an', x1, x2, y1: 16, y2: 16, stroke: 'var(--nt-dim,#5f5f5c)', strokeWidth: 1, strokeDasharray: '3 3', vectorEffect: 'non-scaling-stroke' }))
       kids.push(createElement('text', { key: 'ant', x: (x1 + x2) / 2, y: 11, fontSize: 9.5, fill: 'var(--nt-dim,#5f5f5c)', textAnchor: 'middle', letterSpacing: 1 }, props.anno.txt))
     }
   }
   const d = vis.map((v, i) => (i === 0 ? 'M' : 'L') + sx(v.gi).toFixed(1) + ' ' + sy(v.p.y as number).toFixed(1)).join(' ')
-  kids.push(createElement('path', { key: 'line', d, fill: 'none', stroke: 'var(--nt-ink,#101010)', strokeWidth: 1.7 }))
+  kids.push(createElement('path', { key: 'line', d, fill: 'none', stroke: 'var(--nt-ink,#101010)', strokeWidth: 1.7, vectorEffect: 'non-scaling-stroke' }))
   for (const v of vis) {
     const y = v.p.y as number
     const exceed = props.threshold !== undefined && y >= props.threshold
@@ -519,7 +524,7 @@ export function CurveChart(props: {
     if (isHv) kids.push(createElement('circle', { key: 'mr' + String(v.gi), cx: sx(v.gi), cy: sy(y), r: 7.5, fill: 'none', stroke: 'var(--nt-accent,#e6321e)', strokeWidth: 1.1 }))
   }
   if (hv !== null) {
-    kids.push(createElement('line', { key: 'xh', x1: sx(hv), x2: sx(hv), y1: padT - 4, y2: h - padB, stroke: 'var(--nt-faint,#9a9a95)', strokeWidth: 1, strokeDasharray: '3 3', opacity: 0.6 }))
+    kids.push(createElement('line', { key: 'xh', x1: sx(hv), x2: sx(hv), y1: padT - 4, y2: h - padB, stroke: 'var(--nt-faint,#9a9a95)', strokeWidth: 1, strokeDasharray: '3 3', opacity: 0.6, vectorEffect: 'non-scaling-stroke' }))
   }
   const onMove = (e: { clientX: number; currentTarget: SVGSVGElement }): void => {
     if (dragRef.current !== null) { setHover(null); return }
