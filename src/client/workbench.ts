@@ -20,7 +20,7 @@ export const WORKBENCH_ID = 'nautilus-workbench'
 
 let styleDone = false
 const CSS_LINES = [
-  '.nt-wb{display:flex;flex-direction:column;height:100%;min-width:0;background:var(--nt-bg,#f2f2f0);color:var(--nt-text,#101010);font-family:var(--nt-font,Helvetica,Arial,sans-serif)}',
+  '.nt-wb{position:relative;display:flex;flex-direction:column;height:100%;min-width:0;background:var(--nt-bg,#f2f2f0);color:var(--nt-text,#101010);font-family:var(--nt-font,Helvetica,Arial,sans-serif)}',
   '.nt-wb-top{display:flex;align-items:center;gap:14px;padding:10px 16px;border-bottom:2px solid var(--nt-text,#101010);background:var(--nt-panel,#fff);flex-wrap:wrap}',
   '.nt-wb-brand{font-size:15px;font-weight:700;letter-spacing:2.5px}',
   '.nt-wb-brand small{display:block;font-size:9px;letter-spacing:1.5px;font-weight:400;color:var(--nt-faint,#9a9a95);text-transform:uppercase}',
@@ -723,24 +723,27 @@ export function CurveView(props: {
   const [key, setKey] = useState<CurveKey>('miss')
   const [scope, setScope] = useState<string>('all')
   const [pickOpen, setPickOpen] = useState(false)
-  // 时间档位（1 周 / 1 月）；全屏：占满工作台、Esc 退出
+  // 时间档位（1 周 / 1 月）；全屏：绝对定位占满工作台面板（fixed 会被宿主布局的 transform 基改名空间劫持）、Esc 退出
   const [range, setRange] = useState<7 | 30>(7)
   const [full, setFull] = useState(false)
-  const [vh, setVh] = useState(typeof window === 'undefined' ? 900 : window.innerHeight)
+  const [fh, setFh] = useState(640)
+  const fullBodyRef = useRef<HTMLDivElement | null>(null)
   // 数据源：NEXUS 轮次（事件驱动，非等间隔）/ PULSE 采样（等间隔，斜率可读）
   const [source, setSource] = useState<'nexus' | 'pulse'>('nexus')
   const metrics = (props.pulse?.latest ?? []).map((l) => l.metric)
   const [picked, setPicked] = useState<string>('')
   const metric = picked !== '' && metrics.includes(picked) ? picked : (metrics[0] ?? '')
   const series = useJson<PulseSeries>('/api/nexus/pulse/series?metric=' + encodeURIComponent(metric) + '&windowMs=3600000&maxPoints=240', metric === '' || source !== 'pulse' || props.paused === true, 60000)
-  // 全屏：Esc 退出 + 跟随窗口高度
+  // 全屏：Esc 退出；图表高度实测覆盖层剩余空间（ResizeObserver，svg 精确填充）
   useEffect(() => {
     if (!full) return undefined
-    const onR = (): void => setVh(window.innerHeight)
+    const measure = (): void => { if (fullBodyRef.current !== null) setFh(Math.max(320, fullBodyRef.current.clientHeight)) }
+    measure()
     const onK = (e: { key: string }): void => { if (e.key === 'Escape') setFull(false) }
-    window.addEventListener('resize', onR)
     window.addEventListener('keydown', onK)
-    return () => { window.removeEventListener('resize', onR); window.removeEventListener('keydown', onK) }
+    let ro: ResizeObserver | undefined
+    if (typeof ResizeObserver !== 'undefined' && fullBodyRef.current !== null) { ro = new ResizeObserver(measure); ro.observe(fullBodyRef.current) } else { window.addEventListener('resize', measure) }
+    return () => { window.removeEventListener('keydown', onK); if (ro !== undefined) { ro.disconnect() } else { window.removeEventListener('resize', measure) } }
   }, [full])
   // 时间档位过滤（1 周 / 1 月）
   const rangeFrom = Date.now() - range * 86400000
@@ -825,7 +828,7 @@ export function CurveView(props: {
     children: CurveChart({ points: pts, threshold, thresholdLabel: 'S 形阈值参考（P1）', yFmt: CURVE_YFMT[key], anno, h: hh, label: curveLabel(key), tipOf, onOpenTurn: props.onOpenTurn, resetKey: String(range) + '/' + String(key) + '/' + String(scope) }),
   })
   if (full) {
-    return createElement('div', { style: { position: 'fixed', inset: 0, zIndex: 60, background: 'var(--nt-bg,#f2f2f0)', display: 'flex', flexDirection: 'column', padding: '12px 18px' } },
+    return createElement('div', { style: { position: 'absolute', inset: 0, zIndex: 55, background: 'var(--nt-bg,#f2f2f0)', display: 'flex', flexDirection: 'column', padding: '12px 18px', overflow: 'hidden' } },
       createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginBottom: 10 } },
         createElement('span', { style: { fontWeight: 700, letterSpacing: 2, fontSize: 13 } }, 'NAUTILUS · ' + curveLabel(key)),
         metricSeg,
@@ -833,7 +836,13 @@ export function CurveView(props: {
         createElement('span', { style: { flex: 1 } }),
         createElement('button', { className: 'nt-btn', onClick: () => setFull(false) }, '✕ 退出全屏（Esc）'),
       ),
-      chartPanel(Math.max(320, vh - 150)),
+      createElement('div', { style: { flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' } },
+        createElement('div', { className: 'nt-note', style: { margin: '0 0 8px', flex: 'none' } },
+          '时间档位 ' + (range === 7 ? '1 周' : '1 月') + ' · 滚轮放缩（指针为锚，双击复位）· 右键拖动平移 · 悬停采样点看简略读数，点击下钻完整问答。'),
+        createElement('div', { ref: fullBodyRef, style: { flex: 1, minHeight: 0 } },
+          CurveChart({ points: pts, threshold, thresholdLabel: 'S 形阈值参考（P1）', yFmt: CURVE_YFMT[key], anno, h: fh, label: curveLabel(key), tipOf, onOpenTurn: props.onOpenTurn, resetKey: String(range) + '/' + String(key) + '/' + String(scope) }),
+        ),
+      ),
     )
   }
   return createElement('div', null,

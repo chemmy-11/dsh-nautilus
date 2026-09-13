@@ -917,22 +917,21 @@ export function apply(ctx: {
 }): void {
   injectStyle()
   // 会话名解析（dsh 工作区名）：sessions 为可选服务（dsh-api-session-controller），按 AGENTS.md 用 ctx.get。
-  // 只读 list 快照当前值（不订阅；工作台随轮询/交互重渲染时自然刷新）。
-  // 行形状 = SessionSummary { id, cwd?, displayTitle, title? }——名称取 cwd 末段（工作区目录名），回退 displayTitle。
+  // 读取面（0.1.5-rc.2 实证，task-board 同款）：sessions.list.getSnapshot() → SessionListState
+  //   { ids, byId: Record<sessionId, SessionSummary>, current, phase }；
+  // SessionSummary { id, cwd?, displayTitle, title? }——名称取 cwd 末段（工作区目录名），回退 displayTitle/title/短 id。
   const sessionNameOf = (id: string): { name: string; title: string } | null => {
-    const svc = ctx.get?.('sessions') as { list?: unknown } | undefined
-    const list = (svc?.list ?? null) as { get?: () => unknown } | null
-    const snap = (typeof list?.get === 'function' ? list.get() : list) as { items?: unknown } | null
-    const items = (snap as { items?: unknown[] } | null)?.items
-    if (!Array.isArray(items)) return null
-    for (const row of items as Array<Record<string, unknown>>) {
-      if (row.id !== id) continue
-      const cwd = typeof row.cwd === 'string' ? row.cwd : ''
-      const title = typeof row.displayTitle === 'string' ? row.displayTitle : typeof row.title === 'string' ? row.title : ''
-      const ws = cwd === '' ? '' : baseName(cwd)
-      return { name: ws === '' ? (title === '' ? id.slice(0, 8) : title) : ws, title }
-    }
-    return null
+    const svc = ctx.get?.('sessions') as { list?: { getSnapshot?: () => unknown } } | undefined
+    const getSnap = svc?.list?.getSnapshot
+    if (typeof getSnap !== 'function') return null
+    const state = getSnap.call(svc?.list) as { byId?: Record<string, { cwd?: unknown; displayTitle?: unknown; title?: unknown }> } | null
+    const row = state?.byId?.[id]
+    if (row === undefined || row === null) return null
+    const cwd = typeof row.cwd === 'string' ? row.cwd : ''
+    const display = typeof row.displayTitle === 'string' ? row.displayTitle : ''
+    const title = typeof row.title === 'string' && row.title !== '' ? row.title : display
+    const ws = cwd === '' ? '' : baseName(cwd)
+    return { name: ws === '' ? (title === '' ? id.slice(0, 8) : title) : ws, title }
   }
   ctx.effect(
     () => ctx.slots.inject('conversation.view', () =>
