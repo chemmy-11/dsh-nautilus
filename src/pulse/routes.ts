@@ -1,11 +1,13 @@
 /**
- * @dsh-external/dsh-nexus — pulse 只读校验路由（host 半区）。
+ * @dsh-external/dsh-nexus — pulse 路由（host 半区）。
  *
- * 用途：本层自检 + 后续 UI 层导入的取数口（UI 层尚未接入，接口先按"可画曲线"设计）。
- *   GET /api/nexus/pulse/state                        采集状态 + 每指标最新值
- *   GET /api/nexus/pulse/series?metric=&windowMs=&maxPoints=   单指标时间序列（桶均值）
+ * 用途：本层自检 + UI 层取数口 + **运行时心跳档位控制**。
+ *   GET  /api/nexus/pulse/state                        采集状态 + 每指标最新值
+ *   GET  /api/nexus/pulse/series?metric=&windowMs=&maxPoints=   单指标时间序列（桶均值）
+ *   POST /api/nexus/pulse/control                      心跳档位：{ intervalMs } 定时档 | { mode:'manual' } 手动档 | { sample:true } 立即采一次
  *
- * 与 nexus 路由同一守卫口径（同源标记）；**不写数据**，只读。
+ * 与 nexus 路由同一守卫口径（同源标记）。**control 只改采集节律，不写业务读数**——
+ * 它决定「多久采一次」，采样本身仍走同一条 tick 路径（同库同表）。
  */
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { WebRoute } from '@deepseek-ai/dsh-host-webserver'
@@ -15,9 +17,24 @@ import type { PulseCollectorStatus } from './index.js'
 /** 集中常量：pulse 路由前缀（AGENTS.md §1-4）。 */
 export const PULSE_API_PREFIX = '/api/nexus/pulse'
 
+/** 定时档允许的间隔区间（UI 只暴露 1s / 5s 两档；区间校验在此统一，非法即 400）。 */
+export const PULSE_INTERVAL_MIN_MS = 1000
+export const PULSE_INTERVAL_MAX_MS = 600000
+
+/** 心跳运行时控制面（由插件半区实现；路由只做校验与转发）。 */
+export interface PulseControl {
+  /** 切到定时档。 */
+  setAuto(intervalMs: number): void
+  /** 切到手动档：停定时器，只在 sampleNow 时采样。 */
+  setManual(): void
+  /** 立即采一次（任何档位都可用；与定时 tick 串行，不重叠）。 */
+  sampleNow(): Promise<void>
+}
+
 export interface PulseRouteDeps {
   store: PulseStore
   status: () => PulseCollectorStatus
+  control: PulseControl
 }
 
 function json(res: ServerResponse, status: number, body: unknown): void {
@@ -35,6 +52,19 @@ function intParam(raw: string | null, fallback: number, min: number, max: number
   const n = raw === null ? NaN : Number(raw)
   if (!Number.isFinite(n)) return fallback
   return Math.min(max, Math.max(min, Math.trunc(n)))
+}
+
+/** 读 JSON 请求体（限长；解析失败 → null，由调用方回 400）。 */
+function readJsonBody(req: IncomingMessage, limit = 1 << 16): Promise<unknown> {
+  return new Promise((resolve) => {
+    let text = ''
+    req.on('data', (chunk: unknown) => { if (text.length < limit) text += String(chunk) })
+    req.on('end', () => {
+      if (text === '') return resolve({})
+      try { resolve(JSON.parse(text)) } catch { resolve(null) }
+    })
+    req.on('error', () => resolve(null))
+  })
 }
 
 export function registerPulseRoutes(ctx: { webServer: { register(route: WebRoute): () => void } }, deps: PulseRouteDeps): () => void {
@@ -74,8 +104,47 @@ export function registerPulseRoutes(ctx: { webServer: { register(route: WebRoute
     },
   }
 
+  const control: WebRoute = {
+    kind: 'exact',
+    path: PULSE_API_PREFIX + '/control',
+    handler: (req, res): void => {
+      void (async (): Promise<void> => {
+        if (req.method !== 'POST') return json(res, 405, { ok: false, error: 'method-not-allowed' })
+        if (!browserSameOriginMarker(req)) return json(res, 403, { ok: false, error: 'forbidden' })
+        const body = (await readJsonBody(req)) as { mode?: unknown; intervalMs?: unknown; sample?: unknown } | null
+        if (body === null) return json(res, 400, { ok: false, error: 'invalid-json' })
+
+        if (body.mode !== undefined && body.mode !== 'manual' && body.mode !== 'auto') {
+          return json(res, 400, { ok: false, error: 'invalid-mode' })
+        }
+        let intervalMs: number | undefined
+        if (body.intervalMs !== undefined) {
+          if (typeof body.intervalMs !== 'number' || !Number.isFinite(body.intervalMs)) {
+            return json(res, 400, { ok: false, error: 'invalid-interval' })
+          }
+          intervalMs = Math.trunc(body.intervalMs)
+          if (intervalMs < PULSE_INTERVAL_MIN_MS || intervalMs > PULSE_INTERVAL_MAX_MS) {
+            return json(res, 400, { ok: false, error: 'interval-out-of-range' })
+          }
+        }
+
+        // 顺序：先定档位，再按需立即采一次（手动档下 sample:true 就是「手动采样」）
+        if (body.mode === 'manual') deps.control.setManual()
+        else if (intervalMs !== undefined) deps.control.setAuto(intervalMs)
+
+        if (body.sample === true) {
+          await deps.control.sampleNow()
+        }
+        json(res, 200, { ok: true, collector: deps.status() })
+      })().catch((err: unknown) => {
+        json(res, 500, { ok: false, error: err instanceof Error ? err.message : String(err) })
+      })
+    },
+  }
+
   disposers.push(ctx.webServer.register(state))
   disposers.push(ctx.webServer.register(series))
+  disposers.push(ctx.webServer.register(control))
   return () => { for (const d of disposers.reverse()) { try { d() } catch { /* 幂等清理 */ } } }
 }
 

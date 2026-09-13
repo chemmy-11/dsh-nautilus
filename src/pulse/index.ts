@@ -19,7 +19,7 @@ import z from '@deepseek-ai/schemastery'
 import { LAYER, collectGpu, collectLocal, cpuTimes, type Exec, type ExecResult, type Sample } from './collect.js'
 import { CountersSession, type ChildLike, type ChildSpawner } from './counters.js'
 import { openPulseStore, type PulseStore } from './store.js'
-import { registerPulseRoutes } from './routes.js'
+import { registerPulseRoutes, type PulseControl } from './routes.js'
 
 export const name = 'pulse'
 /** webServer 必需（校验路由）；subprocess 可选，经 ctx.get 取（AGENTS.md §2）。 */
@@ -79,6 +79,10 @@ export interface PulseCollectorStatus {
   /** 助手重启次数（读超时/进程退出 → 下个周期重启）。 */
   countersRestarts: number
   sealed: boolean
+  /** 心跳档位：auto = 按 intervalMs 定时；manual = 只在 UI 手动触发时采样。 */
+  mode: 'auto' | 'manual'
+  /** 当前（或最近一次）自动档间隔 ms；manual 档保留上次值以便切回。 */
+  intervalMs: number
 }
 
 /** `ctx.subprocess` 的最小鸭子类型（可选 seam；不 import 宿主实现，见 AGENTS.md §2）。 */
@@ -144,9 +148,8 @@ export function apply(ctx: Context, config: Config): void {
     startedAt: Date.now(), ticks: 0, lastTickTs: null, lastDurationMs: null, lastSampleCount: 0,
     lastError: null, countersOk: false, gpuOk: false, gpuSamples: 0,
     execAvailable: exec !== null, shellPath: null, countersRestarts: 0, sealed: false,
+    mode: config.enabled ? 'auto' : 'manual', intervalMs: config.intervalMs,
   }
-
-  registerPulseRoutes(ctx, { store, status: () => status })
 
   let prevCpu = cpuTimes()
   let prevUsage = process.cpuUsage()
@@ -158,8 +161,20 @@ export function apply(ctx: Context, config: Config): void {
   ctx.effect(() => () => { void counters?.close() })
   let timer: ReturnType<typeof setTimeout> | null = null
   let stopped = false
+  let ticking = false
+  let pendingManual = false
+
+  /** 按当前档位重排下一次自动采样；manual 档（或已停）不排。 */
+  const reschedule = (): void => {
+    if (timer !== null) { clearTimeout(timer); timer = null }
+    if (stopped || status.mode !== 'auto') return
+    timer = setTimeout(() => { void tick() }, status.intervalMs)
+  }
 
   const tick = async (): Promise<void> => {
+    // 与定时 tick 串行：手动触发撞上自动 tick 时排队一次，不并发采（同库同连接）
+    if (ticking) { pendingManual = true; return }
+    ticking = true
     const started = Date.now()
     const samples: Sample[] = []
     try {
@@ -193,6 +208,7 @@ export function apply(ctx: Context, config: Config): void {
     } catch (err) {
       status.lastError = err instanceof Error ? err.message : String(err)
     } finally {
+      ticking = false
       status.ticks += 1
       status.lastTickTs = started
       status.lastDurationMs = Date.now() - started
@@ -200,13 +216,24 @@ export function apply(ctx: Context, config: Config): void {
         lastPruneTs = Date.now()
         try { store.prune(Date.now() - config.retentionDays * 86400000) } catch (err) { status.lastError = err instanceof Error ? err.message : String(err) }
       }
-      if (!stopped && config.enabled) timer = setTimeout(() => { void tick() }, config.intervalMs)
+      // 手动排队优先；否则按当前档位重排（manual 档不会排下一次）
+      if (pendingManual) { pendingManual = false; void tick() } else reschedule()
     }
   }
 
   if (config.enabled) {
-    timer = setTimeout(() => { void tick() }, Math.min(1000, config.intervalMs))
+    timer = setTimeout(() => { void tick() }, Math.min(1000, status.intervalMs))
   }
+
+  // 运行时心跳控制：档位可变（auto@intervalMs / manual），手动档只在 sampleNow 时采一次。
+  // 采样始终走同一条 tick 路径（同库同表），控制面只改节律——不产生第二套口径。
+  const control: PulseControl = {
+    setAuto: (ms) => { status.intervalMs = ms; status.mode = 'auto'; reschedule() },
+    setManual: () => { status.mode = 'manual'; if (timer !== null) { clearTimeout(timer); timer = null } },
+    sampleNow: () => tick(),
+  }
+
+  registerPulseRoutes(ctx, { store, status: () => status, control })
 
   ctx.effect(() => () => {
     stopped = true
@@ -214,7 +241,7 @@ export function apply(ctx: Context, config: Config): void {
     status.sealed = true
   })
 
-  console.info('[pulse] 采集启动：interval=' + config.intervalMs + 'ms counters=' + config.countersIntervalMs + 'ms gpu=' + config.gpuIntervalMs + 'ms exec=' + (exec !== null ? 'ctx.subprocess' : '不可用（只采本地族）') + ' db=' + dbFile)
+  console.info('[pulse] 采集启动：mode=' + status.mode + ' interval=' + status.intervalMs + 'ms counters=' + config.countersIntervalMs + 'ms gpu=' + config.gpuIntervalMs + 'ms exec=' + (exec !== null ? 'ctx.subprocess' : '不可用（只采本地族）') + ' db=' + dbFile)
 
   /** 计数器助手用的常驻子进程 spawner（stdin/stdout 双管道；宿主 seam 缺席 → null）。 */
   function makeSessionSpawnerFrom(c: Context): ChildSpawner | null {

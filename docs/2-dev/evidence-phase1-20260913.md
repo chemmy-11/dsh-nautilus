@@ -330,6 +330,28 @@ client-modules: package @dsh-external/dsh-nexus resolves from multiple active Lo
 
 ---
 
+## E15 OS 层接入：读数实时化 + 心跳档位（2026-09-13 下午，守谷人指派）
+
+**需求（守谷人原话）**：OS 层能实时显示读数；心跳给出可选档位（1s、5s、手动）。
+
+**宿主半区（`src/pulse/`）**
+- 新增 `POST /api/nexus/pulse/control`：`{ intervalMs: 1000|5000 }` 定时档 · `{ mode: 'manual' }` 手动档（停定时器）· `{ sample: true }` 立即采一次。合法区间 1000–600000ms，非法/非法 mode → 400，非 POST → 405，非同源 → 403。响应 `{ ok, collector }`。
+- 采集循环改为**可重排**：`reschedule()` 按当前档位排下一次；手动档不排。手动触发与定时 tick **串行**（撞上时排队一次，不并发用同一 SQLite 连接）。
+- `PulseCollectorStatus` 增 `mode` / `intervalMs`，随 `/state` 下发——UI 靠它渲染当前档，不需要另立状态源。
+
+**客户端半区**
+- **读数实时化**：工作台对 `/api/nexus/pulse/state` 的轮询从 120 s 改为 **1 s**（该口只查 15 行 latest，响应 ~2 KB，代价可忽略）；手动档下值不变但重取同样廉价，故不额外分支。
+- **心跳档位控件**：新文件 `src/client/pulse-controls.ts`（`PulseHeartbeat`），插在工作台头部右侧：`心跳 [1s][5s][手动]`，当前档高亮，手动档多一个「采一次」按钮；成功后 toast 回执并立刻重取读数，不必等下一个轮询周期。独立文件是为了不与守谷人并行进行的 UI 优化撞同一段代码。
+- 档位语义在 UI 上明示：**1 s 档只加密本地族**，计数器族（15 s）与 GPU 族（10 s）仍按各自周期——它们是重活，不随心跳线性加密。
+
+**测试（`scripts/test.mjs`，新增 1 例共 22/22）**：`pulse 心跳控制` 用例经**真实 cordis 组合路径**挂载插件，取出真实 handler 并驱动：GET→405、manual→mode=manual、5000/1000→自动档与 intervalMs 生效、500 与 999999999 与非法 mode→400、`{mode:manual,sample:true}`→**ticks 真的 +1**、`/state` 回传档位。六件套全绿。
+
+**环境四元组**：dsh `0.1.5-rc.2` · profile `web` · 装配 = **bundle（link: junction）** · 结果：**宿主半区需重启才生效**（新路由与 status 字段属宿主代码，node 模块缓存不会热替换）；**客户端半区不必重启**——`link:` 下 bundle 变更 rev 自动更新（§E14 实测）。
+
+**诚实边界**：① 端上尚未重启，`/pulse/control` 在运行中的宿主里仍是 404、`mode/intervalMs` 仍缺席——UI 会显示「心跳设置失败：HTTP 404」而**不会静默**（失败路径已写进控件）；② 本轮未观测 DOM（OQ-U6 依旧）；③ 1 s 档对宿主 CPU 的实际开销未测（本地族为纯 Node 读取，理论可忽略，但**未测即未证**）；④ 手动档下若长时间不采，`metric_sample` 会出现时间空洞——曲线按时间轴绘制会显示为间隔，这是设计而非缺陷。
+
+---
+
 ## E8 诚实边界（引用本归档时必须一并引用）
 
 1. **端上读数口径**：§E8 初稿时本层尚未装配（证据全来自离线探针）；**§E9 起已热装配进 profile `web`**，宿主路径已有端上四元组读数（OQ-3 收敛）。但 E5 的 1 小时档仍只有中间读数，且「连续 1 小时无内存增长」尚未给出完整序列。

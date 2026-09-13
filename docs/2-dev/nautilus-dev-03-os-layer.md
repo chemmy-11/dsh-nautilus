@@ -86,8 +86,11 @@ CREATE INDEX idx_sample_ts ON metric_sample(ts);
 |---|---|
 | `GET /api/nexus/pulse/state` | 采集器状态（ticks/最近一次耗时/各族可用性/助手 shell 与重启次数）+ 每指标最新值 + 库统计 |
 | `GET /api/nexus/pulse/series?metric=&windowMs=&maxPoints=` | 单指标序列（按桶取均值，点数 ≤ maxPoints） |
+| `POST /api/nexus/pulse/control` | **心跳运行时控制**（2026-09-13 新增）：`{ intervalMs: 1000\|5000 }` 定时档 · `{ mode: 'manual' }` 手动档（停定时器）· `{ sample: true }` 立即采一次（任何档位可用）。合法区间 1000–600000ms，非法即 400；只改节律，采样仍走同一条 tick 路径（同库同表，不产生第二套口径）。响应回 `{ ok, collector }` |
 
-同源标记守卫；**只读**（不写数据）。UI 层尚未接入——接口先按"可画曲线"设计。
+**心跳档位（UI 暴露三档）**：`1 s` / `5 s` / `手动`。1 s 档只加密**本地族**的采样；计数器族与 GPU 族仍按各自周期（`countersIntervalMs` 15 s / `gpuIntervalMs` 10 s）——它们是重活，不随心跳线性加密。手动档下读数只在点「采一次」时更新。
+
+同源标记守卫。读路由**只读**；`/control` 只改采集节律（不写业务读数）。UI 层已接入（工作台「系统层读数」面板 + 心跳档位控件，见 §E14/§E15）。
 
 ## 6. Phase 1 验收对照
 

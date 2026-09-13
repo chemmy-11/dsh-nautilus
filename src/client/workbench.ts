@@ -11,6 +11,8 @@
  * 空数据是正常态（本阶段允许）。
  */
 import { Component, createElement, useEffect, useState, type ReactNode } from 'react'
+// OS 层心跳档位控件（1s / 5s / 手动）——独立文件，避免与并行 UI 改动冲突
+import { PulseHeartbeat } from './pulse-controls'
 
 export const WORKBENCH_ID = 'nautilus-workbench'
 
@@ -26,6 +28,9 @@ const CSS_LINES = [
   '.nt-wb-seg button{border:0;background:transparent;color:var(--nt-dim,#5f5f5c);font-size:11px;letter-spacing:1.5px;padding:5px 11px;cursor:pointer;text-transform:uppercase}',
   '.nt-wb-seg button.on{background:var(--nt-text,#101010);color:var(--nt-panel,#fff)}',
   '.nt-wb-right{margin-left:auto;display:flex;align-items:center;gap:10px;font-size:10px;letter-spacing:1.5px;color:var(--nt-faint,#9a9a95);text-transform:uppercase}',
+  '.nt-hb{display:flex;align-items:center;gap:4px}',
+  '.nt-hb-lab{font-size:9px;letter-spacing:2px;color:var(--nt-faint,#9a9a95)}',
+  '.nt-hb-now{font-size:9px;letter-spacing:1px;color:var(--nt-dim,#5f5f5c);min-width:56px}',
   '.nt-era{display:flex;align-items:center;gap:10px;padding:6px 16px;border-bottom:1px solid var(--nt-border,#d9d9d5);background:var(--nt-panel2,#f7f7f5);font-size:10px;letter-spacing:1.2px;color:var(--nt-dim,#5f5f5c);flex-wrap:wrap}',
   '.nt-era .badge{border:1px solid var(--nt-accent,#e6321e);color:var(--nt-accent,#e6321e);padding:1px 6px;letter-spacing:2px}',
   '.nt-wb-body{flex:1;overflow:auto;padding:14px 16px}',
@@ -125,7 +130,7 @@ export type PulsePoint = { metric: string; value: number | null; ts: number; tag
 export type PulseSeries = { metric: string; from: number; to: number; windowMs: number; maxPoints: number; bucketMs: number; points: Array<{ ts: number; value: number; n: number }> }
 
 export type PulseState = {
-  collector: { ticks: number; lastTickTs: number | null; countersOk: boolean; gpuOk: boolean; shellPath: string | null; execAvailable: boolean; lastError: string | null }
+  collector: { ticks: number; lastTickTs: number | null; countersOk: boolean; gpuOk: boolean; shellPath: string | null; execAvailable: boolean; lastError: string | null; mode: 'auto' | 'manual'; intervalMs: number }
   db: { rows: number; oldestTs: number | null; newestTs: number | null; schemaVersion: number }
   latest: PulsePoint[]
 }
@@ -849,7 +854,9 @@ export function Workbench(props: { onExitToConversation?: () => void } = {}): Re
   const paused = drawer !== null
   const nexus = useJson<NexusState>('/api/nexus/state', paused, 120000, nonce)
   const m2 = useJson<M2State>('/api/nexus/m2/state?root=all', paused, 120000, nonce)
-  const pulse = useJson<PulseState>('/api/nexus/pulse/state', paused, 120000, nonce)
+  // 实时读数：OS 层每 1s 重取最新值（/pulse/state 只查 15 行 latest，代价可忽略）；
+  // 手动档下值不会变，但重取同样廉价，故不额外分支。
+  const pulse = useJson<PulseState>('/api/nexus/pulse/state', paused, 1000, nonce)
   const ann = useJson<AnnotationsState>('/api/nexus/m2/annotations', paused, 120000, nonce)
   // nexus 层接入（M4.3 / M4-L / M3-F.3）：指向、L 场计数、白盒分析——原先只有旧 tab 能看到
   const vault = useJson<VaultInfo>('/api/nexus/vault', paused, 120000, nonce)
@@ -891,6 +898,13 @@ export function Workbench(props: { onExitToConversation?: () => void } = {}): Re
       createElement('div', { className: 'nt-wb-right' },
         createElement('span', null, 'NEXUS ' + ok(nexus) + ' · PULSE ' + ok(pulse)),
         createElement('span', null, '刷新 ' + (pulse === null ? '—' : fmtTime(pulse.collector.lastTickTs))),
+        createElement(PulseHeartbeat, {
+          mode: pulse === null ? 'auto' : pulse.collector.mode,
+          intervalMs: pulse === null ? 5000 : pulse.collector.intervalMs,
+          paused,
+          onDone: (m: string) => setToast(m),
+          reload: () => setNonce((v) => v + 1),
+        }),
         createElement('button', { className: 'nt-btn', onClick: () => setNonce((v) => v + 1) }, '立即取数'),
       ),
     ),

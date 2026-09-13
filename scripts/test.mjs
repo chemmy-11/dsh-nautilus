@@ -398,7 +398,8 @@ test('host bundle 单入口：pulse 作为子插件挂载并注册自身路由',
     const routes = []
     const tools = []
     const ctx = new Context()
-    ctx.provide('webServer', { register(route) { routes.push(route.path); return () => {} } })
+    const handlers = new Map()
+    ctx.provide('webServer', { register(route) { routes.push(route.path); handlers.set(route.path, route.handler); return () => {} } })
     ctx.provide('tools', { register(def) { tools.push(def.name) } })
     const fiber = ctx.plugin(mod, {
       vaultRoot: '',
@@ -413,6 +414,7 @@ test('host bundle 单入口：pulse 作为子插件挂载并注册自身路由',
       '/api/nexus/m2/annotations',
       '/api/nexus/m2/state',
       '/api/nexus/m2/turn-text',
+      '/api/nexus/pulse/control',
       '/api/nexus/pulse/series',
       '/api/nexus/pulse/state',
       '/api/nexus/state',
@@ -427,5 +429,69 @@ test('host bundle 单入口：pulse 作为子插件挂载并注册自身路由',
   }
 })
 
+// ── OS 层心跳档位控制（/api/nexus/pulse/control）──────────────────────────────
 
+test('pulse 心跳控制：档位切换 / 立即采样 / 非法入参 400', async () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'nautilus-hb-'))
+  const prevHome = process.env.DSH_HOME
+  process.env.DSH_HOME = tmp
+  try {
+    const { Context } = await import('@deepseek-ai/cordis')
+    const mod = await import(new URL('../lib/index.js', import.meta.url).href)
+    const handlers = new Map()
+    const ctx = new Context()
+    ctx.provide('webServer', { register(route) { handlers.set(route.path, route.handler); return () => {} } })
+    ctx.provide('tools', { register() {} })
+    const fiber = ctx.plugin(mod, {
+      vaultRoot: '',
+      pulse: { enabled: true, enableCounters: false, enableGpu: false, intervalMs: 60000, dbFile: ':memory:' },
+    })
+    const deadline = Date.now() + 5000
+    while (Date.now() < deadline && !handlers.has('/api/nexus/pulse/control')) await new Promise((r) => setTimeout(r, 25))
+    const control = handlers.get('/api/nexus/pulse/control')
+    const state = handlers.get('/api/nexus/pulse/state')
+    assert.equal(typeof control, 'function', 'control 路由必须注册')
+    assert.equal(typeof state, 'function', 'state 路由必须注册')
 
+    const req = (method, body) => ({
+      method,
+      headers: { 'sec-fetch-site': 'same-origin' },
+      on(ev, cb) { if (ev === 'data' && body !== undefined) cb(JSON.stringify(body)); if (ev === 'end') cb(); return this },
+    })
+    const res = () => ({ statusCode: 0, payload: null, writeHead(s) { this.statusCode = s }, end(text) { this.payload = JSON.parse(String(text ?? '{}')) } })
+    // handler 内部是异步 IIFE：等 response 落地
+    const call = async (method, body) => { const r = res(); control(req(method, body), r); const dl = Date.now() + 3000; while (Date.now() < dl && r.statusCode === 0) await new Promise((x) => setTimeout(x, 10)); return r }
+
+    assert.equal((await call('GET')).statusCode, 405, '非 POST 必须 405')
+    const manual = await call('POST', { mode: 'manual' })
+    assert.equal(manual.statusCode, 200)
+    assert.equal(manual.payload.collector.mode, 'manual')
+    const back5 = await call('POST', { intervalMs: 5000 })
+    assert.equal(back5.statusCode, 200)
+    assert.equal(back5.payload.collector.mode, 'auto')
+    assert.equal(back5.payload.collector.intervalMs, 5000)
+    const fast = await call('POST', { intervalMs: 1000 })
+    assert.equal(fast.payload.collector.intervalMs, 1000)
+    assert.equal((await call('POST', { intervalMs: 500 })).statusCode, 400, '低于下限必须 400')
+    assert.equal((await call('POST', { mode: 'bogus' })).statusCode, 400, '非法 mode 必须 400')
+    assert.equal((await call('POST', { intervalMs: 999999999 })).statusCode, 400, '超上限必须 400')
+
+    const ticksBefore = fast.payload.collector.ticks
+    const sampled = await call('POST', { mode: 'manual', sample: true })
+    assert.equal(sampled.statusCode, 200)
+    assert.ok(sampled.payload.collector.ticks > ticksBefore, '手动采样必须真的跑了一次 tick')
+    assert.equal(sampled.payload.collector.mode, 'manual')
+
+    // state 必须暴露档位（UI 靠它渲染当前档）
+    const sr = res()
+    state(req('GET'), sr)
+    assert.equal(sr.statusCode, 200)
+    assert.equal(sr.payload.collector.mode, 'manual')
+    assert.equal(sr.payload.collector.intervalMs, 1000)
+    await fiber.dispose()
+  } finally {
+    if (prevHome === undefined) delete process.env.DSH_HOME
+    else process.env.DSH_HOME = prevHome
+    rmSync(tmp, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+  }
+})
