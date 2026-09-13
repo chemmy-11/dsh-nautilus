@@ -363,9 +363,11 @@ export function Spark(props: {
  * 交互曲线（NEXUS 轮次专用；OS 层不用此组件——PULSE 是等间隔连续采样，无采样点语义）。
  * S4 定稿视觉 + 原 dsh-nexus 交互回归：
  *   · 滚轮放缩（以指针为锚点，min 4 点，双击复位）——wheel 需非 passive 监听才能 preventDefault；
+ *   · 右键按住拖动 = 平移时间窗（contextmenu 已抑制）；
  *   · 悬停采样点 → 竖参考线 + 简略看板（该轮读数摘要；上缘/右缘自动翻面）；
  *   · 点击采样点 → onOpenTurn 下钻完整问答（抽屉由根组件持有）。
- * 数据精准：y 域随窗口重算，看板数值取原始读数（不取插值）。
+ * 数据精准：y 域随窗口重算；看板数值取原始读数（不取插值）；viewBox 宽度实测容器（ResizeObserver），
+ * 悬停命中换算按 rect 实测比例，指针与点位零偏差。
  */
 export function CurveChart(props: {
   points: Array<{ x: number; y: number | null; meta: M2Point }>
@@ -374,6 +376,7 @@ export function CurveChart(props: {
   yFmt?: (v: number) => string
   anno?: { from: number; to: number; txt: string }
   h?: number
+  resetKey?: string | number
   onOpenTurn?: (session: string, turn: number) => void
   tipOf?: (meta: M2Point) => { head: string; lines: string[] }
   label?: string
@@ -381,17 +384,34 @@ export function CurveChart(props: {
   const base = props.points.filter((p) => p.y !== null && Number.isFinite(p.y))
   const n = base.length
   const h = props.h ?? 320
-  const W = 1120
   const padL = 52
   const padR = 16
   const padT = 26
   const padB = 26
-  const plotW = W - padL - padR
   const yf = props.yFmt ?? ((v: number): string => v.toFixed(1))
   const [win, setWin] = useState<[number, number]>([0, Math.max(0, n - 1)])
   const [hover, setHover] = useState<number | null>(null)
+  const [drag, setDrag] = useState(false)
+  const dragRef = useRef<{ x: number; a: number; b: number } | null>(null)
   const svgRef = useRef<SVGSVGElement | null>(null)
-  useEffect(() => { setWin([0, Math.max(0, n - 1)]); setHover(null) }, [n])
+  const boxRef = useRef<HTMLDivElement | null>(null)
+  const [cw, setCw] = useState(1120)
+  // 容器宽度实测：viewBox 宽度跟随容器（ResizeObserver），保证 1:1 映射、点位无偏差
+  useEffect(() => {
+    const el = boxRef.current
+    if (el === null) return undefined
+    const measure = (): void => setCw(Math.max(560, el.clientWidth))
+    measure()
+    if (typeof ResizeObserver === 'undefined') {
+      window.addEventListener('resize', measure)
+      return () => { window.removeEventListener('resize', measure) }
+    }
+    const ro = new ResizeObserver(measure)
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [])
+  useEffect(() => { setWin([0, Math.max(0, n - 1)]); setHover(null) }, [n, props.resetKey])
+  // 滚轮放缩：以指针为锚点缩放窗口（min 4 点）
   useEffect(() => {
     const el = svgRef.current
     if (el === null || n < 5) return undefined
@@ -412,17 +432,38 @@ export function CurveChart(props: {
     el.addEventListener('wheel', onWheel, { passive: false })
     return () => { el.removeEventListener('wheel', onWheel) }
   }, [n])
+  // 右键拖动 = 平移时间窗（按下记录起点，window 级 move/up 保证拖出画布也持续）
+  useEffect(() => {
+    if (!drag) return undefined
+    const move = (e: MouseEvent): void => {
+      const d = dragRef.current
+      const el = svgRef.current
+      if (d === null || el === null) return
+      const rect = el.getBoundingClientRect()
+      const di = Math.round(((e.clientX - d.x) / rect.width) * (d.b - d.a))
+      const span = d.b - d.a
+      let na = d.a - di
+      na = Math.max(0, Math.min(n - 1 - span, na))
+      setWin([na, na + span])
+    }
+    const up = (): void => { dragRef.current = null; setDrag(false) }
+    window.addEventListener('mousemove', move)
+    window.addEventListener('mouseup', up)
+    return () => { window.removeEventListener('mousemove', move); window.removeEventListener('mouseup', up) }
+  }, [drag, n])
   if (n < 2) return Empty({ text: '暂无数据' })
+  const W = Math.max(560, cw)
   const [a, b] = win
   const hv = hover !== null && hover >= a && hover <= b ? hover : null
+  const plotW = W - padL - padR
   const sx = (gi: number): number => padL + ((gi - a) / Math.max(1, b - a)) * plotW
-  const sy = (v: number): number => h - padB - ((v - min) / span) * (h - padT - padB)
   const vis: Array<{ p: (typeof base)[number]; gi: number }> = []
   for (let i = a; i <= b && i < n; i++) vis.push({ p: base[i], gi: i })
   const ys = vis.map((v) => v.p.y as number)
   const min = Math.min(...ys)
   const max = Math.max(...ys)
   const span = max - min || 1
+  const sy = (v: number): number => h - padB - ((v - min) / span) * (h - padT - padB)
   const kids: ReactNode[] = []
   for (const r of [0, 1 / 3, 2 / 3, 1]) {
     const v = min + span * r
@@ -472,6 +513,7 @@ export function CurveChart(props: {
     kids.push(createElement('line', { key: 'xh', x1: sx(hv), x2: sx(hv), y1: padT - 4, y2: h - padB, stroke: 'var(--nt-faint,#9a9a95)', strokeWidth: 1, strokeDasharray: '3 3', opacity: 0.6 }))
   }
   const onMove = (e: { clientX: number; currentTarget: SVGSVGElement }): void => {
+    if (dragRef.current !== null) { setHover(null); return }
     const rect = e.currentTarget.getBoundingClientRect()
     const vx = ((e.clientX - rect.left) / rect.width) * W
     if (vx < padL - 8 || vx > W - padR + 8) { setHover(null); return }
@@ -483,12 +525,18 @@ export function CurveChart(props: {
   const tipX = hv !== null ? (sx(hv) / W) * 100 : 0
   const tipY = hv !== null ? (sy(base[hv].y as number) / h) * 100 : 0
   const tf = (tipX > 62 ? 'translateX(calc(-100% - 12px))' : 'translateX(12px)') + ' ' + (tipY < 30 ? 'translateY(12px)' : 'translateY(calc(-100% - 10px))')
-  return createElement('div', { className: 'nt-chart' },
+  return createElement('div', { className: 'nt-chart', ref: boxRef, style: drag ? { cursor: 'grabbing' } : undefined, onContextMenu: (e: { preventDefault(): void }) => e.preventDefault() },
     createElement('svg', {
       ref: svgRef,
       viewBox: '0 0 ' + String(W) + ' ' + String(h), width: '100%', height: h, role: 'img', 'aria-label': props.label ?? 'curve',
       onMouseMove: onMove,
-      onMouseLeave: () => setHover(null),
+      onMouseLeave: () => { if (dragRef.current === null) setHover(null) },
+      onMouseDown: (e: { button: number; preventDefault(): void }) => {
+        if (e.button !== 2) return
+        e.preventDefault()
+        dragRef.current = { x: e.clientX, a, b }
+        setDrag(true); setHover(null)
+      },
       onClick: () => { if (hv !== null && props.onOpenTurn !== undefined) { const m = base[hv].meta; props.onOpenTurn(m.session, m.turn) } },
       onDoubleClick: () => setWin([0, n - 1]),
     }, ...kids),
@@ -496,7 +544,7 @@ export function CurveChart(props: {
       ? createElement('div', { className: 'nt-tip', style: { left: tipX + '%', top: tipY + '%', transform: tf } },
         createElement('div', null, createElement('b', null, tip.head)),
         ...tip.lines.map((ln, i) => createElement('div', { key: String(i) }, ln)),
-        createElement('div', { className: 'dim' }, '点击采样点 → 完整问答 · 双击复位缩放'),
+        createElement('div', { className: 'dim' }, '点击采样点 → 完整问答 · 右键拖动平移 · 双击复位缩放'),
       )
       : null,
   )
@@ -666,20 +714,35 @@ export function CurveView(props: {
   era: Era
   pulse: PulseState | null
   paused?: boolean
+  analysis?: AnalysisRow[] | null
   sessionNameOf?: (id: string) => { name: string; title: string } | null
   onOpenTurn?: (session: string, turn: number) => void
 }): ReactNode {
   const [key, setKey] = useState<CurveKey>('miss')
   const [scope, setScope] = useState<string>('all')
   const [pickOpen, setPickOpen] = useState(false)
+  // 时间档位（1 周 / 1 月）；全屏：占满工作台、Esc 退出
+  const [range, setRange] = useState<7 | 30>(7)
+  const [full, setFull] = useState(false)
+  const [vh, setVh] = useState(typeof window === 'undefined' ? 900 : window.innerHeight)
   // 数据源：NEXUS 轮次（事件驱动，非等间隔）/ PULSE 采样（等间隔，斜率可读）
   const [source, setSource] = useState<'nexus' | 'pulse'>('nexus')
-  const analysis = useJson<AnalysisRow[]>('/api/nexus/m2/analysis?root=all', props.paused === true, 600000)
   const metrics = (props.pulse?.latest ?? []).map((l) => l.metric)
   const [picked, setPicked] = useState<string>('')
   const metric = picked !== '' && metrics.includes(picked) ? picked : (metrics[0] ?? '')
   const series = useJson<PulseSeries>('/api/nexus/pulse/series?metric=' + encodeURIComponent(metric) + '&windowMs=3600000&maxPoints=240', metric === '' || source !== 'pulse' || props.paused === true, 60000)
-  const curve = props.m2?.curve ?? []
+  // 全屏：Esc 退出 + 跟随窗口高度
+  useEffect(() => {
+    if (!full) return undefined
+    const onR = (): void => setVh(window.innerHeight)
+    const onK = (e: { key: string }): void => { if (e.key === 'Escape') setFull(false) }
+    window.addEventListener('resize', onR)
+    window.addEventListener('keydown', onK)
+    return () => { window.removeEventListener('resize', onR); window.removeEventListener('keydown', onK) }
+  }, [full])
+  // 时间档位过滤（1 周 / 1 月）
+  const rangeFrom = Date.now() - range * 86400000
+  const curve = (props.m2?.curve ?? []).filter((p) => p.ts >= rangeFrom)
   const sessions = Array.from(new Set(curve.map((p) => p.session)))
   const scoped = scope === 'all' ? curve : curve.filter((p) => p.session === scope)
   const pts = scoped.map((p) => {
@@ -690,7 +753,7 @@ export function CurveView(props: {
   // τ_e 注记（定稿元素）：仅单会话聚焦且 analysis 检出时绘制——多点叠加轴上 τ_e 无意义
   let anno: { from: number; to: number; txt: string } | undefined
   if (key === 'miss' && scope !== 'all' && pts.length >= 4) {
-    const hit = (analysis ?? []).find((a) => a.session === scope)
+    const hit = (props.analysis ?? []).find((a) => a.session === scope)
     if (hit !== undefined && hit.tauE !== null && Number.isFinite(hit.tauE)) {
       const from = Math.floor(pts.length * 0.3)
       anno = { from, to: Math.min(pts.length - 1, from + Math.round(hit.tauE)), txt: 'τ_e ≈ ' + String(hit.tauE) + ' turn（' + (SHAPE_LABEL[hit.shape] ?? hit.shape) + '）' }
@@ -721,6 +784,50 @@ export function CurveView(props: {
       ],
     }
   }
+  const metricSeg = createElement('div', { className: 'nt-wb-seg' },
+    ...(['miss', 'ms', 'tps'] as CurveKey[]).map((k) => createElement('button', { key: k, className: k === key ? 'on' : '', onClick: () => setKey(k) }, curveLabel(k))),
+    createElement('span', { style: { width: 12 } }),
+    ...([7, 30] as Array<7 | 30>).map((r) => createElement('button', { key: r, className: range === r ? 'on' : '', onClick: () => setRange(r) }, r === 7 ? '1 周' : '1 月')),
+  )
+  const pickerBox = createElement('div', { className: 'nt-wb-pickwrap' },
+    createElement('button', { className: 'nt-btn' + (scope !== 'all' ? ' on' : ''), onClick: () => setPickOpen((v) => !v) },
+      '会话 · ' + (scope === 'all' ? '全部（' + String(sessions.length) + '）' : scopeLabel(scope)) + ' ▾'),
+    pickOpen ? createElement('div', { className: 'nt-wb-scrim2', onClick: () => setPickOpen(false) }) : null,
+    pickOpen
+      ? createElement('div', { className: 'nt-wb-picker' },
+        createElement('div', { className: 'row' + (scope === 'all' ? ' on' : ''), onClick: () => { setScope('all'); setPickOpen(false) } },
+          createElement('div', { className: 'nm' }, '全部会话'),
+          createElement('div', { className: 'mt' }, String(sessions.length) + ' 个会话 · ' + String(curve.length) + ' 轮')),
+        ...sortedSessions.map((s) => {
+          const meta = props.m2?.sessionMeta[s]
+          const info = props.sessionNameOf?.(s) ?? null
+          const nm = info === null || info.name === '' ? s.slice(0, 10) : info.name
+          const title = info?.title ?? ''
+          return createElement('div', { key: s, className: 'row' + (scope === s ? ' on' : ''), onClick: () => { setScope(s); setPickOpen(false) } },
+            createElement('div', { className: 'nm' }, nm),
+            createElement('div', { className: 'mt' }, fmtDayTime(meta?.startTs) + ' · ' + String(meta?.turns ?? '—') + ' 轮' + (title !== '' && title !== nm ? ' · ' + title.slice(0, 26) : '')),
+          )
+        }),
+      )
+      : null,
+  )
+  const chartPanel = (hh: number): ReactNode => Panel({
+    title: curveLabel(key) + ' 时序曲线' + (full ? '（全屏）' : ''), fig: 'FIG.02',
+    note: '时间轴为记录时间戳（非等间隔）：轮次并非均匀采样，曲线的斜率不代表速率；朱红虚线为阈值参考（' + (threshold === undefined ? '本指标不设阈值' : String(threshold) + curveUnit(key)) + '），朱红实心点＝越过阈值的轮；τ_e 注记取自 /m2/analysis 检出值（单会话聚焦时显示）。时间档位 ' + (range === 7 ? '1 周' : '1 月') + '。',
+    children: CurveChart({ points: pts, threshold, thresholdLabel: 'S 形阈值参考（P1）', yFmt: CURVE_YFMT[key], anno, h: hh, label: curveLabel(key), tipOf, onOpenTurn: props.onOpenTurn, resetKey: String(range) + '/' + String(key) + '/' + String(scope) }),
+  })
+  if (full) {
+    return createElement('div', { style: { position: 'fixed', inset: 0, zIndex: 60, background: 'var(--nt-bg,#f2f2f0)', display: 'flex', flexDirection: 'column', padding: '12px 18px' } },
+      createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginBottom: 10 } },
+        createElement('span', { style: { fontWeight: 700, letterSpacing: 2, fontSize: 13 } }, 'NAUTILUS · ' + curveLabel(key)),
+        metricSeg,
+        pickerBox,
+        createElement('span', { style: { flex: 1 } }),
+        createElement('button', { className: 'nt-btn', onClick: () => setFull(false) }, '✕ 退出全屏（Esc）'),
+      ),
+      chartPanel(Math.max(320, vh - 150)),
+    )
+  }
   return createElement('div', null,
     createElement('div', { className: 'nt-wb-seg', style: { marginBottom: 10 } },
       createElement('button', { className: source === 'nexus' ? 'on' : '', onClick: () => setSource('nexus') }, 'NEXUS 轮次'),
@@ -728,40 +835,15 @@ export function CurveView(props: {
     ),
     source === 'nexus'
       ? createElement('div', null,
-        createElement('div', { className: 'nt-wb-seg', style: { marginBottom: 10 } },
-          ...(['miss', 'ms', 'tps'] as CurveKey[]).map((k) => createElement('button', { key: k, className: k === key ? 'on' : '', onClick: () => setKey(k) }, curveLabel(k))),
-        ),
         createElement('div', { style: { marginBottom: 10, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' } },
-          createElement('div', { className: 'nt-wb-pickwrap' },
-            createElement('button', { className: 'nt-btn' + (scope !== 'all' ? ' on' : ''), onClick: () => setPickOpen((v) => !v) },
-              '会话 · ' + (scope === 'all' ? '全部（' + String(sessions.length) + '）' : scopeLabel(scope)) + ' ▾'),
-            pickOpen ? createElement('div', { className: 'nt-wb-scrim2', onClick: () => setPickOpen(false) }) : null,
-            pickOpen
-              ? createElement('div', { className: 'nt-wb-picker' },
-                createElement('div', { className: 'row' + (scope === 'all' ? ' on' : ''), onClick: () => { setScope('all'); setPickOpen(false) } },
-                  createElement('div', { className: 'nm' }, '全部会话'),
-                  createElement('div', { className: 'mt' }, String(sessions.length) + ' 个会话 · ' + String(curve.length) + ' 轮')),
-                ...sortedSessions.map((s) => {
-                  const meta = props.m2?.sessionMeta[s]
-                  const info = props.sessionNameOf?.(s) ?? null
-                  const nm = info === null || info.name === '' ? s.slice(0, 10) : info.name
-                  const title = info?.title ?? ''
-                  return createElement('div', { key: s, className: 'row' + (scope === s ? ' on' : ''), onClick: () => { setScope(s); setPickOpen(false) } },
-                    createElement('div', { className: 'nm' }, nm),
-                    createElement('div', { className: 'mt' }, fmtDayTime(meta?.startTs) + ' · ' + String(meta?.turns ?? '—') + ' 轮' + (title !== '' && title !== nm ? ' · ' + title.slice(0, 26) : '')),
-                  )
-                }),
-              )
-              : null,
-          ),
+          metricSeg,
+          pickerBox,
           createElement('span', { className: 'nt-note', style: { marginTop: 0, flex: '1 1 260px' } },
-            '会话名 = dsh 工作区目录名（取自宿主会话列表 cwd）。滚轮放缩（指针为锚，双击复位）；悬停采样点看该轮简略读数，点击下钻完整问答。'),
+            '会话名 = dsh 工作区目录名（取自宿主会话列表 cwd）。滚轮放缩（指针为锚，双击复位）；右键按住拖动平移；悬停采样点看该轮简略读数，点击下钻完整问答。'),
+          createElement('span', { style: { flex: 1 } }),
+          createElement('button', { className: 'nt-btn', onClick: () => setFull(true) }, '⛶ 全屏'),
         ),
-        Panel({
-          title: curveLabel(key) + ' 时序曲线', fig: 'FIG.02',
-          note: '时间轴为记录时间戳（非等间隔）：轮次并非均匀采样，曲线的斜率不代表速率；朱红虚线为阈值参考（' + (threshold === undefined ? '本指标不设阈值' : String(threshold) + curveUnit(key)) + '），朱红实心点＝越过阈值的轮；τ_e 注记取自 /m2/analysis 检出值（单会话聚焦时显示）。',
-          children: CurveChart({ points: pts, threshold, thresholdLabel: 'S 形阈值参考（P1）', yFmt: CURVE_YFMT[key], anno, h: 340, label: curveLabel(key), tipOf, onOpenTurn: props.onOpenTurn }),
-        }),
+        chartPanel(340),
       )
       : createElement('div', null,
         createElement('div', { className: 'nt-wb-seg', style: { marginBottom: 10 } },
@@ -1079,7 +1161,10 @@ export function Workbench(props: { onExitToConversation?: () => void; sessionNam
   // nexus 层接入（M4.3 / M4-L / M3-F.3）：指向、L 场计数、白盒分析——原先只有旧 tab 能看到
   const vault = useJson<VaultInfo>('/api/nexus/vault', paused, 120000, nonce)
   const lfield = useJson<LfieldInfo>('/api/nexus/lfield', paused, 120000, nonce)
-  const analysis = useJson<AnalysisRow[]>('/api/nexus/m2/analysis?root=all', paused, 600000, nonce)
+  const analysisRaw = useJson<{ results?: AnalysisRow[] } | AnalysisRow[]>('/api/nexus/m2/analysis?root=all', paused, 600000, nonce)
+  // /m2/analysis 返回 { revision, results }（routes.ts）——归一化为数组，兼容直接数组形态；
+  // 未归一化时 rows.reduce 对对象调用会抛错（假设/报告视图渲染失败的根因）
+  const analysis = Array.isArray(analysisRaw) ? analysisRaw : (analysisRaw?.results ?? null)
   const [rescanning, setRescanning] = useState(false)
   const onRescan = (): void => {
     setRescanning(true)
@@ -1102,7 +1187,7 @@ export function Workbench(props: { onExitToConversation?: () => void; sessionNam
   // 用 createElement 渲染视图组件（**不可**写成 OverviewView({...}) 直接调用）：
   // 直接调用会把子组件的 hooks 算进父组件，切换视图时 hooks 数量变化 → React 抛错、整页渲染失败。
   const body = view === 'overview' ? createElement(OverviewView, { nexus, m2, pulse, vault, lfield, rescanning, onRescan, onOpenTurn: (s: string, t: number) => setDrawer({ session: s, turn: t }) })
-    : view === 'curve' ? createElement(CurveView, { m2, era, pulse, paused, sessionNameOf: props.sessionNameOf, onOpenTurn: (s: string, t: number) => setDrawer({ session: s, turn: t }) })
+    : view === 'curve' ? createElement(CurveView, { m2, era, pulse, paused, analysis, sessionNameOf: props.sessionNameOf, onOpenTurn: (s: string, t: number) => setDrawer({ session: s, turn: t }) })
     : view === 'hypotheses' ? createElement(HypothesesView, { m2, ann, analysis, vault, onProphecy: (id: string) => { setView('prophecy'); setToast('已跳到预言标注：' + id) } })
     : view === 'prophecy' ? createElement(ProphecyView, { ann, m2, toast: setToast, reload: () => setNonce((v) => v + 1) })
     : createElement(ReportView, { nexus, m2, pulse, era, ann, analysis, vault })
