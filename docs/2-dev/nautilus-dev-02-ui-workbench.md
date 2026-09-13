@@ -169,7 +169,7 @@
 
 - 形态：普通 Cordis 客户端插件，命名导出（**无 `export default apply`**，AGENTS.md §2）；`inject` 列 `slots`；slot key `conversation.view`。
 - 渲染：React `createElement`（无 JSX）；**零新依赖**；图表 SVG 自绘（沿 nexus LineChart 路线扩展联动层）；样式组件内 `<style>` 一次性注入，class 前缀已迁移为 `nt-`（U1）。
-- 全局面板注入（§3.0）：`dsh.client.inject` 增列 `@deepseek-ai/dsh-client-ui-layout`（`ctx.layout.selectPanel`）与 `@deepseek-ai/dsh-client-ui-sidebar`（`sidebar.panellist` slot key 类型）；main keyed 注册 id 与 panellist 项 id 同值（`MainPanelId`）。
+- 全局面板注入（§3.0）：`dsh.client.inject` 增列 `@deepseek-ai/dsh-client-ui-layout`（`ctx.layout.selectPanel`）与 `@deepseek-ai/dsh-client-ui-sidebar`（`sidebar.panellist` slot key 类型）；panellist 项写 `options.id`、main 写 `options.key`，两值同为 `MainPanelId`（同值即「图标行 ↔ 主区面板」的绑定）。
 - 令牌层落地步骤：现 `STYLE` 中硬编码别名处改写为 `--nt-*` 引用；`--nt-*` 默认值取 `var(--dsw-alias-*, <fallback>)` 形式（宿主令牌优先，原型色为 fallback）——**亮暗切换零组件改动**的关键。
 - 状态与轮询：沿 nexus 现有 `revision` 轮询惯例；抽屉打开期间暂停（M4.2 惯例）；标注写操作走 §6 API，失败 toast 不静默。
 - 原型 → 组件映射：原型每视图 ≈ 一个组件函数；stat/面板/表格/抽屉先抽公共件再铺视图；era 措辞分级收口为单一 `eraWord()` 帮助函数（避免「对照/归因」裸串漂移——集中常量纪律）。
@@ -182,7 +182,8 @@
 | 项 | 落地位置 | 状态 |
 |---|---|---|
 | 五视图 + 抽屉 + era 条 | `src/client/workbench.ts`（600 行） | ✅ 已实现，产物已下发（§E10） |
-| 全局面板入口 | `src/client/index.ts`：`sidebar.panellist`（order 50，label 走函数形）+ `main` keyed，两处 id 同值 `nautilus-workbench` | ✅ 已注册并进常驻测试 |
+| 全局面板入口 | `src/client/index.ts`：`sidebar.panellist`（list 槽 → `id`，order 50，label 走函数形）+ `main`（**keyed 槽 → `key`**），两值同 `nautilus-workbench` | ✅ 已注册并进常驻测试 |
+| 槽位标识字段 | `list` → `options.id`；`keyed` → `options.key`（传错抛 `keyed slot main requires options.key`，并拖垮整批浏览器半区插件集） | ⚠️ 硬契约，见 §E10 |
 | 逐会话双 tab | 同文件，`conversation.view` ×2（Vault 观测 / L 场读数） | ✅ 保留（加法，不替换） |
 | 取数口径 | §6 现成只读 API：`/state` · `/m2/state?root=all` · `/m2/annotations` · `/m2/turn-text` · `/pulse/state` | ✅ 未命中率对齐 `routes.ts:167`（`tokenIn/(tokenIn+cacheRead)`） |
 | 唯一写路径 | `POST /api/nexus/m2/annotations`（预言标注） | ✅ 失败 toast 不静默 |

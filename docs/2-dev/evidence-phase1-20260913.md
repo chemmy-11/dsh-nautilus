@@ -166,7 +166,9 @@ nexus 侧 turn_read: 446（最新 2026-09-13T03:38:55Z，未受影响）
 - `lib/client.js` 96101 B（重建后）。`GET /` → **200**（35379 B），启动图含本行：
   `{"id":"@dsh-external/dsh-nexus","url":"/plugins/??@dsh-external/dsh-nexus/client.js&rev=b3d513723b46","rev":"b3d513723b46","inject":["@deepseek-ai/dsh-client-ui-renderer","@deepseek-ai/dsh-client-ui-conversation"]}`
 - `GET` 该 combo URL → **200**，96155 B（= 磁盘 96101 B + loader 包装），断言命中 `sidebar.panellist` · `nautilus-workbench` · `conversation.view` · `FIG.01`（中文串被 esbuild 以 \uXXXX 转义，故以 ASCII 标记断言）。
-- loader 形态物化：`load.id=@dsh-external/dsh-nexus`；导出面 `["apply","inject"]`、**无 `default`**；`apply(假 ctx)` 依次产生 4 个 effect + 4 个注册：`conversation.view`（两个 tab）· `sidebar.panellist`（id `nautilus-workbench`，order 50）· `main`（同 id）。
+- loader 形态物化：`load.id=@dsh-external/dsh-nexus`；导出面 `["apply","inject"]`、**无 `default`**；`apply(假 ctx)` 依次产生 4 个 effect + 4 个注册：`conversation.view`（两个 tab）· `sidebar.panellist`（id `nautilus-workbench`，order 50）· `main`（key 同值）。
+
+**发现的硬契约（代价最大的一条）**：槽位标识字段**随 kind 不同**——`list` 槽用 `options.id`（`conversation.view` / `sidebar.panellist`），`keyed` 槽用 **`options.key`**（`main`）。给 `main` 传 `id` 会抛 `keyed slot main requires options.key`，且失败面**不止本插件**：整批浏览器半区插件集的挂载被带崩。旁证（shipped 先例）：`@deepseek-ai/dsh-client-ui-conversation` 注册主区为 `{ name: 'main', key: 'conversation' }`。本仓库的 loader 形态用例已把该字段按 kind 分支断言，专门守这条。
 - 只读 API：`GET /api/nexus/state` → 200（1863 B）；`GET /api/nexus/pulse/state` → 200（2030 B，采集器在场）。
 
 **环境四元组**：dsh `0.1.5-rc.2`（运行中的宿主，PID 21968）· profile `web` · 装配方式 = **patch 热装配**（用户层 insert 绝对路径）+ 客户端半区由 `dsh-client-modules` 扫描同名包（`lib/client.js`，rev `b3d513723b46`）· 结果：**产物级通过；浏览器渲染待人工确认**。

@@ -951,7 +951,10 @@ export function apply(ctx: {
   )
   ctx.effect(
     () => ctx.slots.inject('main', () =>
-      ctx.slots.register({ name: 'main', id: panelId }, Workbench),
+      // 主区槽位是 keyed 槽（DSH contract: { kind: 'keyed', scope: 'root' }），
+      // 必须给 options.key；给 id 会抛 "keyed slot main requires options.key"
+      // 并让整个浏览器半区插件集挂载失败。key 与 sidebar.panellist 的 id 同值。
+      ctx.slots.register({ name: 'main', key: panelId }, Workbench),
     ),
     '@dsh-external/dsh-nexus: workbench panel',
   )

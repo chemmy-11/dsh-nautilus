@@ -410,8 +410,12 @@ export function ReportView(props: { nexus: NexusState | null; m2: M2State | null
     const a = document.createElement('a')
     a.href = url
     a.download = name
+    a.rel = 'noopener'
+    // Firefox 要求锚点在文档里才触发 click 下载
+    document.body.appendChild(a)
     a.click()
-    URL.revokeObjectURL(url)
+    a.remove()
+    setTimeout(() => URL.revokeObjectURL(url), 0)
   }
   const snapshot = { generatedAt: new Date().toISOString(), era, claiming: eraWord(era), nexus, m2, pulse, annotations: props.ann }
   const md = [

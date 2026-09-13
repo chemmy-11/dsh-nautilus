@@ -325,7 +325,15 @@ test('client bundle：ModuleLoader 往返 + 命名导出面 + 面板注册契约
     effect: (cb, name) => { calls.push('effect:' + name); cb() },
     slots: {
       inject: (key, cb) => { calls.push('inject:' + key); cb(); return () => {} },
-      register: (def, comp) => { calls.push('register:' + def.name + '|' + String(def.id)); assert.equal(typeof comp, 'function'); return () => {} },
+      register: (def, comp) => {
+        // 槽位标识字段随 kind 不同：list 槽用 id，keyed 槽（main）用 key——
+        // 给错字段会抛 "keyed slot main requires options.key"，并拖垮整个浏览器半区插件集
+        const identity = def.name === 'main' ? def.key : def.id
+        assert.ok(identity !== undefined, 'register 必须带槽位标识（list→id / keyed→key）')
+        calls.push('register:' + def.name + '|' + String(identity))
+        assert.equal(typeof comp, 'function')
+        return () => {}
+      },
     },
   }
   exportsObj.apply(ctx)
