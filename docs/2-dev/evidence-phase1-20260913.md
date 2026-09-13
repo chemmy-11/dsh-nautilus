@@ -243,6 +243,34 @@ client-modules: package @dsh-external/dsh-nexus resolves from multiple active Lo
 
 ---
 
+## E12 重启后端上复核（2026-09-13 12:2x，bundle 装配 · 既有 GUI origin）
+
+**前置**：按 §E11 收敛后执行 `dsh plugin --profile web add file:L:/dsh-nautilus`，守谷人重启 `dsh web`（本会话宿主进程即该服务，重启只能由守谷人执行）。
+
+**环境四元组**：dsh `0.1.5-rc.2` · profile `web` · 装配方式 = **bundle（`dsh plugin add file:`，单条目）** · 结果：**产物级 + 数据级通过**；DOM 渲染待人工确认。
+
+**实际（全部只读 GET，经本机持久签名密钥铸造会话 cookie）**
+1. `GET /` → **200**；启动图本行：
+   `{"id":"@dsh-external/dsh-nexus","rev":"eaeacfa059478926-47","inject":["@deepseek-ai/dsh-client-ui-renderer","@deepseek-ai/dsh-client-ui-conversation","@deepseek-ai/dsh-client-ui-layout","@deepseek-ai/dsh-client-ui-sidebar"]}`
+   —— `inject` 已是新值（+layout/+sidebar），证明重启后 client-modules 的包元数据缓存已刷新（§E10 观察 3 的遗留项收敛）。
+2. `GET /plugins/??@dsh-external/dsh-nexus/client.js&rev=eaeacfa059478926-47` → **200**，96485 B（磁盘产物 96500 B，差值为 loader 包装）。内容标记全部命中：`sidebar.panellist` · `nautilus-workbench` · `conversation.view` · `nt-wb-top` · `nt-drawer` · `nt-era` · `FIG.01` · `FIG.06`；且 `main` 注册点已是 **`key`** 版本（守谷人的修正已进入下发产物）。
+3. 只读 API 全 **200**：
+   - `/api/nexus/pulse/state`：`ticks=17→20→23`（12 s 内 +3，与 5 s 间隔一致）· `rows 2953→3028`（+25，≈8.3 样本/tick）· `shell=powershell` · `countersOk=true` · `countersRestarts=0` · `lastError=null` · **15 条指标族齐全**（本地 / 计数器 / GPU 三族）；
+   - `/api/nexus/state`：`root=L:\L_workspace\weixin-connect\LinsLive\L-theory`、91 文件；
+   - `/api/nexus/m2/state?root=all`：453 轮 / 77 会话 / 自评覆盖 76；
+   - `/api/nexus/m2/annotations`：8 条标注（人工标注闭环的最小样本）。
+4. `latest` 条目形状 `{metric,value,ts,tags}` 与客户端 `PulseState` 类型一致（UI 只读 `length`，无口径风险）。
+
+**观察结论**
+1. **单条目收敛在宿主内成立**：pulse 作为 nexus 的子插件正常注册 `/api/nexus/pulse/{state,series}` 并持续采集——§E11 的修法端上确认（E11 遗留的 Loader 路径确认项收敛）。
+2. **客户端半区交付链路完整**：启动图行 → rev → bundle 内容标记，三段可独立复核；§E10 的两条遗留（`inject` 生效、`key` 字段）均已闭合。
+3. **仍未验证**：**DOM 渲染**——侧栏图标是否出现、五视图是否成形、抽屉开合是否正常。这一层只有人能看（本环境无浏览器自动化），未确认前不得宣称 UI 交付完成（OQ-U6 仍开）。
+4. **复现口径**：profile 内是**安装副本**（非符号链接），重建仓库产物后必须**重跑 `dsh plugin add file:` + 重启宿主**；仅 `npm run build` 不会回流（已写入 CONTRIBUTING「交付与安装通道」）。
+
+**诚实边界**：本节全部证据是**只读 GET**（`/`、`/plugins/...`、`/api/nexus/*`），未改任何状态；cookie 由本机凭据库的持久签名密钥在本地铸造，密钥值未落盘、未打印、未进命令历史文件。DOM / 交互层无证据。
+
+---
+
 ## E8 诚实边界（引用本归档时必须一并引用）
 
 1. **端上读数口径**：§E8 初稿时本层尚未装配（证据全来自离线探针）；**§E9 起已热装配进 profile `web`**，宿主路径已有端上四元组读数（OQ-3 收敛）。但 E5 的 1 小时档仍只有中间读数，且「连续 1 小时无内存增长」尚未给出完整序列。
@@ -251,3 +279,4 @@ client-modules: package @dsh-external/dsh-nexus resolves from multiple active Lo
 4. **Windows 专属**：计数器族依赖 PowerShell + CIM；非 Windows 下该族缺席（本地族仍可采），未在 Linux/macOS 上验证。
 5. **探针写临时库**：默认库是 `%TEMP%` 下的临时文件，与 `~/.dsh/nexus/nexus.db` 的结构一致但**不是**同一个库；端上装配后的读数需重新采集。
 6. **采样成本只测了 CPU 与 wall**：未测内存占用增量与磁盘/网络 IO 增量（soak 的 RSS 序列部分覆盖内存）。
+7. **DOM / 交互层无证据**：§E10–E12 覆盖到「宿主启动图 → rev → bundle 字节 → 只读 API」为止；侧栏图标是否出现、五视图是否成形、抽屉与标注写路径的实际交互，均需人在既有页面确认（OQ-U6）。
