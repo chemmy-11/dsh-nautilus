@@ -12,6 +12,10 @@
  */
 import { createElement, useEffect, useState, type ReactNode } from 'react'
 import type {} from '@deepseek-ai/dsh-client-ui-conversation/client' // 拉 conversation.view SlotMap 类型
+import type { MainPanelId } from '@deepseek-ai/dsh-client-ui-layout/client' // 主区面板 id 的 branded 类型（main keyed）
+import type {} from '@deepseek-ai/dsh-client-ui-sidebar/client' // 拉 sidebar.panellist SlotMap 类型
+// 工作台（全局面板）：五视图 + 抽屉 + era 条，规格见 docs/2-dev/nautilus-dev-02-ui-workbench.md
+import { Workbench, WorkbenchIcon, WORKBENCH_ID, WORKBENCH_LABEL } from './workbench'
 
 // ── 类型 ────────────────────────────────────────────────────────────────────
 
@@ -900,7 +904,13 @@ function NexusLFieldView(): ReactNode {
 
 export const inject = ['slots']
 
-export function apply(ctx: { slots: { inject(key: string, callback: () => unknown): unknown } }): void {
+export function apply(ctx: {
+  effect(callback: () => unknown, name: string): unknown
+  slots: {
+    inject(key: string, callback: () => unknown): unknown
+    register(def: Record<string, unknown>, component: unknown): unknown
+  }
+}): void {
   injectStyle()
   ctx.effect(
     () => ctx.slots.inject('conversation.view', () =>
@@ -923,5 +933,26 @@ export function apply(ctx: { slots: { inject(key: string, callback: () => unknow
       }, NexusLFieldView),
     ),
     '@dsh-external/dsh-nexus: lfield panel',
+  )
+  // 工作台入口（§3.0 实测契约）：sidebar.panellist 的 list id 与 main 的 key 同值——同一条记录既提供侧栏图标行，
+  // 又提供主区面板；侧栏壳自己渲染按钮并调 layout.selectPanel(id)，故此处不注册任何点击逻辑。
+  // WorkbenchIcon 收 { size, active }（SidebarPanelIconOwnerProps）；Workbench 收全局标准 props 并忽略之。
+  const panelId = WORKBENCH_ID as unknown as MainPanelId
+  ctx.effect(
+    () => ctx.slots.inject('sidebar.panellist', () =>
+      ctx.slots.register({
+        name: 'sidebar.panellist',
+        id: panelId,
+        order: 50,
+        label: () => WORKBENCH_LABEL,
+      }, WorkbenchIcon),
+    ),
+    '@dsh-external/dsh-nexus: workbench icon',
+  )
+  ctx.effect(
+    () => ctx.slots.inject('main', () =>
+      ctx.slots.register({ name: 'main', id: panelId }, Workbench),
+    ),
+    '@dsh-external/dsh-nexus: workbench panel',
   )
 }

@@ -177,6 +177,21 @@
 
 ---
 
+## 7.5 落地状态（2026-09-13，实现已入主线）
+
+| 项 | 落地位置 | 状态 |
+|---|---|---|
+| 五视图 + 抽屉 + era 条 | `src/client/workbench.ts`（600 行） | ✅ 已实现，产物已下发（§E10） |
+| 全局面板入口 | `src/client/index.ts`：`sidebar.panellist`（order 50，label 走函数形）+ `main` keyed，两处 id 同值 `nautilus-workbench` | ✅ 已注册并进常驻测试 |
+| 逐会话双 tab | 同文件，`conversation.view` ×2（Vault 观测 / L 场读数） | ✅ 保留（加法，不替换） |
+| 取数口径 | §6 现成只读 API：`/state` · `/m2/state?root=all` · `/m2/annotations` · `/m2/turn-text` · `/pulse/state` | ✅ 未命中率对齐 `routes.ts:167`（`tokenIn/(tokenIn+cacheRead)`） |
+| 唯一写路径 | `POST /api/nexus/m2/annotations`（预言标注） | ✅ 失败 toast 不静默 |
+| 缺席态 | INFER 层未接入 / 无数据 → 缺席文案与诚实边界，不写 0 | ✅ 全视图覆盖 |
+| 浏览器渲染确认 | 既有页面刷新后人工确认（device-auth 门，无自动化） | ⏳ 待守谷人 |
+| `dsh.client.inject` 新值生效 | 下次 `dsh web` 重启（client-modules 按进程缓存包元数据） | ⏳ 无功能影响 |
+
+---
+
 ## 8. 验收证据要求
 
 - 视觉验收：对照原型逐视图截图归档（浅/暗两态）；
@@ -191,6 +206,7 @@
 - **OQ-U3 标签枚举**：四值是否够用（如需「污染-预热 / 污染-截断」细分），守谷人裁定后回写 §5.3。
 - **OQ-U4 标注删除语义**：硬删 vs 软删留痕（审计诉求 vs 库体积）；倾向软删 + `deletedAt`。
 - **OQ-U5 标注 author**：多主体使用时的身份来源（宿主用户标识可得性）。
+- **OQ-U6 浏览器渲染验收**：实现已下发（§E10），但「图标出现 / 五视图成形 / 抽屉开合」需人工在既有页面刷新后确认；确认前不宣称 UI 交付完成。
 
 ## 关联文件
 

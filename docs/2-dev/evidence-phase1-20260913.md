@@ -1,7 +1,7 @@
 # 证据归档 · Phase 1（pulse OS/GPU 层）
 
 > 配套文档：[./nautilus-dev-03-os-layer.md](./nautilus-dev-03-os-layer.md)
-> **环境四元组**：dsh `0.1.5-rc.2` · profile `web`（**本层尚未装配**——证据走离线探针，端上装配见 §E8）· 运行方式：Node 直调 `lib/pulse/*`（不经宿主）· Windows 11 / Windows PowerShell 5.1（**本机无 pwsh**）/ RTX 5060 Laptop 8GB / Node v24.18.0
+> **环境四元组**：dsh `0.1.5-rc.2` · profile `web`（§E1–E7 走离线探针；**§E9 起已热装配**，§E10 为客户端半区端上校验）· 运行方式：Node 直调 `lib/pulse/*`（不经宿主）· Windows 11 / Windows PowerShell 5.1（**本机无 pwsh**）/ RTX 5060 Laptop 8GB / Node v24.18.0
 > 归档纪律：执行命令 / 预期 / 实际 / 观察结论；**只读验收**（数据写入探针临时库或 `$TEMP`，不污染 `~/.dsh/nexus/nexus.db`）。
 
 ---
@@ -152,9 +152,37 @@ nexus 侧 turn_read: 446（最新 2026-09-13T03:38:55Z，未受影响）
 
 ---
 
+## E10 客户端工作台接入实测（2026-09-13，热装配 · 既有 GUI origin）
+
+**目标**：把已定版的 UI 规格（[./nautilus-dev-02-ui-workbench.md](./nautilus-dev-02-ui-workbench.md)）落成客户端半区产物，并确认它**真的进了启动图、按 rev 下发**。
+
+**命令 / 方式**
+1. 六件套：`npm run build && npm run typecheck && npm test && npm run check:deps && npm run check:exports && node .github/scripts/check-meta.mjs`；
+2. 只读校验脚本（临时文件，不入库）：用宿主持久签名密钥在**本机**铸造会话 cookie，`GET /` 取启动图 → 取本行 combo URL → `GET` 该 URL；全程只读，密钥不入库、不打印；
+3. loader 形态物化：`node:vm` + stub `window.__ModuleLoader__` + `react` shim → 物化 `lib/client.js` 工厂并调 `apply(假 ctx)`。
+
+**实际**
+- 六件套全绿；`npm test` → **19/19**（新增 1 例：client bundle 的 loader 往返 + 命名导出面 + 面板注册契约）。
+- `lib/client.js` 96101 B（重建后）。`GET /` → **200**（35379 B），启动图含本行：
+  `{"id":"@dsh-external/dsh-nexus","url":"/plugins/??@dsh-external/dsh-nexus/client.js&rev=b3d513723b46","rev":"b3d513723b46","inject":["@deepseek-ai/dsh-client-ui-renderer","@deepseek-ai/dsh-client-ui-conversation"]}`
+- `GET` 该 combo URL → **200**，96155 B（= 磁盘 96101 B + loader 包装），断言命中 `sidebar.panellist` · `nautilus-workbench` · `conversation.view` · `FIG.01`（中文串被 esbuild 以 \uXXXX 转义，故以 ASCII 标记断言）。
+- loader 形态物化：`load.id=@dsh-external/dsh-nexus`；导出面 `["apply","inject"]`、**无 `default`**；`apply(假 ctx)` 依次产生 4 个 effect + 4 个注册：`conversation.view`（两个 tab）· `sidebar.panellist`（id `nautilus-workbench`，order 50）· `main`（同 id）。
+- 只读 API：`GET /api/nexus/state` → 200（1863 B）；`GET /api/nexus/pulse/state` → 200（2030 B，采集器在场）。
+
+**环境四元组**：dsh `0.1.5-rc.2`（运行中的宿主，PID 21968）· profile `web` · 装配方式 = **patch 热装配**（用户层 insert 绝对路径）+ 客户端半区由 `dsh-client-modules` 扫描同名包（`lib/client.js`，rev `b3d513723b46`）· 结果：**产物级通过；浏览器渲染待人工确认**。
+
+**观察结论**
+1. **客户端半区的交付通道成立且很短**：改客户端半区后只需 `npm run build` + 刷新既有页面，**不必重启宿主**——client-modules 在 `/plugins` 下按内容 rev 下发本包 bundle，本次下发的字节已含新标记（说明 registry 已认到这次 rebuild）。
+2. 接入是**加法而非替换**：两个 `conversation.view` tab（Vault 观测 / L 场读数）原样保留，工作台是新增的 `sidebar.panellist` 图标行 + `main` keyed 全局面板；两处注册 id 同值（`nautilus-workbench`）是「图标点得到主区」的唯一不变量，已进常驻测试。
+3. **`dsh.client.inject` 新值尚未生效**：启动图行里 `inject` 仍是旧值（client-modules 按进程缓存包元数据），新值（+layout / +sidebar）**下次 `dsh web` 重启后**生效。无功能影响：`slots.inject('main' / 'sidebar.panellist')` 等的是槽位声明，且 layout / sidebar 与本行在同一批 application combo 里到达。
+4. **浏览器渲染未由我观测**：页面在 device-auth 门后、本环境无浏览器自动化，因此「图标是否出现、五视图是否成形、抽屉是否开合」需由人在**既有页面刷新后**确认——**HTTP 200 ≠ 应用就绪**（postmortem 0003）。
+5. 数据缺席按预期呈现：NEXUS 存量 446 轮 + PULSE 15 指标在场，INFER 层缺席 → 各视图显示缺席文案与诚实边界（不写 0 假读数、不把缺席当 0）。
+
+---
+
 ## E8 诚实边界（引用本归档时必须一并引用）
 
-1. **未经宿主**：本层尚未装配进 profile（无 `id: pulse` patch 行），全部证据来自离线探针；宿主路径的差异只有「子进程经 `ctx.subprocess` 起」——同一份 `lib/pulse/*`，尚无端上四元组读数（OQ-3）。
+1. **端上读数口径**：§E8 初稿时本层尚未装配（证据全来自离线探针）；**§E9 起已热装配进 profile `web`**，宿主路径已有端上四元组读数（OQ-3 收敛）。但 E5 的 1 小时档仍只有中间读数，且「连续 1 小时无内存增长」尚未给出完整序列。
 2. **单机单卡**：GPU 族仅在本机一张 RTX 5060 Laptop 上验证；无卡/多卡的解析路径只有单测覆盖（无真实无卡环境）。
 3. **1 小时档未回填**：E5 目前是中间读数（35 s），Phase 1 的「连续 1 小时无内存增长」尚未给出完整序列。
 4. **Windows 专属**：计数器族依赖 PowerShell + CIM；非 Windows 下该族缺席（本地族仍可采），未在 Linux/macOS 上验证。

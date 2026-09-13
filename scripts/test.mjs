@@ -6,7 +6,8 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, utimesSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, utimesSync, readFileSync } from 'node:fs'
+import vm from 'node:vm'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -284,4 +285,67 @@ test('PulseStore: insert/latest/series 桶均值/prune 保留', () => {
     store.close()
   }
 })
+
+// ── client half（lib/client.js：loader 形态 + 注册路径）────────────────────────
+
+test('client bundle：ModuleLoader 往返 + 命名导出面 + 面板注册契约', () => {
+  // 在 loader 形态下物化产物：断言「加载器收到了什么」，而不是模块的自我报告
+  const src = readFileSync(new URL('../lib/client.js', import.meta.url), 'utf8')
+  let registration = null
+  const sandbox = {
+    console,
+    window: { __ModuleLoader__: { load(r) { registration = r } } },
+    setTimeout, clearTimeout, setInterval, clearInterval,
+    Date, JSON, Math, URL, Blob: class {}, fetch: () => Promise.reject(new Error('no-network')),
+  }
+  sandbox.globalThis = sandbox
+  vm.createContext(sandbox)
+  vm.runInContext(src, sandbox, { filename: 'lib/client.js' })
+  assert.ok(registration !== null, 'bundle 必须调用 window.__ModuleLoader__.load')
+  assert.equal(registration.id, '@dsh-external/dsh-nexus')
+
+  const react = {
+    createElement: (type, props, ...kids) => ({ type, props, kids }),
+    useEffect: () => {},
+    useState: (v) => [typeof v === 'function' ? v() : v, () => {}],
+    Fragment: 'Fragment',
+  }
+  const exportsObj = registration.factory((spec) => {
+    if (spec === 'react' || spec === 'react/jsx-runtime') return react
+    throw new Error('非基线模块请求：' + spec)
+  })
+  // postmortem 0001：命名空间插件绝不能有 default 导出（unwrapExports 会丢掉 inject/name/Config）
+  assert.deepEqual(Object.keys(exportsObj).sort(), ['apply', 'inject'])
+  assert.equal(Object.prototype.hasOwnProperty.call(exportsObj, 'default'), false)
+  // 跨 realm：vm 里造出来的数组原型不同，deepStrictEqual 会因此报错——先摊平成宿主数组
+  assert.deepEqual([...exportsObj.inject], ['slots'])
+
+  const calls = []
+  const ctx = {
+    effect: (cb, name) => { calls.push('effect:' + name); cb() },
+    slots: {
+      inject: (key, cb) => { calls.push('inject:' + key); cb(); return () => {} },
+      register: (def, comp) => { calls.push('register:' + def.name + '|' + String(def.id)); assert.equal(typeof comp, 'function'); return () => {} },
+    },
+  }
+  exportsObj.apply(ctx)
+  assert.deepEqual(calls, [
+    'effect:@dsh-external/dsh-nexus: panel',
+    'inject:conversation.view',
+    'register:conversation.view|@dsh-external/dsh-nexus-panel',
+    'effect:@dsh-external/dsh-nexus: lfield panel',
+    'inject:conversation.view',
+    'register:conversation.view|@dsh-external/dsh-nexus-lfield-panel',
+    'effect:@dsh-external/dsh-nexus: workbench icon',
+    'inject:sidebar.panellist',
+    'register:sidebar.panellist|nautilus-workbench',
+    'effect:@dsh-external/dsh-nexus: workbench panel',
+    'inject:main',
+    'register:main|nautilus-workbench',
+  ])
+  // 工作台契约（§3.0 实测）：panellist 的 list id 与 main 的 key 必须同值——否则图标行点不到主区
+  const panelIds = calls.filter((c) => c.startsWith('register:sidebar.panellist|') || c.startsWith('register:main|')).map((c) => c.split('|')[1])
+  assert.deepEqual(panelIds, ['nautilus-workbench', 'nautilus-workbench'])
+})
+
 
