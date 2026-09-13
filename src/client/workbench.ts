@@ -10,7 +10,7 @@
  *   · INFER 层：Phase 2a 才落库（TTFT/provider）——当前所有视图显示缺席态，不编造、不写 0 假读数
  * 空数据是正常态（本阶段允许）。
  */
-import { Component, createElement, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
+import { Component, createElement, useEffect, useRef, useState, type ReactNode } from 'react'
 // OS 层心跳档位控件（1s / 5s / 手动）——独立文件，避免与并行 UI 改动冲突
 import { PulseHeartbeat } from './pulse-controls'
 
@@ -366,8 +366,9 @@ export function Spark(props: {
  *   · 右键按住拖动 = 平移时间窗（contextmenu 已抑制）；
  *   · 悬停采样点 → 竖参考线 + 简略看板（该轮读数摘要；上缘/右缘自动翻面）；
  *   · 点击采样点 → onOpenTurn 下钻完整问答（抽屉由根组件持有）。
- * 数据精准：y 域随窗口重算；看板数值取原始读数（不取插值）；viewBox 宽度实测容器（ResizeObserver），
- * 悬停命中换算按 rect 实测比例，指针与点位零偏差。
+ * 数据精准：y 域随窗口重算；看板数值取原始读数（不取插值）。
+ * 缩放呈等比（preserveAspectRatio meet）：设计坐标系固定 1120×340，容器更大时整体等比放到最大、
+ * 不足处留边（不拉伸不变形，线宽随整体等比放大）；指针/滚轮/拖动换算含比例与留白修正，点位零偏差。
  */
 export function CurveChart(props: {
   points: Array<{ x: number; y: number | null; meta: M2Point }>
@@ -385,6 +386,8 @@ export function CurveChart(props: {
   const base = props.points.filter((p) => p.y !== null && Number.isFinite(p.y))
   const n = base.length
   const fill = props.fill === true
+  const DW = 1120
+  const DH = 340
   const padL = 52
   const padR = 16
   const padT = 26
@@ -393,40 +396,27 @@ export function CurveChart(props: {
   const [win, setWin] = useState<[number, number]>([0, Math.max(0, n - 1)])
   const [hover, setHover] = useState<number | null>(null)
   const [drag, setDrag] = useState(false)
-  const dragRef = useRef<{ x: number; a: number; b: number } | null>(null)
+  const dragRef = useRef<{ x: number; a: number; b: number; scale: number } | null>(null)
   const svgRef = useRef<SVGSVGElement | null>(null)
-  const boxRef = useRef<HTMLDivElement | null>(null)
-  // viewBox 尺寸 = 容器实测尺寸（宽高都测，useLayoutEffect 在首帧绘制前完成实测）：
-  // svg 以 100%/100% + preserveAspectRatio:none 渲染，但尺寸永远等于实测值——不存在「以上一档尺寸被拉伸」的帧；
-  // 描边全部 non-scaling-stroke，线宽/圆点恒为屏幕像素，不随容器比例变形
-  const [size, setSize] = useState<{ w: number; h: number } | null>(null)
-  useLayoutEffect(() => {
-    const el = boxRef.current
-    if (el === null) return undefined
-    const measure = (): void => {
-      const w = el.clientWidth
-      const hh = el.clientHeight
-      if (w > 0 && hh > 0) setSize((prev) => (prev !== null && prev.w === w && prev.h === hh ? prev : { w, h: hh }))
-    }
-    measure()
-    if (typeof ResizeObserver === 'undefined') {
-      window.addEventListener('resize', measure)
-      return () => { window.removeEventListener('resize', measure) }
-    }
-    const ro = new ResizeObserver(measure)
-    ro.observe(el)
-    return () => ro.disconnect()
-  }, [])
+  const viewRef = useRef<{ scale: number; offX: number; offY: number; rectW: number; rectH: number } | null>(null)
+  /** 屏幕 → 设计坐标（含 meet 等比缩放与居中留白修正）。 */
+  const viewOf = (e: { clientX: number; clientY: number }, el: SVGSVGElement): { vx: number; scale: number; offX: number; offY: number; rectW: number; rectH: number } => {
+    const rect = el.getBoundingClientRect()
+    const scale = Math.min(rect.width / DW, rect.height / DH)
+    const offX = (rect.width - DW * scale) / 2
+    const offY = (rect.height - DH * scale) / 2
+    return { vx: (e.clientX - rect.left - offX) / scale, scale, offX, offY, rectW: rect.width, rectH: rect.height }
+  }
   useEffect(() => { setWin([0, Math.max(0, n - 1)]); setHover(null) }, [n, props.resetKey])
   // 滚轮放缩：以指针为锚点缩放窗口（min 4 点）；svg 就绪后再挂非 passive 监听
-  const ready = n >= 2 && size !== null
+  const ready = n >= 2
   useEffect(() => {
     const el = svgRef.current
     if (el === null || !ready) return undefined
     const onWheel = (e: WheelEvent): void => {
       e.preventDefault()
-      const rect = el.getBoundingClientRect()
-      const f = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width))
+      const { vx } = viewOf(e, el)
+      const f = Math.max(0, Math.min(1, (vx - padL) / (DW - padL - padR)))
       const factor = e.deltaY < 0 ? 0.78 : 1.28
       setWin(([a, b]) => {
         const span = b - a
@@ -445,10 +435,8 @@ export function CurveChart(props: {
     if (!drag) return undefined
     const move = (e: MouseEvent): void => {
       const d = dragRef.current
-      const el = svgRef.current
-      if (d === null || el === null) return
-      const rect = el.getBoundingClientRect()
-      const di = Math.round(((e.clientX - d.x) / rect.width) * (d.b - d.a))
+      if (d === null) return
+      const di = Math.round((e.clientX - d.x) / d.scale)
       const span = d.b - d.a
       let na = d.a - di
       na = Math.max(0, Math.min(n - 1 - span, na))
@@ -459,12 +447,9 @@ export function CurveChart(props: {
     window.addEventListener('mouseup', up)
     return () => { window.removeEventListener('mousemove', move); window.removeEventListener('mouseup', up) }
   }, [drag, n])
-  if (n < 2 || size === null) {
-    // 实测未完成前只渲染占位容器（useLayoutEffect 在绘制前补实测，正常不产生可见空帧）
-    return createElement('div', { className: 'nt-chart', ref: boxRef, style: { height: fill ? '100%' : String(props.h ?? 320) + 'px' } })
-  }
-  const W = size.w
-  const h = size.h
+  if (n < 2) return Empty({ text: '暂无数据' })
+  const W = DW
+  const h = DH
   // 渲染期钳制窗口：切档/数据刷新后点数骤减时，effect 复位前的这一帧里旧 win 会越界（base[b] undefined 崩溃）
   const a = Math.max(0, Math.min(win[0], n - 2))
   const b = Math.max(a + 1, Math.min(win[1], n - 1))
@@ -482,7 +467,7 @@ export function CurveChart(props: {
   for (const r of [0, 1 / 3, 2 / 3, 1]) {
     const v = min + span * r
     const y = sy(v)
-    kids.push(createElement('line', { key: 'g' + String(r), x1: padL, x2: W - padR, y1: y, y2: y, stroke: 'var(--nt-border,#d9d9d5)', strokeWidth: 1, opacity: 0.7, vectorEffect: 'non-scaling-stroke' }))
+    kids.push(createElement('line', { key: 'g' + String(r), x1: padL, x2: W - padR, y1: y, y2: y, stroke: 'var(--nt-border,#d9d9d5)', strokeWidth: 1, opacity: 0.7 }))
     kids.push(createElement('text', { key: 't' + String(r), x: padL - 6, y: y + 3, fontSize: 9.5, fill: 'var(--nt-faint,#9a9a95)', textAnchor: 'end' }, yf(v)))
   }
   {
@@ -501,7 +486,7 @@ export function CurveChart(props: {
   }
   if (props.threshold !== undefined && props.threshold >= min && props.threshold <= max) {
     const y = sy(props.threshold)
-    kids.push(createElement('line', { key: 'th', x1: padL, x2: W - padR, y1: y, y2: y, stroke: 'var(--nt-accent,#e6321e)', strokeWidth: 1, strokeDasharray: '2 4', opacity: 0.8, vectorEffect: 'non-scaling-stroke' }))
+    kids.push(createElement('line', { key: 'th', x1: padL, x2: W - padR, y1: y, y2: y, stroke: 'var(--nt-accent,#e6321e)', strokeWidth: 1, strokeDasharray: '2 4', opacity: 0.8 }))
     kids.push(createElement('text', { key: 'tht', x: W - padR, y: y - 4, fontSize: 9.5, fill: 'var(--nt-accent,#e6321e)', textAnchor: 'end', letterSpacing: 1 }, props.thresholdLabel ?? '阈值'))
   }
   if (props.anno !== undefined && b - a >= 3) {
@@ -510,12 +495,12 @@ export function CurveChart(props: {
     if (f1 > f0) {
       const x1 = sx(f0)
       const x2 = sx(f1)
-      kids.push(createElement('line', { key: 'an', x1, x2, y1: 16, y2: 16, stroke: 'var(--nt-dim,#5f5f5c)', strokeWidth: 1, strokeDasharray: '3 3', vectorEffect: 'non-scaling-stroke' }))
+      kids.push(createElement('line', { key: 'an', x1, x2, y1: 16, y2: 16, stroke: 'var(--nt-dim,#5f5f5c)', strokeWidth: 1, strokeDasharray: '3 3' }))
       kids.push(createElement('text', { key: 'ant', x: (x1 + x2) / 2, y: 11, fontSize: 9.5, fill: 'var(--nt-dim,#5f5f5c)', textAnchor: 'middle', letterSpacing: 1 }, props.anno.txt))
     }
   }
   const d = vis.map((v, i) => (i === 0 ? 'M' : 'L') + sx(v.gi).toFixed(1) + ' ' + sy(v.p.y as number).toFixed(1)).join(' ')
-  kids.push(createElement('path', { key: 'line', d, fill: 'none', stroke: 'var(--nt-ink,#101010)', strokeWidth: 1.7, vectorEffect: 'non-scaling-stroke' }))
+  kids.push(createElement('path', { key: 'line', d, fill: 'none', stroke: 'var(--nt-ink,#101010)', strokeWidth: 1.7 }))
   for (const v of vis) {
     const y = v.p.y as number
     const exceed = props.threshold !== undefined && y >= props.threshold
@@ -524,38 +509,46 @@ export function CurveChart(props: {
     if (isHv) kids.push(createElement('circle', { key: 'mr' + String(v.gi), cx: sx(v.gi), cy: sy(y), r: 7.5, fill: 'none', stroke: 'var(--nt-accent,#e6321e)', strokeWidth: 1.1 }))
   }
   if (hv !== null) {
-    kids.push(createElement('line', { key: 'xh', x1: sx(hv), x2: sx(hv), y1: padT - 4, y2: h - padB, stroke: 'var(--nt-faint,#9a9a95)', strokeWidth: 1, strokeDasharray: '3 3', opacity: 0.6, vectorEffect: 'non-scaling-stroke' }))
+    kids.push(createElement('line', { key: 'xh', x1: sx(hv), x2: sx(hv), y1: padT - 4, y2: h - padB, stroke: 'var(--nt-faint,#9a9a95)', strokeWidth: 1, strokeDasharray: '3 3', opacity: 0.6 }))
   }
-  const onMove = (e: { clientX: number; currentTarget: SVGSVGElement }): void => {
+  const onMove = (e: { clientX: number; clientY: number; currentTarget: SVGSVGElement }): void => {
     if (dragRef.current !== null) { setHover(null); return }
-    const rect = e.currentTarget.getBoundingClientRect()
-    const vx = ((e.clientX - rect.left) / rect.width) * W
-    if (vx < padL - 8 || vx > W - padR + 8) { setHover(null); return }
+    const v = viewOf(e, e.currentTarget)
+    viewRef.current = v
+    const vx = v.vx
+    if (vx < padL - 8 || vx > DW - padR + 8) { setHover(null); return }
     let gi = a + Math.round(((vx - padL) / plotW) * (b - a))
     gi = Math.max(a, Math.min(b, gi))
     setHover(Math.abs(sx(gi) - vx) <= 18 ? gi : null)
   }
   const tip = hv !== null && props.tipOf !== undefined ? props.tipOf(base[hv].meta) : null
-  const tipX = hv !== null ? (sx(hv) / W) * 100 : 0
-  const tipY = hv !== null ? (sy(base[hv].y as number) / h) * 100 : 0
-  const tf = (tipX > 62 ? 'translateX(calc(-100% - 12px))' : 'translateX(12px)') + ' ' + (tipY < 30 ? 'translateY(12px)' : 'translateY(calc(-100% - 10px))')
-  return createElement('div', { className: 'nt-chart', ref: boxRef, style: { height: fill ? '100%' : String(h) + 'px', cursor: drag ? 'grabbing' : undefined }, onContextMenu: (e: { preventDefault(): void }) => e.preventDefault() },
+  // 看板定位（px，含 meet 留白修正）：由最近一次 onMove 写入的实测视图参数推导
+  let tipStyle: { left: string; top: string; transform: string } | null = null
+  if (tip !== null && hv !== null && viewRef.current !== null) {
+    const vr = viewRef.current
+    const left = vr.offX + sx(hv) * vr.scale
+    const top = vr.offY + sy(base[hv].y as number) * vr.scale
+    const flipX = left > vr.rectW * 0.62
+    const flipY = top < vr.rectH * 0.3
+    tipStyle = { left: String(left) + 'px', top: String(top) + 'px', transform: (flipX ? 'translateX(calc(-100% - 12px))' : 'translateX(12px)') + ' ' + (flipY ? 'translateY(12px)' : 'translateY(calc(-100% - 10px))') }
+  }
+  return createElement('div', { className: 'nt-chart', style: { height: fill ? '100%' : String(h) + 'px', cursor: drag ? 'grabbing' : undefined }, onContextMenu: (e: { preventDefault(): void }) => e.preventDefault() },
     createElement('svg', {
       ref: svgRef,
-      viewBox: '0 0 ' + String(W) + ' ' + String(h), width: '100%', height: '100%', preserveAspectRatio: 'none', style: { display: 'block' }, role: 'img', 'aria-label': props.label ?? 'curve',
+      viewBox: '0 0 ' + String(W) + ' ' + String(h), width: '100%', height: '100%', preserveAspectRatio: 'xMidYMid meet', style: { display: 'block' }, role: 'img', 'aria-label': props.label ?? 'curve',
       onMouseMove: onMove,
       onMouseLeave: () => { if (dragRef.current === null) setHover(null) },
       onMouseDown: (e: { button: number; preventDefault(): void }) => {
         if (e.button !== 2) return
         e.preventDefault()
-        dragRef.current = { x: e.clientX, a, b }
+        dragRef.current = { x: e.clientX, a, b, scale: viewOf(e, e.currentTarget).scale }
         setDrag(true); setHover(null)
       },
       onClick: () => { if (hv !== null && props.onOpenTurn !== undefined) { const m = base[hv].meta; props.onOpenTurn(m.session, m.turn) } },
       onDoubleClick: () => setWin([0, n - 1]),
     }, ...kids),
-    tip !== null && hv !== null
-      ? createElement('div', { className: 'nt-tip', style: { left: tipX + '%', top: tipY + '%', transform: tf } },
+    tip !== null && hv !== null && tipStyle !== null
+      ? createElement('div', { className: 'nt-tip', style: tipStyle },
         createElement('div', null, createElement('b', null, tip.head)),
         ...tip.lines.map((ln, i) => createElement('div', { key: String(i) }, ln)),
         createElement('div', { className: 'dim' }, '点击采样点 → 完整问答 · 右键拖动平移 · 双击复位缩放'),
