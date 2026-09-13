@@ -14,5 +14,8 @@ Nautilus 各阶段的具体开发文档：模块设计、接口契约、schema�
 |---|---|---|
 | [nautilus-dev-01-phase0.md](./nautilus-dev-01-phase0.md) | 开发文档一 · Phase 0：选型决策（D1–D3）与因果链确认——TTFT / model / endpoint 可得性实测、era 定稿建议、OTLP 成本量化 | v0.1，**待开发组评审** |
 | [evidence-phase0-20260912.md](./evidence-phase0-20260912.md) | 证据归档 · Phase 0：命令 / 预期 / 实际输出 / 观察结论，含可复现测量脚本 | 已归档（2026-09-12） |
+| [nautilus-dev-02-ui-workbench.md](./nautilus-dev-02-ui-workbench.md) | 开发文档二 · S4 工作台 UI 定版：五视图 / 三层联动 / era 措辞分级 / `--nt-*` 令牌映射 / `turn_annotation` 契约 | v0.1（UI 支线） |
+| [nautilus-dev-03-os-layer.md](./nautilus-dev-03-os-layer.md) | 开发文档三 · Phase 1：pulse（OS/GPU 层）——15 条序列 / 6 族口径、常驻计数器助手的成本实测、`metric_sample` 与 v3→v4 迁移、只读取数路由 | v0.1，**待开发组评审** |
+| [evidence-phase1-20260913.md](./evidence-phase1-20260913.md) | 证据归档 · Phase 1：通道成本对比（一次性 2.9 s CPU vs 常驻 16–31 ms）、15 族落库、软失败路径、迁移与存储、1 小时 soak | 归档中（soak 回填后定稿） |
 
-（待建：Phase 1「pulse 最小闭环」开发文档 + `evidence-phase1-<日期>.md`；Phase 2a 模型层 API 时代；开发文档二「系统层 OPS 观测框架 + Agentic Ops 工作台壳」）
+（待建：Phase 2a「模型层 API 时代」开发文档；Phase 3「core 管道与时间窗对齐」；1 分钟档聚合与 OTLP 导出按 [nautilus-dev-03-os-layer.md](./nautilus-dev-03-os-layer.md) §7 的 OQ 推进）
