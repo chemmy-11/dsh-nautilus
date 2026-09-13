@@ -35,7 +35,9 @@
 ## 3. 客户端半区（browser half）
 
 - **两半同包**：host 在 `src/`、浏览器在 `src/client/`，以 `./client` 子路径导出并用 `dsh.client` 声明；产物必须是 loader 的 **lazy-CJS factory**（本仓库由 `scripts/build-client.mjs` 产出，`window.__ModuleLoader__.load`）。
+- **单 Loader 条目（硬契约）**：带 `dsh.client` 的包**整个包只允许一个 Loader 条目**——bundle patch 里插两行（如 `@dsh-external/dsh-nexus` + `.../pulse`）或 profile patch 再手动 insert 一次，会让 client-modules 组合期抛 `resolves from multiple active Loader sources`，后果是 **`dsh web` 直接启动失败**。多能力用**单条目 + 子插件挂载**（`ctx.plugin(pulse, config.pulse)`），子配置进父插件 `Config` 的子节；`check-meta` 守条目数，测试守子插件路由。
 - 客户端插件就是普通 Cordis 插件：`Context` 来自 `@deepseek-ai/cordis`（`@deepseek-ai/dsh-client-runtime` 在 0.1.5 已移除，属死名）；`ctx.slots` 由 `@deepseek-ai/dsh-client-ui-renderer` 提供，slot key 类型由归属 UI 包增强声明，`slots.inject(key)` + `slots.register(def, Component)`。
+- **注册选项随槽位 kind 变**：`list` 槽（`conversation.view` / `sidebar.panellist`）用 `id`，`keyed` 槽（`main`）用 **`key`**；给错字段抛 `keyed slot main requires options.key`，且**整批浏览器半区插件集挂载失败**（旁证：ui-conversation 注册主区为 `{ name: 'main', key: 'conversation' }`）。全局面板 = `sidebar.panellist` 图标行 + `main` 面板，两值同为 `MainPanelId`。
 - `dsh.client.inject` 是**信息性**包名边（列 UI 提供方包名）；`dsh.client.external` 才是**硬模块边**——非基线模块的同步 `require` 不列进去就是运行时模块缺失。
 - **只允许 type-only 跨插件导入**（bundle 纯净度门禁拒绝跨插件值导入）；运行时协作一律走 cordis 服务。
 - 呈现约定沿用：样式经组件内 `<style>` 一次性注入（class 前缀 `nt-`）、SVG 自绘、主题令牌化（`--nt-*` 层，默认值映射 `--dsw-alias-*`，映射表见 `docs/2-dev/nautilus-dev-02-ui-workbench.md` §2）、零新依赖。

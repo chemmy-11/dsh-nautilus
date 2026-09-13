@@ -74,7 +74,12 @@
 4. **集中常量**：事件名 / 路由前缀 / API 路径集中定义，避免裸字符串拼写漂移失去编译期保护。
 5. **profile 卫生**：装配变更只走 `dsh plugin add/remove` + `dsh --profile <name> --dump-config` 验证；禁手改 profile 的 package.json、禁在 profile 内手动 install。
    **热装配例外**（重启会中断会话时的本地调试）：只允许在 profile 的 `cordis.patch.yml` 用户层用 `insert` 挂本地路径（`patchReload: live` 保存即生效），且 (a) 不动 bundle 列表；(b) **重启前必须收敛**——删掉 patch 行、改走 `dsh plugin add`，否则 bundle 层与 patch 层同 `id` 双挂载（`webServer.register` 对重复 `(kind,path)` 直接抛错）；(c) 跨重启的正式装配一律走 bundle。
-6. **敏感信息**：token / 密钥 / 不必要的本机绝对路径不进仓库；分析结论与验收记录回写 vault 文档，仓库侧保持代码与 README 如实。
+6. **单 Loader 条目**（带客户端半区的包）：本包声明 `dsh.client`，因此**整个包只允许一个 Loader 条目**。在 bundle patch / profile patch 里为同一包插两行（例如 `@dsh-external/dsh-nexus` + `@dsh-external/dsh-nexus/pulse`，或再用绝对路径手动 insert 一次）会让 client-modules 组合期抛
+   `client-modules: package <name> resolves from multiple active Loader sources`，
+   后果不是降级而是**宿主启动失败**（2026-09-13 实测：`dsh web` 起不来，且症状离根因很远）。
+   **多能力的正确形态**：单条目 + 源码内子插件挂载（`ctx.plugin(pulse, config.pulse)`），配置收进父插件 `Config` 的一个子节。
+   守卫：`check-meta` 断言 bundle patch 为本包插入恰好 1 个条目；运行时由 `scripts/test.mjs` 的「单入口装配」用例断言子插件确实注册了自己的路由。
+7. **敏感信息**：token / 密钥 / 不必要的本机绝对路径不进仓库；分析结论与验收记录回写 vault 文档，仓库侧保持代码与 README 如实。
 
 ## 验证纪律
 

@@ -25,6 +25,15 @@ const patchText = readFileSync(patchFile, 'utf8')
 const nameRef = new RegExp(`name:\\s*['"]?${escapeRegExp(pkg.name)}['"]?`, 'i')
 if (!nameRef.test(patchText)) fail(`patch must reference the package by name (${pkg.name})`)
 
+// 单入口契约：本包（带客户端半区）在 patch 里只能有 1 个 Loader 条目。
+// 双条目会让 client-modules 组合期抛 "resolves from multiple active Loader sources"，
+// 后果是 dsh web 启动失败（2026-09-13 实测）。多能力走子插件挂载（ctx.plugin）。
+const entryNames = [...patchText.matchAll(/name:\s*['"]?([^'"\s#]+)['"]?/g)].map((m) => m[1])
+const ownEntries = entryNames.filter((v) => v === pkg.name || v.startsWith(pkg.name + '/'))
+if (ownEntries.length !== 1) {
+  fail(`bundle patch 必须为本包插入恰好 1 个 Loader 条目，实得 ${ownEntries.length}（${ownEntries.join(', ')}）——同一包多条目会让 client-modules 组合失败、dsh web 起不来`)
+}
+
 // client 双半：exports["./client"] + dsh.client 元数据
 if (!pkg.exports?.['./client']) fail('missing exports["./client"]')
 if (!pkg.dsh?.client) fail('missing dsh.client metadata')
@@ -35,6 +44,6 @@ const stripDot = (s) => (s.startsWith('./') ? s.slice(2) : s)
 if (!files.includes('lib')) fail('files must include lib')
 if (!files.some((f) => stripDot(f) === stripDot(pkg.dsh.bundle.patch))) fail(`files must include ${pkg.dsh.bundle.patch}`)
 
-console.log(`meta-check OK: bundle patch=${pkg.dsh.bundle.patch} references ${pkg.name}, client dual-half present, files include lib+patch`)
+console.log(`meta-check OK: bundle patch=${pkg.dsh.bundle.patch} references ${pkg.name}（单 Loader 条目）, client dual-half present, files include lib+patch`)
 
 function escapeRegExp(s) { return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') }

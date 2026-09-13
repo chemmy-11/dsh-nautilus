@@ -182,6 +182,41 @@ nexus 侧 turn_read: 446（最新 2026-09-13T03:38:55Z，未受影响）
 
 ---
 
+## E11 单 Loader 条目硬契约（2026-09-13，宿主启动失败的根因与收敛）
+
+**现象（守谷人端上实测 12:06–12:08）**：profile `web` 用户层用两条绝对路径 insert（`id: nexus` + `id: pulse`）热装配本包后，`dsh web` **启动失败**，宿主报：
+
+```
+client-modules: package @dsh-external/dsh-nexus resolves from multiple active Loader sources
+```
+
+另有第二条独立故障：客户端注册主区时用了 `id`，宿主报 `keyed slot main requires options.key`（已由 §E10 的 `key` 修正收口）。
+
+**根因**：本包声明 `dsh.client`，client-modules **以「包」为单位**组合浏览器模块——同一包的多个活动 Loader 条目是**组合错误**，不是降级：整个 `dsh web` 起不来。仓库自身的 `cordis.patch.yml` 当时也正是双条目（`@dsh-external/dsh-nexus` + `@dsh-external/dsh-nexus/pulse`），因此**走 bundle 路线同样会炸**；两条绝对路径只是把这个坑提前踩到。
+
+**修法（单条目 + 子插件）**
+1. `cordis.patch.yml` 只插一行（`id: nexus`），删除 pulse 行；
+2. `src/index.ts` 以子插件挂载：`ctx.plugin(pulse, config.pulse)`，pulse 的配置成为父 `Config` 的子节（复用 pulse 自己的 schema，默认值不重复写）；
+3. `check-meta` 新增守卫：bundle patch 必须为本包插入**恰好 1 个** Loader 条目；
+4. `scripts/test.mjs` 新增「单入口装配」用例：真实 cordis Context + 假 `webServer`/`tools`，断言子插件确实注册了自己的路由。
+
+**实际**
+- 装配：`dsh plugin --profile web add file:L:/dsh-nautilus` → pnpm 装入 `dependencies` 与 `dsh.profile.bundles` 各一行，其余包（`@linxin666/dsh-web-all` / `dsh-better-sidebar` / `dsh-server-deck`）仍在；
+- `dsh --profile web --dump-config` → 本包**只有一行**：`- id: nexus` / `name: '@dsh-external/dsh-nexus'`；
+- 离线组合路径物化（临时 `DSH_HOME`、pulse `dbFile=:memory:`、`enableCounters/enableGpu=false`）：`[nexus] Pulse OS/GPU 层已挂载（子插件）`，注册 **10 条路由**（含 `/api/nexus/pulse/state`、`/api/nexus/pulse/series`）与 1 个工具 `record_turn_selfcheck`，`dispose` 正常；
+- 六件套全绿；`npm test` → **20/20**。
+
+**环境四元组**：dsh `0.1.5-rc.2` · profile `web` · 装配方式 = **bundle（`dsh plugin add file:`）** · 结果：装配与组合路径**通过**；GUI 复核**待宿主重启**（本会话宿主进程即该 `dsh web`，重启会中断会话，须由守谷人执行）。
+
+**观察结论**
+1. 「同包多条目」是**带客户端半区包的结构性禁忌**，失败面在宿主启动阶段、症状离根因很远——必须由 CI 守（`check-meta` 条目数）与测试守（子插件路由），不能靠人记。
+2. 扩能力的正确形态只有一种：**单条目 + 子插件挂载**。热装配与 bundle 装配在这条上等价，不能指望 bundle 路线「多插一行」。
+3. §E10 的 `key` 契约与本节合起来才是「能启动 + 能渲染」的完整条件：前者管注册能不能被接受，后者管宿主能不能起来。
+
+> **诚实边界**：本节第 3 条的物化用的是**真实 cordis 组合路径但不是 Loader 路径**（`ctx.plugin` 直挂）；Loader 路径的端上确认只能等宿主重启后做（AGENTS.md §6 的测试红线因此仍未完全满足——重启后应补一次 `/api/nexus/pulse/state` 与启动图行的复核）。
+
+---
+
 ## E8 诚实边界（引用本归档时必须一并引用）
 
 1. **端上读数口径**：§E8 初稿时本层尚未装配（证据全来自离线探针）；**§E9 起已热装配进 profile `web`**，宿主路径已有端上四元组读数（OQ-3 收敛）。但 E5 的 1 小时档仍只有中间读数，且「连续 1 小时无内存增长」尚未给出完整序列。

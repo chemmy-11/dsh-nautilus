@@ -356,4 +356,48 @@ test('client bundle：ModuleLoader 往返 + 命名导出面 + 面板注册契约
   assert.deepEqual(panelIds, ['nautilus-workbench', 'nautilus-workbench'])
 })
 
+// ── 宿主半区单入口装配（pulse 子插件）────────────────────────────────────────────
+
+test('host bundle 单入口：pulse 作为子插件挂载并注册自身路由', async () => {
+  // 本包带客户端半区 → 只允许一个 Loader 条目，pulse 必须由父插件 ctx.plugin 挂载。
+  // 双条目会让 client-modules 抛 "resolves from multiple active Loader sources"（dsh web 起不来）。
+  const tmp = mkdtempSync(join(tmpdir(), 'nautilus-mount-'))
+  const prevHome = process.env.DSH_HOME
+  process.env.DSH_HOME = tmp
+  try {
+    const { Context } = await import('@deepseek-ai/cordis')
+    const mod = await import(new URL('../lib/index.js', import.meta.url).href)
+    const routes = []
+    const tools = []
+    const ctx = new Context()
+    ctx.provide('webServer', { register(route) { routes.push(route.path); return () => {} } })
+    ctx.provide('tools', { register(def) { tools.push(def.name) } })
+    const fiber = ctx.plugin(mod, {
+      vaultRoot: '',
+      pulse: { enabled: true, enableCounters: false, enableGpu: false, intervalMs: 60000, dbFile: ':memory:' },
+    })
+    const deadline = Date.now() + 5000
+    while (Date.now() < deadline && !routes.includes('/api/nexus/pulse/state')) await new Promise((r) => setTimeout(r, 25))
+    assert.deepEqual([...routes].sort(), [
+      '/api/nexus/action',
+      '/api/nexus/lfield',
+      '/api/nexus/m2/analysis',
+      '/api/nexus/m2/annotations',
+      '/api/nexus/m2/state',
+      '/api/nexus/m2/turn-text',
+      '/api/nexus/pulse/series',
+      '/api/nexus/pulse/state',
+      '/api/nexus/state',
+      '/api/nexus/vault',
+    ])
+    assert.deepEqual([...tools], ['record_turn_selfcheck'])
+    await fiber.dispose()
+  } finally {
+    if (prevHome === undefined) delete process.env.DSH_HOME
+    else process.env.DSH_HOME = prevHome
+    rmSync(tmp, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+  }
+})
+
+
 

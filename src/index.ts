@@ -15,6 +15,9 @@ import { startVaultWatch } from './watch.js'
 import { registerNexusRoutes } from './routes.js'
 import { TurnsCollector, type TurnEventLike } from './turns.js'
 import { registerSelfCheckTool } from './selfcheck.js'
+// Phase 1：pulse（OS/GPU 层）以**子插件**挂载——本包带客户端半区，只允许一个 Loader 条目
+// （双条目 → client-modules: resolves from multiple active Loader sources → dsh web 起不来）。
+import * as pulse from './pulse/index.js'
 
 // 官方会话事件名（R2：集中常量，避免裸字符串与拼写漂移无编译期保护）。
 const SESSION_EVENT = 'session/event'
@@ -40,6 +43,8 @@ export interface Config {
     refreshMs: number
     historyDays: number
   }
+  /** Phase 1：OS/GPU 采集层配置（子插件 pulse；enabled=false 时整层不挂载）。 */
+  pulse: pulse.Config
 }
 
 export const Config = z.object({
@@ -53,6 +58,8 @@ export const Config = z.object({
     refreshMs: z.number().min(30000).default(120000),
     historyDays: z.number().min(1).default(30),
   }).default({ enabled: true, refreshMs: 120000, historyDays: 30 }),
+  // 复用 pulse 自己的 schema（含全部默认值）：同一条目内组态，非法配置照旧在加载时响亮失败
+  pulse: pulse.Config,
 })
 
 export function apply(ctx: Context, config: Config): void {
@@ -156,6 +163,16 @@ export function apply(ctx: Context, config: Config): void {
     registerSelfCheckTool(toolCtx, store)
     return () => undefined
   }, 'nexus: selfcheck tool (M3-F.1)')
+
+  // Phase 1：OS/GPU 层作为子插件挂载（单 Loader 条目内多能力；见 cordis.patch.yml 顶部契约）。
+  // 子插件自带 inject=['webServer'] 与 ctx.effect 清理，卸载随父 fiber 一起收敛。
+  ctx.effect(() => {
+    const fiber = (ctx as unknown as {
+      plugin(plugin: unknown, config: unknown): { dispose?: () => void }
+    }).plugin(pulse, config.pulse)
+    return () => { fiber?.dispose?.() }
+  }, 'nexus: pulse sub-plugin (Phase 1)')
+  console.log('[nexus] Pulse OS/GPU 层' + (config.pulse.enabled ? '已挂载（子插件）' : '已禁用（config.pulse.enabled=false）'))
 
   console.log('[nexus] M1 观测启动（vault=' + (vaultRoot || '<未配置>') + '）')
   console.log('[nexus] M2 turn 采集启动（官方 session/event 直采' + (config.lField.enabled ? '' : ' · lField 已禁用') + '）')

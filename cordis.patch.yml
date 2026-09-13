@@ -1,8 +1,16 @@
 # @dsh-external/dsh-nexus bundle patch 层。
-# 装配：`dsh plugin --profile <name> add github:chemmy-11/dsh-nautilus`（或 npm/tarball）。
+# 装配：`dsh plugin --profile <name> add file:<本仓库路径>`（或 github / npm / tarball）。
+#
+# ⚠️ 单入口硬契约（2026-09-13 实测，宿主 dsh 0.1.5-rc.2）：
+#   本包带客户端半区（dsh.client），**只允许一个 Loader 条目**。同一包出现两个条目
+#   （例如 nexus + @dsh-external/dsh-nexus/pulse 各插一行，或 profile 里再用绝对路径手动 insert）
+#   会让 client-modules 组合期抛出：
+#     client-modules: package @dsh-external/dsh-nexus resolves from multiple active Loader sources
+#   后果不是降级而是**宿主启动失败**（dsh web 直接起不来）。
+#   需要多能力时的正确做法：单条目 + 子插件挂载（源码内 ctx.plugin(pulse, config.pulse)），
+#   而不是在同包上再加一个条目。CI 由 .github/scripts/check-meta.mjs 守这条。
 - insert:
     - id: nexus
       name: '@dsh-external/dsh-nexus'
-    # Nautilus OS/GPU 层（Phase 1）：独立插件入口，与 nexus 同包不同行、同库不同表。
-    - id: pulse
-      name: '@dsh-external/dsh-nexus/pulse'
+      # Nautilus OS/GPU 层（Phase 1）不再是独立条目：由本条目内的子插件挂载，
+      # 配置走 config.pulse（见 src/index.ts）。数据仍是同库不同表（metric_sample）。
