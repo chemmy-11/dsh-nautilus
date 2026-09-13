@@ -376,6 +376,7 @@ export function CurveChart(props: {
   yFmt?: (v: number) => string
   anno?: { from: number; to: number; txt: string }
   h?: number
+  fill?: boolean
   resetKey?: string | number
   onOpenTurn?: (session: string, turn: number) => void
   tipOf?: (meta: M2Point) => { head: string; lines: string[] }
@@ -383,7 +384,7 @@ export function CurveChart(props: {
 }): ReactNode {
   const base = props.points.filter((p) => p.y !== null && Number.isFinite(p.y))
   const n = base.length
-  const h = props.h ?? 320
+  const fill = props.fill === true
   const padL = 52
   const padR = 16
   const padT = 26
@@ -395,12 +396,17 @@ export function CurveChart(props: {
   const dragRef = useRef<{ x: number; a: number; b: number } | null>(null)
   const svgRef = useRef<SVGSVGElement | null>(null)
   const boxRef = useRef<HTMLDivElement | null>(null)
-  const [cw, setCw] = useState(1120)
-  // 容器宽度实测：viewBox 宽度跟随容器（ResizeObserver），保证 1:1 映射、点位无偏差
+  // viewBox 尺寸 = 容器实测尺寸（宽高都测）；svg 以 100%/100% + preserveAspectRatio:none 渲染——
+  // 任何容器尺寸下精确铺满、悬停命中按 rect 实测比例换算，指针与点位零偏差
+  const [size, setSize] = useState({ w: 1120, h: props.h ?? 320 })
   useEffect(() => {
     const el = boxRef.current
     if (el === null) return undefined
-    const measure = (): void => setCw(Math.max(560, el.clientWidth))
+    const measure = (): void => {
+      const w = el.clientWidth
+      const hh = el.clientHeight
+      if (w > 0 && hh > 0) setSize((prev) => (prev.w === w && prev.h === hh ? prev : { w, h: hh }))
+    }
     measure()
     if (typeof ResizeObserver === 'undefined') {
       window.addEventListener('resize', measure)
@@ -452,7 +458,8 @@ export function CurveChart(props: {
     return () => { window.removeEventListener('mousemove', move); window.removeEventListener('mouseup', up) }
   }, [drag, n])
   if (n < 2) return Empty({ text: '暂无数据' })
-  const W = Math.max(560, cw)
+  const W = size.w
+  const h = size.h
   // 渲染期钳制窗口：切档/数据刷新后点数骤减时，effect 复位前的这一帧里旧 win 会越界（base[b] undefined 崩溃）
   const a = Math.max(0, Math.min(win[0], n - 2))
   const b = Math.max(a + 1, Math.min(win[1], n - 1))
@@ -527,10 +534,10 @@ export function CurveChart(props: {
   const tipX = hv !== null ? (sx(hv) / W) * 100 : 0
   const tipY = hv !== null ? (sy(base[hv].y as number) / h) * 100 : 0
   const tf = (tipX > 62 ? 'translateX(calc(-100% - 12px))' : 'translateX(12px)') + ' ' + (tipY < 30 ? 'translateY(12px)' : 'translateY(calc(-100% - 10px))')
-  return createElement('div', { className: 'nt-chart', ref: boxRef, style: drag ? { cursor: 'grabbing' } : undefined, onContextMenu: (e: { preventDefault(): void }) => e.preventDefault() },
+  return createElement('div', { className: 'nt-chart', ref: boxRef, style: { height: fill ? '100%' : String(h) + 'px', cursor: drag ? 'grabbing' : undefined }, onContextMenu: (e: { preventDefault(): void }) => e.preventDefault() },
     createElement('svg', {
       ref: svgRef,
-      viewBox: '0 0 ' + String(W) + ' ' + String(h), width: '100%', height: h, role: 'img', 'aria-label': props.label ?? 'curve',
+      viewBox: '0 0 ' + String(W) + ' ' + String(h), width: '100%', height: '100%', preserveAspectRatio: 'none', style: { display: 'block' }, role: 'img', 'aria-label': props.label ?? 'curve',
       onMouseMove: onMove,
       onMouseLeave: () => { if (dragRef.current === null) setHover(null) },
       onMouseDown: (e: { button: number; preventDefault(): void }) => {
@@ -726,24 +733,18 @@ export function CurveView(props: {
   // 时间档位（1 周 / 1 月）；全屏：绝对定位占满工作台面板（fixed 会被宿主布局的 transform 基改名空间劫持）、Esc 退出
   const [range, setRange] = useState<7 | 30>(7)
   const [full, setFull] = useState(false)
-  const [fh, setFh] = useState(640)
-  const fullBodyRef = useRef<HTMLDivElement | null>(null)
   // 数据源：NEXUS 轮次（事件驱动，非等间隔）/ PULSE 采样（等间隔，斜率可读）
   const [source, setSource] = useState<'nexus' | 'pulse'>('nexus')
   const metrics = (props.pulse?.latest ?? []).map((l) => l.metric)
   const [picked, setPicked] = useState<string>('')
   const metric = picked !== '' && metrics.includes(picked) ? picked : (metrics[0] ?? '')
   const series = useJson<PulseSeries>('/api/nexus/pulse/series?metric=' + encodeURIComponent(metric) + '&windowMs=3600000&maxPoints=240', metric === '' || source !== 'pulse' || props.paused === true, 60000)
-  // 全屏：Esc 退出；图表高度实测覆盖层剩余空间（ResizeObserver，svg 精确填充）
+  // 全屏：Esc 退出（图表高度由 CurveChart 自测容器，无需宿主侧实测）
   useEffect(() => {
     if (!full) return undefined
-    const measure = (): void => { if (fullBodyRef.current !== null) setFh(Math.max(320, fullBodyRef.current.clientHeight)) }
-    measure()
     const onK = (e: { key: string }): void => { if (e.key === 'Escape') setFull(false) }
     window.addEventListener('keydown', onK)
-    let ro: ResizeObserver | undefined
-    if (typeof ResizeObserver !== 'undefined' && fullBodyRef.current !== null) { ro = new ResizeObserver(measure); ro.observe(fullBodyRef.current) } else { window.addEventListener('resize', measure) }
-    return () => { window.removeEventListener('keydown', onK); if (ro !== undefined) { ro.disconnect() } else { window.removeEventListener('resize', measure) } }
+    return () => { window.removeEventListener('keydown', onK) }
   }, [full])
   // 时间档位过滤（1 周 / 1 月）
   const rangeFrom = Date.now() - range * 86400000
@@ -839,8 +840,8 @@ export function CurveView(props: {
       createElement('div', { style: { flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' } },
         createElement('div', { className: 'nt-note', style: { margin: '0 0 8px', flex: 'none' } },
           '时间档位 ' + (range === 7 ? '1 周' : '1 月') + ' · 滚轮放缩（指针为锚，双击复位）· 右键拖动平移 · 悬停采样点看简略读数，点击下钻完整问答。'),
-        createElement('div', { ref: fullBodyRef, style: { flex: 1, minHeight: 0 } },
-          CurveChart({ points: pts, threshold, thresholdLabel: 'S 形阈值参考（P1）', yFmt: CURVE_YFMT[key], anno, h: fh, label: curveLabel(key), tipOf, onOpenTurn: props.onOpenTurn, resetKey: String(range) + '/' + String(key) + '/' + String(scope) }),
+        createElement('div', { style: { flex: 1, minHeight: 0 } },
+          CurveChart({ points: pts, threshold, thresholdLabel: 'S 形阈值参考（P1）', yFmt: CURVE_YFMT[key], anno, fill: true, label: curveLabel(key), tipOf, onOpenTurn: props.onOpenTurn, resetKey: String(range) + '/' + String(key) + '/' + String(scope) }),
         ),
       ),
     )
