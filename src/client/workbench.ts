@@ -63,7 +63,7 @@ const CSS_LINES = [
   '.nt-card .st{font-size:9px;letter-spacing:1.5px;border:1px solid var(--nt-border2,#c8c8c3);padding:0 5px;color:var(--nt-dim,#5f5f5c)}',
   '.nt-card .st.on{border-color:var(--nt-accent,#e6321e);color:var(--nt-accent,#e6321e)}',
   '.nt-card p{margin:7px 0 0;font-size:11.5px;line-height:1.6;color:var(--nt-dim,#5f5f5c)}',
-  '.nt-report{max-width:820px}',
+  '.nt-report{max-width:820px;margin:0 auto}',
   '.nt-report .meta{display:grid;grid-template-columns:auto 1fr;gap:4px 12px;font-size:11px;border:1px solid var(--nt-border,#d9d9d5);padding:10px 12px;background:var(--nt-panel2,#f7f7f5)}',
   '.nt-report .meta b{font-weight:500;color:var(--nt-faint,#9a9a95);letter-spacing:1px;text-transform:uppercase;font-size:9.5px}',
   '.nt-report .prose{font-family:Georgia,serif;font-size:13px;line-height:1.95;margin-top:12px}',
@@ -260,29 +260,78 @@ export class ViewBoundary extends Component<{ label?: string; children?: ReactNo
   }
 }
 
-/** 单层曲线（SVG 自绘；点数不足 2 → 空态）。 */
-export function Spark(props: { points: Array<{ x: number; y: number | null }>; h?: number; threshold?: number; label?: string }): ReactNode {
+/** 单层曲线（SVG 自绘；S4 定稿视觉：发丝网格 + 墨线 + 朱红阈值/关键点 + τ_e 注记；点数不足 2 → 空态）。 */
+export function Spark(props: {
+  points: Array<{ x: number; y: number | null }>
+  h?: number
+  threshold?: number
+  thresholdLabel?: string
+  yFmt?: (v: number) => string
+  anno?: { from: number; to: number; txt: string }
+  label?: string
+}): ReactNode {
   const pts = props.points.filter((p) => p.y !== null && Number.isFinite(p.y))
   if (pts.length < 2) return Empty({ text: '暂无数据' })
-  const h = props.h ?? 132
+  const h = props.h ?? 150
   const w = 960
+  const padL = 46
+  const padR = 14
+  const padT = 24
+  const padB = 24
   const ys = pts.map((p) => p.y as number)
   const min = Math.min(...ys)
   const max = Math.max(...ys)
   const span = max - min || 1
-  const sx = (i: number): number => (i / Math.max(1, pts.length - 1)) * (w - 48) + 34
-  const sy = (v: number): number => h - 22 - ((v - min) / span) * (h - 44)
-  const d = pts.map((p, i) => (i === 0 ? 'M' : 'L') + sx(i).toFixed(1) + ' ' + sy(p.y as number).toFixed(1)).join(' ')
-  const tick = (r: number): number => min + span * r
-  const kids: ReactNode[] = [createElement('path', { key: 'line', d, fill: 'none', stroke: 'var(--nt-ink,#101010)', strokeWidth: 1.5 })]
+  const n = pts.length
+  const sx = (i: number): number => padL + (i / Math.max(1, n - 1)) * (w - padL - padR)
+  const sy = (v: number): number => h - padB - ((v - min) / span) * (h - padT - padB)
+  const yf = props.yFmt ?? ((v: number): string => v.toFixed(1))
+  const kids: ReactNode[] = []
+  // 发丝网格 + y 刻度（4 档，定稿：左端小字）
   for (const r of [0, 1 / 3, 2 / 3, 1]) {
-    const y = sy(tick(r))
-    kids.push(createElement('line', { key: 'g' + String(r), x1: 34, x2: w - 14, y1: y, y2: y, stroke: 'var(--nt-border,#d9d9d5)', strokeWidth: 1 }))
-    kids.push(createElement('text', { key: 't' + String(r), x: 2, y: y + 3, fontSize: 9, fill: 'var(--nt-faint,#9a9a95)' }, tick(r).toFixed(1)))
+    const v = min + span * r
+    const y = sy(v)
+    kids.push(createElement('line', { key: 'g' + String(r), x1: padL, x2: w - padR, y1: y, y2: y, stroke: 'var(--nt-border,#d9d9d5)', strokeWidth: 1, opacity: 0.7 }))
+    kids.push(createElement('text', { key: 't' + String(r), x: padL - 6, y: y + 3, fontSize: 9, fill: 'var(--nt-faint,#9a9a95)', textAnchor: 'end' }, yf(v)))
   }
+  // x 时间刻度（首/中/末；x 为 epoch ms 时自动生成，跨度 <36h 只显时分）
+  if (n >= 3 && pts[0].x > 1e12) {
+    const spanMs = pts[n - 1].x - pts[0].x
+    const short = spanMs < 36 * 3600000
+    const xt = (x: number): string => {
+      const d = new Date(x)
+      const hm = String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0')
+      return short ? hm : String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0') + ' ' + hm
+    }
+    for (const k of [0, Math.floor((n - 1) / 2), n - 1]) {
+      const x = sx(k)
+      kids.push(createElement('line', { key: 'x' + String(k), x1: x, x2: x, y1: h - padB, y2: h - padB + 3, stroke: 'var(--nt-border,#d9d9d5)' }))
+      kids.push(createElement('text', { key: 'xl' + String(k), x, y: h - 7, fontSize: 9, fill: 'var(--nt-faint,#9a9a95)', textAnchor: 'middle' }, xt(pts[k].x)))
+    }
+  }
+  // 阈值线（朱红虚线 + 右上标签——定稿元素）
   if (props.threshold !== undefined && props.threshold >= min && props.threshold <= max) {
     const y = sy(props.threshold)
-    kids.push(createElement('line', { key: 'th', x1: 34, x2: w - 14, y1: y, y2: y, stroke: 'var(--nt-accent,#e6321e)', strokeWidth: 1, strokeDasharray: '5 4' }))
+    kids.push(createElement('line', { key: 'th', x1: padL, x2: w - padR, y1: y, y2: y, stroke: 'var(--nt-accent,#e6321e)', strokeWidth: 1, strokeDasharray: '2 4', opacity: 0.8 }))
+    kids.push(createElement('text', { key: 'tht', x: w - padR, y: y - 4, fontSize: 9, fill: 'var(--nt-accent,#e6321e)', textAnchor: 'end', letterSpacing: 1 }, props.thresholdLabel ?? '阈值'))
+  }
+  // τ_e 注记（虚线段 + 顶部文字——定稿元素；from/to 为点序号）
+  if (props.anno !== undefined && n >= 4) {
+    const a = props.anno
+    const x1 = sx(Math.max(0, Math.min(n - 1, a.from)))
+    const x2 = sx(Math.max(0, Math.min(n - 1, a.to)))
+    kids.push(createElement('line', { key: 'an', x1, x2, y1: 14, y2: 14, stroke: 'var(--nt-dim,#5f5f5c)', strokeWidth: 1, strokeDasharray: '3 3' }))
+    kids.push(createElement('text', { key: 'ant', x: (x1 + x2) / 2, y: 9, fontSize: 9, fill: 'var(--nt-dim,#5f5f5c)', textAnchor: 'middle', letterSpacing: 1 }, a.txt))
+  }
+  // 墨线（主线）
+  const d = pts.map((p, i) => (i === 0 ? 'M' : 'L') + sx(i).toFixed(1) + ' ' + sy(p.y as number).toFixed(1)).join(' ')
+  kids.push(createElement('path', { key: 'line', d, fill: 'none', stroke: 'var(--nt-ink,#101010)', strokeWidth: 1.6 }))
+  // 关键点：越过阈值的轮 → 朱红实心（定稿：朱红＝关键点）
+  if (props.threshold !== undefined) {
+    const th = props.threshold
+    pts.forEach((p, i) => {
+      if ((p.y as number) >= th) kids.push(createElement('circle', { key: 'm' + String(i), cx: sx(i), cy: sy(p.y as number), r: 2.8, fill: 'var(--nt-accent,#e6321e)' }))
+    })
   }
   return createElement('svg', { viewBox: '0 0 ' + String(w) + ' ' + String(h), width: '100%', height: h, role: 'img', 'aria-label': props.label ?? 'series' }, ...kids)
 }
@@ -297,10 +346,10 @@ export function OverviewView(props: { nexus: NexusState | null; m2: M2State | nu
   const lagMs = last === null ? null : Date.now() - last
   const stale = lagMs !== null && lagMs > 180000
   const rows: Array<{ layer: string; label: string; value: string; note?: string; warn?: boolean }> = [
+    { layer: 'PULSE', label: '采集器心跳', value: last === null ? '未采样' : fmtTime(last), note: pulse === null ? 'pulse 未装配' : 'tick ' + String(pulse.collector.ticks) + ' · 库内 ' + String(pulse.db.rows) + ' 行 · shell=' + String(pulse.collector.shellPath === null ? '无' : pulse.collector.shellPath), warn: stale },
     { layer: 'NEXUS', label: 'vault 总量', value: nexus === null ? '—' : fmtBytes(nexus.totals.totalChars) + ' / ' + String(nexus.totals.totalFiles) + ' 文件', note: nexus === null ? '读取中或接口缺席' : 'root=' + nexus.activeRoot },
     { layer: 'NEXUS', label: '今日写入', value: nexus === null ? '—' : String(nexus.today.edits) + ' 次', note: nexus === null ? '—' : '新建 ' + String(nexus.today.created) + ' · 修改 ' + String(nexus.today.modified) + ' · 删除 ' + String(nexus.today.deleted) },
     { layer: 'NEXUS', label: '窗口缓存命中率', value: hr === null || hr === undefined ? '—' : (hr * 100).toFixed(1) + '%', note: n === undefined ? '—' : '读 ' + String(n.cacheRead) + ' / 未命中 ' + String(n.missToken) + ' 令牌 · ' + String(n.turns) + ' 轮', warn: hr !== null && hr !== undefined && hr < 0.5 },
-    { layer: 'PULSE', label: '采集器心跳', value: last === null ? '未采样' : fmtTime(last), note: pulse === null ? 'pulse 未装配' : 'tick ' + String(pulse.collector.ticks) + ' · 库内 ' + String(pulse.db.rows) + ' 行 · shell=' + String(pulse.collector.shellPath === null ? '无' : pulse.collector.shellPath), warn: stale },
     { layer: 'INFER', label: '推理时延 TTFT', value: '—', note: 'Phase 2a 采集（provider 侧未接入）', warn: false },
     { layer: 'INFER', label: '层间对齐度', value: '—', note: '需 INFER 落地后方可计算 τ_e', warn: false },
     { layer: 'M5', label: '预言命中', value: '—', note: 'call_p 未落库（迁移至 schema v5）', warn: false },
@@ -316,26 +365,7 @@ export function OverviewView(props: { nexus: NexusState | null; m2: M2State | nu
       '读数为观测所得，非评价：本面板只呈现「发生了什么」。三层齐备前（INFER 缺席），任何跨层结论都只能用「对照」措辞。'),
     createElement('div', { className: 'nt-wb-grid' }, ...rows.map((r) => Stat({ layer: r.layer, label: r.label, value: r.value, note: r.note, warn: r.warn }))),
     Panel({
-      title: '最近轮次读数', fig: 'FIG.01',
-      note: '读数为原始记录；轮次内的问题/回答属解释层，不写回读数（见抽屉）。',
-      children: recent.length === 0
-        ? Empty({ text: m2 === null ? 'M2 读数接口读取中或不可用' : '窗口内暂无轮次记录' })
-        : createElement('table', { className: 'nt-tbl' },
-          createElement('thead', null, createElement('tr', null,
-            ...['时间', '会话', '轮', '输入(未命中)', '缓存读', '未命中率', '时长', 'TPS'].map((h) => createElement('th', { key: h }, h)))),
-          createElement('tbody', null, ...recent.slice(0, 12).map((p) => createElement('tr', { key: p.session + '#' + String(p.turn), className: 'clickable', onClick: () => props.onOpenTurn(p.session, p.turn) },
-            createElement('td', null, fmtTime(p.ts)),
-            createElement('td', null, p.session.slice(0, 12)),
-            createElement('td', null, String(p.turn)),
-            createElement('td', null, String(p.tokenIn)),
-            createElement('td', null, String(p.cacheRead)),
-            createElement('td', null, (() => { const mr = curveValue(p, 'miss'); return mr === null ? '—' : (mr * 100).toFixed(1) + '%' })()),
-            createElement('td', null, p.durationMs === null ? '—' : String(Math.round(p.durationMs)) + ' ms'),
-            createElement('td', null, fmtNum(p.tps, 1)),
-          )))),
-    }),
-    Panel({
-      title: '系统层读数（PULSE · 本机）', fig: 'FIG.07',
+      title: '系统层读数（PULSE · 本机）', fig: 'FIG.01',
       note: '量纲取自 src/pulse/{collect,counters}.ts 的构造点：utilization / proc.cpu 是「占单核比」已换算为百分比，io_rate 为字节/秒，gpu.mem 为 MiB，temp/power 为 °C/W。本机读数与云端缓存之间在 era=api 下没有因果通路——此处只作对照，不作归因。',
       children: latest.length === 0
         ? Empty({ text: pulse === null ? 'PULSE 层缺席：宿主内子插件未挂载或接口不可达' : '尚无采样——等待采集器首个 tick' })
@@ -356,6 +386,25 @@ export function OverviewView(props: { nexus: NexusState | null; m2: M2State | nu
             '采集健康：tick ' + String(pulse?.collector.ticks ?? 0) + ' · 库内 ' + String(pulse?.db.rows ?? 0) + ' 行 ' + String(latest.length) + ' 指标 · shell=' + String(pulse?.collector.shellPath ?? '无') + ' · 计数器 ' + (pulse?.collector.countersOk === true ? '正常' : '不可用') + ' · GPU ' + (pulse?.collector.gpuOk === true ? '正常' : '不可用') + ' · 助手重启 ' + String(pulse?.collector.countersRestarts ?? 0) + ' 次' + (pulse?.collector.lastError === null || pulse?.collector.lastError === undefined ? '' : ' · 最近错误：' + pulse.collector.lastError)),
         ),
     }),
+    Panel({
+      title: '最近轮次读数', fig: 'FIG.02',
+      note: '读数为原始记录；轮次内的问题/回答属解释层，不写回读数（见抽屉）。',
+      children: recent.length === 0
+        ? Empty({ text: m2 === null ? 'M2 读数接口读取中或不可用' : '窗口内暂无轮次记录' })
+        : createElement('table', { className: 'nt-tbl' },
+          createElement('thead', null, createElement('tr', null,
+            ...['时间', '会话', '轮', '输入(未命中)', '缓存读', '未命中率', '时长', 'TPS'].map((h) => createElement('th', { key: h }, h)))),
+          createElement('tbody', null, ...recent.slice(0, 12).map((p) => createElement('tr', { key: p.session + '#' + String(p.turn), className: 'clickable', onClick: () => props.onOpenTurn(p.session, p.turn) },
+            createElement('td', null, fmtTime(p.ts)),
+            createElement('td', null, p.session.slice(0, 12)),
+            createElement('td', null, String(p.turn)),
+            createElement('td', null, String(p.tokenIn)),
+            createElement('td', null, String(p.cacheRead)),
+            createElement('td', null, (() => { const mr = curveValue(p, 'miss'); return mr === null ? '—' : (mr * 100).toFixed(1) + '%' })()),
+            createElement('td', null, p.durationMs === null ? '—' : String(Math.round(p.durationMs)) + ' ms'),
+            createElement('td', null, fmtNum(p.tps, 1)),
+          )))),
+    }),
   )
 }
 
@@ -373,21 +422,41 @@ export function curveValue(p: M2Point, key: CurveKey): number | null {
 export function curveUnit(key: CurveKey): string { return key === 'miss' ? '%' : key === 'ms' ? 'ms' : 'tok/s' }
 export function curveLabel(key: CurveKey): string { return key === 'miss' ? '未命中率' : key === 'ms' ? '每轮时长' : '解码速度' }
 
-export function CurveView(props: { m2: M2State | null; era: Era; pulse: PulseState | null }): ReactNode {
+/** /m2/analysis 的逐会话行（只取注记所需字段）。 */
+export type AnalysisRow = { session: string; shape: string; tauE: number | null; burst: { fromTurn: number; toTurn: number; direction: string } | null }
+export const SHAPE_LABEL: Record<string, string> = { sigmoid: 'S 形', 'inverse-sigmoid': '反 S 形', rising: '上升', falling: '下降', unknown: '形态未定' }
+
+const CURVE_YFMT: Record<CurveKey, (v: number) => string> = {
+  miss: (v) => String(Math.round(v)) + '%',
+  ms: (v) => String(Math.round(v)),
+  tps: (v) => v.toFixed(0),
+}
+
+export function CurveView(props: { m2: M2State | null; era: Era; pulse: PulseState | null; paused?: boolean }): ReactNode {
   const [key, setKey] = useState<CurveKey>('miss')
   const [scope, setScope] = useState<string>('all')
   // 数据源：NEXUS 轮次（事件驱动，非等间隔）/ PULSE 采样（等间隔，斜率可读）
   const [source, setSource] = useState<'nexus' | 'pulse'>('nexus')
+  const analysis = useJson<AnalysisRow[]>('/api/nexus/m2/analysis?root=all', props.paused === true, 600000)
   const metrics = (props.pulse?.latest ?? []).map((l) => l.metric)
   const [picked, setPicked] = useState<string>('')
   const metric = picked !== '' && metrics.includes(picked) ? picked : (metrics[0] ?? '')
-  const series = useJson<PulseSeries>('/api/nexus/pulse/series?metric=' + encodeURIComponent(metric) + '&windowMs=3600000&maxPoints=240', metric === '' || source !== 'pulse', 60000)
+  const series = useJson<PulseSeries>('/api/nexus/pulse/series?metric=' + encodeURIComponent(metric) + '&windowMs=3600000&maxPoints=240', metric === '' || source !== 'pulse' || props.paused === true, 60000)
   const curve = props.m2?.curve ?? []
   const sessions = Array.from(new Set(curve.map((p) => p.session)))
   const scoped = scope === 'all' ? curve : curve.filter((p) => p.session === scope)
   const pts = scoped.map((p) => ({ x: p.ts, y: curveValue(p, key) }))
   const scaled = key === 'miss' ? pts.map((p) => ({ x: p.x, y: p.y === null ? null : p.y * 100 })) : pts
   const threshold = key === 'miss' ? 50 : undefined
+  // τ_e 注记（定稿元素）：仅单会话聚焦且 analysis 检出时绘制——多点叠加轴上 τ_e 无意义
+  let anno: { from: number; to: number; txt: string } | undefined
+  if (key === 'miss' && scope !== 'all' && scaled.length >= 4) {
+    const hit = (analysis ?? []).find((a) => a.session === scope)
+    if (hit !== undefined && hit.tauE !== null && Number.isFinite(hit.tauE)) {
+      const from = Math.floor(scaled.length * 0.3)
+      anno = { from, to: Math.min(scaled.length - 1, from + Math.round(hit.tauE)), txt: 'τ_e ≈ ' + String(hit.tauE) + ' turn（' + (SHAPE_LABEL[hit.shape] ?? hit.shape) + '）' }
+    }
+  }
   const pulsePts = (series?.points ?? []).map((p) => ({ x: p.ts, y: p.value }))
   return createElement('div', null,
     createElement('div', { className: 'nt-wb-seg', style: { marginBottom: 10 } },
@@ -404,8 +473,8 @@ export function CurveView(props: { m2: M2State | null; era: Era; pulse: PulseSta
         ),
         Panel({
           title: curveLabel(key) + ' 时序曲线', fig: 'FIG.02',
-          note: '时间轴为记录时间戳（非等间隔）：轮次并非均匀采样，曲线的斜率不代表速率；阈值线 ' + (threshold === undefined ? '本指标不设阈值' : String(threshold) + curveUnit(key) + ' 为参考线') + '。',
-          children: Spark({ points: scaled, threshold, label: curveLabel(key) }),
+          note: '时间轴为记录时间戳（非等间隔）：轮次并非均匀采样，曲线的斜率不代表速率；朱红虚线为阈值参考（' + (threshold === undefined ? '本指标不设阈值' : String(threshold) + curveUnit(key)) + '），朱红实心点＝越过阈值的轮；τ_e 注记取自 /m2/analysis 检出值（单会话聚焦时显示）。',
+          children: Spark({ points: scaled, threshold, thresholdLabel: 'S 形阈值参考（P1）', yFmt: CURVE_YFMT[key], anno, h: 200, label: curveLabel(key) }),
         }),
       )
       : createElement('div', null,
@@ -418,7 +487,7 @@ export function CurveView(props: { m2: M2State | null; era: Era; pulse: PulseSta
           note: 'PULSE 是等间隔采样（默认 5 s 一采，桶均值聚合到最多 240 点）：与 NEXUS 轮次曲线不同，这里的时间轴均匀，斜率可读。窗口 1 小时；每 60 s 刷新一次。',
           children: metrics.length === 0
             ? Empty({ text: 'PULSE 层缺席：无指标可选（宿主内子插件未挂载）' })
-            : Spark({ points: pulsePts, label: metricLabel(metric) }),
+            : Spark({ points: pulsePts, h: 180, label: metricLabel(metric) }),
         }),
       ),
     Panel({
@@ -695,7 +764,7 @@ export function Workbench(props: { onExitToConversation?: () => void } = {}): Re
   // 用 createElement 渲染视图组件（**不可**写成 OverviewView({...}) 直接调用）：
   // 直接调用会把子组件的 hooks 算进父组件，切换视图时 hooks 数量变化 → React 抛错、整页渲染失败。
   const body = view === 'overview' ? createElement(OverviewView, { nexus, m2, pulse, onOpenTurn: (s: string, t: number) => setDrawer({ session: s, turn: t }) })
-    : view === 'curve' ? createElement(CurveView, { m2, era, pulse })
+    : view === 'curve' ? createElement(CurveView, { m2, era, pulse, paused })
     : view === 'hypotheses' ? createElement(HypothesesView, { m2, ann, onProphecy: (id: string) => { setView('prophecy'); setToast('已跳到预言标注：' + id) } })
     : view === 'prophecy' ? createElement(ProphecyView, { ann, m2, toast: setToast, reload: () => setNonce((v) => v + 1) })
     : createElement(ReportView, { nexus, m2, pulse, era, ann })
