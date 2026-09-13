@@ -45,7 +45,7 @@
 | 路径 | 构建由谁触发 | 说明 |
 |---|---|---|
 | 本地开发 | `npm run build` | **始终构建**；构建链纯 Node（`scripts/prepare.mjs` + `scripts/build-client.mjs`） |
-| 本地 dev 循环（装进 profile 后） | **`dsh plugin --profile web add link:<仓库路径>`** → `npm run build` → 重启宿主 | **用 `link:`（Windows 下是 Junction，指向仓库）**：`lib/` 建完即回流，无需重装。**`file:` 是安装副本，且「重跑 add」是空操作**——pnpm 认为依赖已装（`added 0`），副本会停在旧产物，实测因此出现「重启后毫无变化」；真要刷新得先 `remove` 再 `add`。两种方式都**必须重启宿主**：client-modules 在启动时缓存 bundle，替换产物不会触发 rebuild 通知（§E13 实测 rev 与字节均未变） |
+| 本地 dev 循环（装进 profile 后） | **`dsh plugin --profile web add link:<仓库路径>`** → `npm run build` → 重启宿主 | **用 `link:`（Windows 下是 Junction，指向仓库）**：`lib/` 建完即回流，无需重装。**`file:` 是安装副本，且「重跑 add」是空操作**——pnpm 认为依赖已装（`added 0`），副本会停在旧产物，实测因此出现「重启后毫无变化」；真要刷新得先 `remove` 再 `add`。`link:` 下实测**无需重启**：产物变更后启动图 rev **自动更新**（宿主 PID 未变、rev 连换两次，§E14），刷新页面即可；`file:` 副本下 rev 不更新，必须重启（§E13 实测） |
 | **git 安装**（`dsh plugin add github:chemmy-11/dsh-nautilus`） | `prepare`（条件）+ `prepack` | 实测（pnpm 11.24）：pnpm 对 git 依赖**两个钩子都会跑**；真正构建的是 `prepack`，条件 `prepare`（`--if-dependency`）在被安装的副本（无 `.git`）里也构建、本地检出跳过，并让 allowBuilds 门**响亮报错**而非静默跳过。构建必须自包含，不得依赖旁边的 monorepo / 项目引用 |
 | npm / tarball | `prepack`（`npm pack` / `publish` 前） | 无条件构建，产物随 tarball 分发 |
 
@@ -85,6 +85,7 @@
 ## 验证纪律
 
 - **本地门禁六件套**再提交：typecheck + build + test + `check:deps` + `check:exports` + `check-meta`（含 client shim 断言），与 CI 同款。
+- **产物的 mtime 要当场核**：门禁全绿≠产物是新的。踩过的坑：`prepare.mjs` 曾只 `warn` 客户端构建失败（旧 `lib/client.js` 留着、六件套照样全绿），端上表现为「改了没变化」——现改为**构建失败即 `process.exit`**；提交前用 `lib/client.js` 的字节数/mtime 或产物内标记（如新面板的 `FIG.0x`）确认这一次真的写进去了。
 - 端上行为（面板 / 路由 / 迁移 / 事件订阅）用注入器通道（`dev_build_plugin` / `dev_inject_plugin` / `dev_reload_package`）或 profile 实测，记录**环境四元组**：dsh 版本 + profile 名 + 装配方式（bundle / patch 热装配 / 注入器）+ 结果。
 - 宿主升级后另核 `lib/` 构建模式与 `~/dsh-harness`（或 `$DSH_CHECKOUT`）可用性——checkout 缺失时走 npm-devDeps 模式，不要用「能构建」掩盖 checkout 失效。
 - 涉统计口径的改动（归属 / 覆盖率 / 曲线基线）须给出前后对照数字。

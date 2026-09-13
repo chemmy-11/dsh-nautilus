@@ -308,6 +308,28 @@ client-modules: package @dsh-external/dsh-nexus resolves from multiple active Lo
 
 ---
 
+## E14 nexus 层接入工作台 + 两处门禁修补（2026-09-13 下午）
+
+**数据体检（只读，全部通过）**：7 个 nexus/pulse 接口全 200。NEXUS：root=L-theory · 91 文件 · 433147 字符 · 今日 1 次编辑 · 460 轮 / 77 会话 · 命中率 **94.9%**（读 1019193961 / 未命中 54288905）· 自评覆盖 79/460 · 标注 8 条。PULSE：15 项指标全在、值域自洽（`mem.used<mem.total`、`gpu.mem.used<=total`、`utilization∈[0,1]`）、最新采样 2–8 s 前、`countersOk=true` `gpuOk=true` `restarts=0` `lastError=null`、`user_version=4`、`series` 239 点 / 15 s 桶。库内交叉一致（`turn_read 460` / `metric_sample 11231` / `annotation 8` / `edit_event 230`）。
+
+**接入内容（工作台补齐 nexus 层能力，原先只有旧 tab 有）**
+1. **vault 指向与扫描**（FIG.07）：`GET /api/nexus/vault` 的指向短名 / 完整路径 / 可达性（存在·可读）/ 已知根数；「重新扫描 vault」按钮走 `POST /api/nexus/action {kind:"rescan"}`，成功即 toast + 全量重取。
+2. **L 场读数（独立指向）**（FIG.08）：`GET /api/nexus/lfield` 的按根计数与当前 L 场指向，并写明「L 场归属与 vault 编辑统计相互独立」。
+3. **白盒分析接进假设视图**（FIG.09）：`/api/nexus/m2/analysis?root=all` 的逐会话形态 / 爆发段 / τ_e 表，并**替换掉过期的证据位占位**——原 P4 写「需会话时长 τ_e（Phase 2a 计算）」，而 τ_e 早已由白盒分析给出；现在 P1 带形态分布、P4 给「τ_e 可算 N/M 会话 · 中位 X turn」、P6 按已知根数判断能否跨根对照。
+4. **报告页**：meta 增「vault 指向」「白盒分析（会话数 · 形态分布 · τ_e 中位）」，正文加「四、白盒分析」段；并**澄清 τ_e 语义**——报告原写「INFER 缺失故 τ_e 无法计算」属混用：白盒 τ_e 是轮次级探索段长度（已可算），INFER 条件下的是端到端时延耦合（仍缺）。导出 JSON 快照同步纳入 analysis / vault。
+
+**门禁修补（比功能更重要）**
+1. **客户端构建失败曾静默**：`scripts/prepare.mjs` 对 `build-client.mjs` 非零退出只 `console.warn("host build still valid")`，于是 **`lib/client.js` 保持上一次的旧产物、六件套全绿**——本轮新面板因此没进包，而 `npm run build` 仍报 exit 0。已改为 `console.error` + `process.exit`。**这与 §E13 的「重启无变化」是同一类坑**：产物陈旧而门禁不响。
+2. **CONTRIBUTING 验证纪律**补一条：提交前当场核产物（字节数 / mtime / 产物内标记），门禁全绿 ≠ 产物是新的。
+
+**`link:` 装配下无需重启（实测）**：宿主 `dsh web` PID 40700（13:18:23 启动后**未再重启**）期间，启动图 rev 自动更新两次（`53104ef48f06b478-47` → `f1d08b7a90df` → `6b5fb2dbe4de`），下发字节随之变化并含新标记（`FIG.07/08/09`、`/api/nexus/action`、`shortRoot`）。即 **junction 装配恢复了「build → 刷新页面」的快循环**，§E13 的「必须重启」只适用于 `file:` 副本。
+
+**实际**：六件套全绿；`npm test` **21/21**；`lib/client.js` 109711 → **121313 B**（新标记全部命中）。
+
+**诚实边界**：① DOM 仍未由我观测（OQ-U6），本轮只到「产物字节 + 启动图 rev + 接口 200」；② `POST /api/nexus/action` 的重新扫描**未由我触发**（不替守谷人做副作用操作），端上点击验证留给他；③ 数据体检是**快照**（13:4x），不是持续观测。
+
+---
+
 ## E8 诚实边界（引用本归档时必须一并引用）
 
 1. **端上读数口径**：§E8 初稿时本层尚未装配（证据全来自离线探针）；**§E9 起已热装配进 profile `web`**，宿主路径已有端上四元组读数（OQ-3 收敛）。但 E5 的 1 小时档仍只有中间读数，且「连续 1 小时无内存增长」尚未给出完整序列。

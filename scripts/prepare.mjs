@@ -107,7 +107,10 @@ if (checkout) {
 console.log('=== Building client (esbuild) ===')
 const client = spawnSync(process.execPath, ['scripts/build-client.mjs'], { cwd: pkgRoot, stdio: 'inherit' })
 if (client.status !== 0) {
-  console.warn('build: client build failed (host build still valid)')
+  // 曾只 warn：客户端产物保持旧文件、门禁全绿，端上表现为「改了没变化」（2026-09-13 实测踩过两次）。
+  // 产物与源码不一致比构建失败危险得多——响亮失败，宁可挡住后续步骤。
+  console.error('build: client build FAILED — lib/client.js 仍是上一次的旧产物，已中止构建')
+  process.exit(client.status ?? 1)
 }
 
 console.log('=== Build complete ===')
