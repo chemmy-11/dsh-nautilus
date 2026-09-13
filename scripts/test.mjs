@@ -365,6 +365,25 @@ test('client bundle：ModuleLoader 往返 + 命名导出面 + 面板注册契约
   assert.deepEqual(panelIds, ['nautilus-workbench', 'nautilus-workbench'])
 })
 
+// ── 客户端半区：视图组件禁止直调（源码级守卫）──────────────────────────────────
+
+test('workbench 视图必须渲染为元素：禁止 View({...}) 直调（hooks 会算进父组件，切视图即崩）', () => {
+  // 教训（§E13）：把带 hooks 的视图当普通函数调用，切视图时 hooks 数量变化 → React 整页渲染失败。
+  // 只查「带 hooks 的组件」：Stat / Panel / Empty / Spark 是无 hooks 的纯呈现助手，按契约允许直调。
+  const src = readFileSync(new URL('../src/client/workbench.ts', import.meta.url), 'utf8')
+  const components = ['Workbench', 'OverviewView', 'CurveView', 'HypothesesView', 'ProphecyView', 'ReportView', 'Drawer']
+  const offenders = []
+  for (const [i, line] of src.split(/\r?\n/).entries()) {
+    const t = line.trim()
+    if (t.startsWith('//') || t.startsWith('*') || t.startsWith('/*')) continue
+    for (const name of components) {
+      if (new RegExp('(^|[^\\w.$])' + name + '\\s*\\(').test(line) && !new RegExp('function\\s+' + name + '\\b').test(line)) {
+        offenders.push(name + ' @' + String(i + 1) + ': ' + t.slice(0, 70))
+      }
+    }
+  }
+  assert.deepEqual(offenders, [])
+})
 // ── 宿主半区单入口装配（pulse 子插件）────────────────────────────────────────────
 
 test('host bundle 单入口：pulse 作为子插件挂载并注册自身路由', async () => {
