@@ -908,6 +908,7 @@ export const inject = ['slots', 'layout']
 
 export function apply(ctx: {
   effect(callback: () => unknown, name: string): unknown
+  get?(name: string): unknown
   slots: {
     inject(key: string, callback: () => unknown): unknown
     register(def: Record<string, unknown>, component: unknown): unknown
@@ -915,6 +916,24 @@ export function apply(ctx: {
   layout: { selectPanel(id: unknown): void }
 }): void {
   injectStyle()
+  // 会话名解析（dsh 工作区名）：sessions 为可选服务（dsh-api-session-controller），按 AGENTS.md 用 ctx.get。
+  // 只读 list 快照当前值（不订阅；工作台随轮询/交互重渲染时自然刷新）。
+  // 行形状 = SessionSummary { id, cwd?, displayTitle, title? }——名称取 cwd 末段（工作区目录名），回退 displayTitle。
+  const sessionNameOf = (id: string): { name: string; title: string } | null => {
+    const svc = ctx.get?.('sessions') as { list?: unknown } | undefined
+    const list = (svc?.list ?? null) as { get?: () => unknown } | null
+    const snap = (typeof list?.get === 'function' ? list.get() : list) as { items?: unknown } | null
+    const items = (snap as { items?: unknown[] } | null)?.items
+    if (!Array.isArray(items)) return null
+    for (const row of items as Array<Record<string, unknown>>) {
+      if (row.id !== id) continue
+      const cwd = typeof row.cwd === 'string' ? row.cwd : ''
+      const title = typeof row.displayTitle === 'string' ? row.displayTitle : typeof row.title === 'string' ? row.title : ''
+      const ws = cwd === '' ? '' : baseName(cwd)
+      return { name: ws === '' ? (title === '' ? id.slice(0, 8) : title) : ws, title }
+    }
+    return null
+  }
   ctx.effect(
     () => ctx.slots.inject('conversation.view', () =>
       ctx.slots.register({
@@ -960,7 +979,10 @@ export function apply(ctx: {
       // 注入「返回会话」：主区一旦选中全局面板，会话列就不再可见，必须有回到 Conversation 的入口
       // （layout 契约：selectPanel(null) = 显示当前会话）。
       ctx.slots.register({ name: 'main', key: panelId }, (): ReactNode =>
-        createElement(Workbench, { onExitToConversation: () => { ctx.layout.selectPanel(null) } })),
+        createElement(Workbench, {
+          onExitToConversation: () => { ctx.layout.selectPanel(null) },
+          sessionNameOf,
+        })),
     ),
     '@dsh-external/dsh-nexus: workbench panel',
   )

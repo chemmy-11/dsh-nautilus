@@ -10,7 +10,7 @@
  *   · INFER 层：Phase 2a 才落库（TTFT/provider）——当前所有视图显示缺席态，不编造、不写 0 假读数
  * 空数据是正常态（本阶段允许）。
  */
-import { Component, createElement, useEffect, useState, type ReactNode } from 'react'
+import { Component, createElement, useEffect, useRef, useState, type ReactNode } from 'react'
 // OS 层心跳档位控件（1s / 5s / 手动）——独立文件，避免与并行 UI 改动冲突
 import { PulseHeartbeat } from './pulse-controls'
 
@@ -77,6 +77,18 @@ const CSS_LINES = [
   '.nt-btn:hover{border-color:var(--nt-text,#101010)}',
   '.nt-btn.on{border-color:var(--nt-accent,#e6321e);color:var(--nt-accent,#e6321e)}',
   '.nt-select,.nt-input{border:1px solid var(--nt-border2,#c8c8c3);background:var(--nt-panel,#fff);color:var(--nt-text,#101010);font-size:11px;padding:3px 6px;border-radius:2px}',
+  '.nt-wb-pickwrap{position:relative;display:inline-block}',
+  '.nt-wb-picker{position:absolute;top:calc(100% + 6px);left:0;width:380px;max-width:88vw;max-height:360px;overflow:auto;background:var(--nt-panel,#fff);border:1px solid var(--nt-border2,#c8c8c3);box-shadow:0 8px 26px rgba(0,0,0,.16);z-index:30}',
+  '.nt-wb-picker .row{padding:7px 10px;border-bottom:1px solid var(--nt-border,#d9d9d5);cursor:pointer;border-left:2px solid transparent}',
+  '.nt-wb-picker .row:hover{background:var(--nt-panel2,#f7f7f5)}',
+  '.nt-wb-picker .row.on{border-left-color:var(--nt-accent,#e6321e)}',
+  '.nt-wb-picker .row .nm{font-weight:700;letter-spacing:.5px;font-size:11.5px}',
+  '.nt-wb-picker .row.on .nm{color:var(--nt-accent,#e6321e)}',
+  '.nt-wb-picker .row .mt{color:var(--nt-faint,#9a9a95);font-size:10px;font-variant-numeric:tabular-nums}',
+  '.nt-wb-scrim2{position:fixed;inset:0;z-index:29}',
+  '.nt-chart{position:relative;cursor:crosshair}',
+  '.nt-tip{position:absolute;z-index:35;background:var(--nt-panel,#fff);border:1px solid var(--nt-border2,#c8c8c3);box-shadow:0 4px 16px rgba(0,0,0,.16);padding:7px 9px;font-size:10.5px;color:var(--nt-text,#101010);pointer-events:none;white-space:nowrap;font-variant-numeric:tabular-nums;line-height:1.6}',
+  '.nt-tip .dim{color:var(--nt-faint,#9a9a95)}',
 ]
 
 function injectWorkbenchStyle(): void {
@@ -170,6 +182,12 @@ export const fmtBytes = (n: number): string => {
   return (v >= 100 ? v.toFixed(0) : v.toFixed(1)) + ' ' + u[i]
 }
 export const fmtTime = (ts: number | null | undefined): string => ts === null || ts === undefined ? '—' : new Date(ts).toLocaleTimeString('zh-CN', { hour12: false })
+/** 月-日 时:分（会话看板/曲线 x 轴用）。 */
+export const fmtDayTime = (ts: number | null | undefined): string => {
+  if (ts === null || ts === undefined) return '—'
+  const d = new Date(ts)
+  return String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0') + ' ' + String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0')
+}
 export const fmtNum = (n: number | null | undefined, d = 2): string => n === null || n === undefined || !Number.isFinite(n) ? '—' : n.toFixed(d)
 
 /** 指标名 → 中文标签（未知指标原样返回，不猜语义）。 */
@@ -341,6 +359,149 @@ export function Spark(props: {
   return createElement('svg', { viewBox: '0 0 ' + String(w) + ' ' + String(h), width: '100%', height: h, role: 'img', 'aria-label': props.label ?? 'series' }, ...kids)
 }
 
+/**
+ * 交互曲线（NEXUS 轮次专用；OS 层不用此组件——PULSE 是等间隔连续采样，无采样点语义）。
+ * S4 定稿视觉 + 原 dsh-nexus 交互回归：
+ *   · 滚轮放缩（以指针为锚点，min 4 点，双击复位）——wheel 需非 passive 监听才能 preventDefault；
+ *   · 悬停采样点 → 竖参考线 + 简略看板（该轮读数摘要；上缘/右缘自动翻面）；
+ *   · 点击采样点 → onOpenTurn 下钻完整问答（抽屉由根组件持有）。
+ * 数据精准：y 域随窗口重算，看板数值取原始读数（不取插值）。
+ */
+export function CurveChart(props: {
+  points: Array<{ x: number; y: number | null; meta: M2Point }>
+  threshold?: number
+  thresholdLabel?: string
+  yFmt?: (v: number) => string
+  anno?: { from: number; to: number; txt: string }
+  h?: number
+  onOpenTurn?: (session: string, turn: number) => void
+  tipOf?: (meta: M2Point) => { head: string; lines: string[] }
+  label?: string
+}): ReactNode {
+  const base = props.points.filter((p) => p.y !== null && Number.isFinite(p.y))
+  const n = base.length
+  const h = props.h ?? 320
+  const W = 1120
+  const padL = 52
+  const padR = 16
+  const padT = 26
+  const padB = 26
+  const plotW = W - padL - padR
+  const yf = props.yFmt ?? ((v: number): string => v.toFixed(1))
+  const [win, setWin] = useState<[number, number]>([0, Math.max(0, n - 1)])
+  const [hover, setHover] = useState<number | null>(null)
+  const svgRef = useRef<SVGSVGElement | null>(null)
+  useEffect(() => { setWin([0, Math.max(0, n - 1)]); setHover(null) }, [n])
+  useEffect(() => {
+    const el = svgRef.current
+    if (el === null || n < 5) return undefined
+    const onWheel = (e: WheelEvent): void => {
+      e.preventDefault()
+      const rect = el.getBoundingClientRect()
+      const f = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width))
+      const factor = e.deltaY < 0 ? 0.78 : 1.28
+      setWin(([a, b]) => {
+        const span = b - a
+        const ns = Math.max(4, Math.min(n - 1, Math.round(span * factor)))
+        const c = a + span * f
+        let na = Math.round(c - ns * f)
+        na = Math.max(0, Math.min(n - 1 - ns, na))
+        return na === a && ns === span ? [a, b] : [na, na + ns]
+      })
+    }
+    el.addEventListener('wheel', onWheel, { passive: false })
+    return () => { el.removeEventListener('wheel', onWheel) }
+  }, [n])
+  if (n < 2) return Empty({ text: '暂无数据' })
+  const [a, b] = win
+  const hv = hover !== null && hover >= a && hover <= b ? hover : null
+  const sx = (gi: number): number => padL + ((gi - a) / Math.max(1, b - a)) * plotW
+  const sy = (v: number): number => h - padB - ((v - min) / span) * (h - padT - padB)
+  const vis: Array<{ p: (typeof base)[number]; gi: number }> = []
+  for (let i = a; i <= b && i < n; i++) vis.push({ p: base[i], gi: i })
+  const ys = vis.map((v) => v.p.y as number)
+  const min = Math.min(...ys)
+  const max = Math.max(...ys)
+  const span = max - min || 1
+  const kids: ReactNode[] = []
+  for (const r of [0, 1 / 3, 2 / 3, 1]) {
+    const v = min + span * r
+    const y = sy(v)
+    kids.push(createElement('line', { key: 'g' + String(r), x1: padL, x2: W - padR, y1: y, y2: y, stroke: 'var(--nt-border,#d9d9d5)', strokeWidth: 1, opacity: 0.7 }))
+    kids.push(createElement('text', { key: 't' + String(r), x: padL - 6, y: y + 3, fontSize: 9.5, fill: 'var(--nt-faint,#9a9a95)', textAnchor: 'end' }, yf(v)))
+  }
+  {
+    const spanMs = base[b].x - base[a].x
+    const short = spanMs < 36 * 3600000
+    const xt = (x: number): string => {
+      const d = new Date(x)
+      const hm = String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0')
+      return short ? hm : String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0') + ' ' + hm
+    }
+    for (const k of [a, Math.floor((a + b) / 2), b]) {
+      const x = sx(k)
+      kids.push(createElement('line', { key: 'x' + String(k), x1: x, x2: x, y1: h - padB, y2: h - padB + 3, stroke: 'var(--nt-border,#d9d9d5)' }))
+      kids.push(createElement('text', { key: 'xl' + String(k), x, y: h - 8, fontSize: 9.5, fill: 'var(--nt-faint,#9a9a95)', textAnchor: 'middle' }, xt(base[k].x)))
+    }
+  }
+  if (props.threshold !== undefined && props.threshold >= min && props.threshold <= max) {
+    const y = sy(props.threshold)
+    kids.push(createElement('line', { key: 'th', x1: padL, x2: W - padR, y1: y, y2: y, stroke: 'var(--nt-accent,#e6321e)', strokeWidth: 1, strokeDasharray: '2 4', opacity: 0.8 }))
+    kids.push(createElement('text', { key: 'tht', x: W - padR, y: y - 4, fontSize: 9.5, fill: 'var(--nt-accent,#e6321e)', textAnchor: 'end', letterSpacing: 1 }, props.thresholdLabel ?? '阈值'))
+  }
+  if (props.anno !== undefined && b - a >= 3) {
+    const f0 = Math.max(props.anno.from, a)
+    const f1 = Math.min(props.anno.to, b)
+    if (f1 > f0) {
+      const x1 = sx(f0)
+      const x2 = sx(f1)
+      kids.push(createElement('line', { key: 'an', x1, x2, y1: 16, y2: 16, stroke: 'var(--nt-dim,#5f5f5c)', strokeWidth: 1, strokeDasharray: '3 3' }))
+      kids.push(createElement('text', { key: 'ant', x: (x1 + x2) / 2, y: 11, fontSize: 9.5, fill: 'var(--nt-dim,#5f5f5c)', textAnchor: 'middle', letterSpacing: 1 }, props.anno.txt))
+    }
+  }
+  const d = vis.map((v, i) => (i === 0 ? 'M' : 'L') + sx(v.gi).toFixed(1) + ' ' + sy(v.p.y as number).toFixed(1)).join(' ')
+  kids.push(createElement('path', { key: 'line', d, fill: 'none', stroke: 'var(--nt-ink,#101010)', strokeWidth: 1.7 }))
+  for (const v of vis) {
+    const y = v.p.y as number
+    const exceed = props.threshold !== undefined && y >= props.threshold
+    const isHv = hv === v.gi
+    kids.push(createElement('circle', { key: 'm' + String(v.gi), cx: sx(v.gi), cy: sy(y), r: isHv ? 4.2 : 2.2, fill: exceed || isHv ? 'var(--nt-accent,#e6321e)' : 'var(--nt-ink,#101010)', opacity: isHv ? 1 : 0.85 }))
+    if (isHv) kids.push(createElement('circle', { key: 'mr' + String(v.gi), cx: sx(v.gi), cy: sy(y), r: 7.5, fill: 'none', stroke: 'var(--nt-accent,#e6321e)', strokeWidth: 1.1 }))
+  }
+  if (hv !== null) {
+    kids.push(createElement('line', { key: 'xh', x1: sx(hv), x2: sx(hv), y1: padT - 4, y2: h - padB, stroke: 'var(--nt-faint,#9a9a95)', strokeWidth: 1, strokeDasharray: '3 3', opacity: 0.6 }))
+  }
+  const onMove = (e: { clientX: number; currentTarget: SVGSVGElement }): void => {
+    const rect = e.currentTarget.getBoundingClientRect()
+    const vx = ((e.clientX - rect.left) / rect.width) * W
+    if (vx < padL - 8 || vx > W - padR + 8) { setHover(null); return }
+    let gi = a + Math.round(((vx - padL) / plotW) * (b - a))
+    gi = Math.max(a, Math.min(b, gi))
+    setHover(Math.abs(sx(gi) - vx) <= 18 ? gi : null)
+  }
+  const tip = hv !== null && props.tipOf !== undefined ? props.tipOf(base[hv].meta) : null
+  const tipX = hv !== null ? (sx(hv) / W) * 100 : 0
+  const tipY = hv !== null ? (sy(base[hv].y as number) / h) * 100 : 0
+  const tf = (tipX > 62 ? 'translateX(calc(-100% - 12px))' : 'translateX(12px)') + ' ' + (tipY < 30 ? 'translateY(12px)' : 'translateY(calc(-100% - 10px))')
+  return createElement('div', { className: 'nt-chart' },
+    createElement('svg', {
+      ref: svgRef,
+      viewBox: '0 0 ' + String(W) + ' ' + String(h), width: '100%', height: h, role: 'img', 'aria-label': props.label ?? 'curve',
+      onMouseMove: onMove,
+      onMouseLeave: () => setHover(null),
+      onClick: () => { if (hv !== null && props.onOpenTurn !== undefined) { const m = base[hv].meta; props.onOpenTurn(m.session, m.turn) } },
+      onDoubleClick: () => setWin([0, n - 1]),
+    }, ...kids),
+    tip !== null && hv !== null
+      ? createElement('div', { className: 'nt-tip', style: { left: tipX + '%', top: tipY + '%', transform: tf } },
+        createElement('div', null, createElement('b', null, tip.head)),
+        ...tip.lines.map((ln, i) => createElement('div', { key: String(i) }, ln)),
+        createElement('div', { className: 'dim' }, '点击采样点 → 完整问答 · 双击复位缩放'),
+      )
+      : null,
+  )
+}
+
 // ── 视图 1：总览 ──────────────────────────────────────────────────────────────
 
 export function OverviewView(props: { nexus: NexusState | null; m2: M2State | null; pulse: PulseState | null; vault: VaultInfo | null; lfield: LfieldInfo | null; rescanning: boolean; onRescan: () => void; onOpenTurn: (s: string, t: number) => void }): ReactNode {
@@ -500,9 +661,17 @@ const CURVE_YFMT: Record<CurveKey, (v: number) => string> = {
   tps: (v) => v.toFixed(0),
 }
 
-export function CurveView(props: { m2: M2State | null; era: Era; pulse: PulseState | null; paused?: boolean }): ReactNode {
+export function CurveView(props: {
+  m2: M2State | null
+  era: Era
+  pulse: PulseState | null
+  paused?: boolean
+  sessionNameOf?: (id: string) => { name: string; title: string } | null
+  onOpenTurn?: (session: string, turn: number) => void
+}): ReactNode {
   const [key, setKey] = useState<CurveKey>('miss')
   const [scope, setScope] = useState<string>('all')
+  const [pickOpen, setPickOpen] = useState(false)
   // 数据源：NEXUS 轮次（事件驱动，非等间隔）/ PULSE 采样（等间隔，斜率可读）
   const [source, setSource] = useState<'nexus' | 'pulse'>('nexus')
   const analysis = useJson<AnalysisRow[]>('/api/nexus/m2/analysis?root=all', props.paused === true, 600000)
@@ -513,19 +682,45 @@ export function CurveView(props: { m2: M2State | null; era: Era; pulse: PulseSta
   const curve = props.m2?.curve ?? []
   const sessions = Array.from(new Set(curve.map((p) => p.session)))
   const scoped = scope === 'all' ? curve : curve.filter((p) => p.session === scope)
-  const pts = scoped.map((p) => ({ x: p.ts, y: curveValue(p, key) }))
-  const scaled = key === 'miss' ? pts.map((p) => ({ x: p.x, y: p.y === null ? null : p.y * 100 })) : pts
+  const pts = scoped.map((p) => {
+    const v = curveValue(p, key)
+    return { x: p.ts, y: v === null ? null : (key === 'miss' ? v * 100 : v), meta: p }
+  })
   const threshold = key === 'miss' ? 50 : undefined
   // τ_e 注记（定稿元素）：仅单会话聚焦且 analysis 检出时绘制——多点叠加轴上 τ_e 无意义
   let anno: { from: number; to: number; txt: string } | undefined
-  if (key === 'miss' && scope !== 'all' && scaled.length >= 4) {
+  if (key === 'miss' && scope !== 'all' && pts.length >= 4) {
     const hit = (analysis ?? []).find((a) => a.session === scope)
     if (hit !== undefined && hit.tauE !== null && Number.isFinite(hit.tauE)) {
-      const from = Math.floor(scaled.length * 0.3)
-      anno = { from, to: Math.min(scaled.length - 1, from + Math.round(hit.tauE)), txt: 'τ_e ≈ ' + String(hit.tauE) + ' turn（' + (SHAPE_LABEL[hit.shape] ?? hit.shape) + '）' }
+      const from = Math.floor(pts.length * 0.3)
+      anno = { from, to: Math.min(pts.length - 1, from + Math.round(hit.tauE)), txt: 'τ_e ≈ ' + String(hit.tauE) + ' turn（' + (SHAPE_LABEL[hit.shape] ?? hit.shape) + '）' }
     }
   }
   const pulsePts = (series?.points ?? []).map((p) => ({ x: p.ts, y: p.value }))
+  // 会话看板：名称 = dsh 工作区目录名（宿主 sessions 服务 cwd 末段），回退 displayTitle/短 id；按起始时间倒序
+  const sortedSessions = sessions.slice().sort((x, y) => {
+    const mx = props.m2?.sessionMeta[x]?.startTs ?? 0
+    const my = props.m2?.sessionMeta[y]?.startTs ?? 0
+    return my - mx
+  })
+  const scopeLabel = (sid: string): string => {
+    const info = props.sessionNameOf?.(sid) ?? null
+    if (info !== null && info.name !== '') return info.name
+    const meta = props.m2?.sessionMeta[sid]
+    return (info?.title ?? '') + '（' + fmtDayTime(meta?.startTs) + '）'
+  }
+  const tipOf = (m: M2Point): { head: string; lines: string[] } => {
+    const info = props.sessionNameOf?.(m.session) ?? null
+    const nm = info === null || info.name === '' ? m.session.slice(0, 10) : info.name
+    const mr = curveValue(m, 'miss')
+    return {
+      head: fmtDayTime(m.ts) + ' · turn ' + String(m.turn) + ' · ' + nm,
+      lines: [
+        '输入(未命中) ' + String(m.tokenIn) + ' · 缓存读 ' + String(m.cacheRead) + ' · 输出 ' + String(m.tokenOut),
+        '未命中率 ' + (mr === null ? '—' : (mr * 100).toFixed(1) + '%') + ' · TPS ' + fmtNum(m.tps, 1) + ' · 时长 ' + (m.durationMs === null ? '—' : String(Math.round(m.durationMs)) + ' ms'),
+      ],
+    }
+  }
   return createElement('div', null,
     createElement('div', { className: 'nt-wb-seg', style: { marginBottom: 10 } },
       createElement('button', { className: source === 'nexus' ? 'on' : '', onClick: () => setSource('nexus') }, 'NEXUS 轮次'),
@@ -535,14 +730,37 @@ export function CurveView(props: { m2: M2State | null; era: Era; pulse: PulseSta
       ? createElement('div', null,
         createElement('div', { className: 'nt-wb-seg', style: { marginBottom: 10 } },
           ...(['miss', 'ms', 'tps'] as CurveKey[]).map((k) => createElement('button', { key: k, className: k === key ? 'on' : '', onClick: () => setKey(k) }, curveLabel(k))),
-          createElement('span', { style: { width: 12 } }),
-          createElement('button', { className: scope === 'all' ? 'on' : '', onClick: () => setScope('all') }, '全会话'),
-          ...sessions.slice(0, 6).map((s) => createElement('button', { key: s, className: s === scope ? 'on' : '', onClick: () => setScope(s) }, s.slice(0, 8))),
+        ),
+        createElement('div', { style: { marginBottom: 10, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' } },
+          createElement('div', { className: 'nt-wb-pickwrap' },
+            createElement('button', { className: 'nt-btn' + (scope !== 'all' ? ' on' : ''), onClick: () => setPickOpen((v) => !v) },
+              '会话 · ' + (scope === 'all' ? '全部（' + String(sessions.length) + '）' : scopeLabel(scope)) + ' ▾'),
+            pickOpen ? createElement('div', { className: 'nt-wb-scrim2', onClick: () => setPickOpen(false) }) : null,
+            pickOpen
+              ? createElement('div', { className: 'nt-wb-picker' },
+                createElement('div', { className: 'row' + (scope === 'all' ? ' on' : ''), onClick: () => { setScope('all'); setPickOpen(false) } },
+                  createElement('div', { className: 'nm' }, '全部会话'),
+                  createElement('div', { className: 'mt' }, String(sessions.length) + ' 个会话 · ' + String(curve.length) + ' 轮')),
+                ...sortedSessions.map((s) => {
+                  const meta = props.m2?.sessionMeta[s]
+                  const info = props.sessionNameOf?.(s) ?? null
+                  const nm = info === null || info.name === '' ? s.slice(0, 10) : info.name
+                  const title = info?.title ?? ''
+                  return createElement('div', { key: s, className: 'row' + (scope === s ? ' on' : ''), onClick: () => { setScope(s); setPickOpen(false) } },
+                    createElement('div', { className: 'nm' }, nm),
+                    createElement('div', { className: 'mt' }, fmtDayTime(meta?.startTs) + ' · ' + String(meta?.turns ?? '—') + ' 轮' + (title !== '' && title !== nm ? ' · ' + title.slice(0, 26) : '')),
+                  )
+                }),
+              )
+              : null,
+          ),
+          createElement('span', { className: 'nt-note', style: { marginTop: 0, flex: '1 1 260px' } },
+            '会话名 = dsh 工作区目录名（取自宿主会话列表 cwd）。滚轮放缩（指针为锚，双击复位）；悬停采样点看该轮简略读数，点击下钻完整问答。'),
         ),
         Panel({
           title: curveLabel(key) + ' 时序曲线', fig: 'FIG.02',
           note: '时间轴为记录时间戳（非等间隔）：轮次并非均匀采样，曲线的斜率不代表速率；朱红虚线为阈值参考（' + (threshold === undefined ? '本指标不设阈值' : String(threshold) + curveUnit(key)) + '），朱红实心点＝越过阈值的轮；τ_e 注记取自 /m2/analysis 检出值（单会话聚焦时显示）。',
-          children: Spark({ points: scaled, threshold, thresholdLabel: 'S 形阈值参考（P1）', yFmt: CURVE_YFMT[key], anno, h: 200, label: curveLabel(key) }),
+          children: CurveChart({ points: pts, threshold, thresholdLabel: 'S 形阈值参考（P1）', yFmt: CURVE_YFMT[key], anno, h: 340, label: curveLabel(key), tipOf, onOpenTurn: props.onOpenTurn }),
         }),
       )
       : createElement('div', null,
@@ -844,7 +1062,7 @@ export const VIEW_LABEL: Record<ViewKey, string> = { overview: '总览', curve: 
 export const WORKBENCH_LABEL = 'Nautilus 工作台'
 
 /** 工作台根组件。onExitToConversation 由宿主半区注入（ctx.layout.selectPanel(null)），用于回到会话。 */
-export function Workbench(props: { onExitToConversation?: () => void } = {}): ReactNode {
+export function Workbench(props: { onExitToConversation?: () => void; sessionNameOf?: (id: string) => { name: string; title: string } | null } = {}): ReactNode {
   injectWorkbenchStyle()
   const [view, setView] = useState<ViewKey>('overview')
   const [drawer, setDrawer] = useState<DrawerTarget | null>(null)
@@ -884,7 +1102,7 @@ export function Workbench(props: { onExitToConversation?: () => void } = {}): Re
   // 用 createElement 渲染视图组件（**不可**写成 OverviewView({...}) 直接调用）：
   // 直接调用会把子组件的 hooks 算进父组件，切换视图时 hooks 数量变化 → React 抛错、整页渲染失败。
   const body = view === 'overview' ? createElement(OverviewView, { nexus, m2, pulse, vault, lfield, rescanning, onRescan, onOpenTurn: (s: string, t: number) => setDrawer({ session: s, turn: t }) })
-    : view === 'curve' ? createElement(CurveView, { m2, era, pulse, paused })
+    : view === 'curve' ? createElement(CurveView, { m2, era, pulse, paused, sessionNameOf: props.sessionNameOf, onOpenTurn: (s: string, t: number) => setDrawer({ session: s, turn: t }) })
     : view === 'hypotheses' ? createElement(HypothesesView, { m2, ann, analysis, vault, onProphecy: (id: string) => { setView('prophecy'); setToast('已跳到预言标注：' + id) } })
     : view === 'prophecy' ? createElement(ProphecyView, { ann, m2, toast: setToast, reload: () => setNonce((v) => v + 1) })
     : createElement(ReportView, { nexus, m2, pulse, era, ann, analysis, vault })
