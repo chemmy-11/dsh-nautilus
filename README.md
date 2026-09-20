@@ -44,6 +44,7 @@ DeepSeek Harness（`dsh`）的观测插件（`@dsh-external/dsh-nautilus`）：*
 ## 安装
 
 ```sh
+# 仓库若尚未改名（仍为 dsh-nexus），把下面的 dsh-nautilus 换成 dsh-nexus；改名后 GitHub 会自动重定向旧名
 dsh plugin --profile <name> add github:chemmy-11/dsh-nautilus
 ```
 
