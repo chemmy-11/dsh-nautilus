@@ -2,3 +2,7 @@ node_modules/
 lib/
 *.tsbuildinfo
 *.tgz
+
+# 外部工具在本目录留下的本地标记（zcode video-agent-kit 等）——含本机绝对路径，不入库
+.video_agent/
+
