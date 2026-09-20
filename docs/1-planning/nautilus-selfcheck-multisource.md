@@ -2,6 +2,7 @@
 
 > 版本 v0.2（2026-09-27 起草；**D-SC1 / D-SC2 / D-SC3 已签核**——守谷人「按建议继续」+「先按你定的存储模型来，可以直接提需求了」；并记录远期意向：**存储后续可能再经 MCP 接入**，据此定 §1-D-SC3a 前瞻约束。D-SC4 / D-SC5 仍为建议待核）
 > 归属：决策文档（改动即决策）；实现落 `../2-dev/`（开项时建 Phase 文档）。
+> **状态（2026-09-27 守谷人指示）**：S1.1 已交付（E21）；**S1.2 起挂起**——「只有自评一维、缺机械读数对照，信号太薄」。人工真值线转 [nautilus-turn-annotation.md](./nautilus-turn-annotation.md)（T 系列）。
 > 数据口径：`~/.dsh/nautilus/nautilus.db` **2026-09-20 探测快照**（只读副本，非实时）；裁决日期以守谷人批复轮次标注为准（沿 E18 先例）。
 > 上游：vault `外功/DSH/雪谷观测插件开发文档-M3`（自评三行出处）· 同 `-M5`（declaration 全零触发与 P 腿挂起）· [nautilus-nexus-positioning.md](./nautilus-nexus-positioning.md)（D-N1 迁移主权，未裁不阻塞本项目）。
 
