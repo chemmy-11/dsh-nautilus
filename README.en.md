@@ -44,8 +44,6 @@ Turning "how far a conversation moved the knowledge base" into numbers — **ses
 ## Installation
 
 ```sh
-# If the repository is not renamed yet (still dsh-nexus), replace dsh-nautilus with dsh-nexus;
-# after the rename GitHub redirects the old name automatically.
 dsh plugin --profile <name> add github:chemmy-11/dsh-nautilus
 ```
 

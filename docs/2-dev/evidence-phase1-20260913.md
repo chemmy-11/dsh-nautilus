@@ -483,6 +483,28 @@ client-modules: package @dsh-external/dsh-nexus resolves from multiple active Lo
 
 ---
 
+## E20 仓库改名落地 + 稳定宿主加载验证 + 分支收敛（2026-09-27）
+
+**改名落地**：GitHub 仓库已由 `dsh-nexus` 改为 **`dsh-nautilus`**；remote 已 `set-url` 为新名且 `fetch` 通过（上游解析 `origin/feat/nautilus`）；README 双语 / CONTRIBUTING 的安装命令**去掉过渡说明**（新名直接可用）。
+
+**稳定宿主（dsh 0.1.5-rc.2 · profile `web` · `~/.dsh`）加载验证**
+- 现状：运行中的宿主 PID 43504（09-20 12:41 启动）跑的是**改名后、vault 腿删除前**那一版——`/api/nautilus/{state,vault}` 仍 200、`/action` 405。**要切到当前版本必须重启**（该进程就是本会话宿主，重启由守谷人执行）。
+- 装配面：`dsh --profile web --dump-config` → **单条目** `- id: nautilus` / `name: '@dsh-external/dsh-nautilus'`；profile 内安装形态 = **Junction → `L:\dsh-nautilus`**；产物 `client.js 96165B` / `index.js 4060B`。
+- **真实家目录挂载验证**（真 cordis 组合路径，`DSH_HOME=~/.dsh`，假 webServer/tools）：注册路由**恰好 8 条**（`m2/state` · `m2/annotations` · `m2/turn-text` · `m2/analysis` · `lfield` + `pulse/state` · `pulse/series` · `pulse/control`），**vault 三条（`state`/`vault`/`action`）确认不存在**；工具 `record_turn_selfcheck` 注册；pulse 子插件挂载日志在场；默认库解析为 `C:\Users\15266\.dsh\nautilus\nautilus.db`（存在）；`dispose` 干净。
+- 客户端半区：`lib/client.js` 不含 `conversation.view`、含工作台标记；`dsh.client = { inject: [renderer, layout, sidebar], platform: 'web' }`。
+
+→ **结论**：重启后能正常加载当前版本（组合面 + 宿主半区 + 产物三面一致）。
+
+**分支收敛（已完成）**
+- `feat/nautilus` 已推（`91e60ff..57e4b19`）；`main` **快进**到同点并推（无分叉、无合并提交）；两条线同在 `57e4b19`。
+- 清理：本地删 `feat/nexus` / `feat/ui` / `chore/dsh-0.1.5-compat`；远端删 `feat/nexus` / `feat/ui`（提交都已在 main 历史中，不丢内容）。
+- 刻意保留：`feat/m4-11-two-views`（领先 2、3 个独有提交但内容已被主线等价覆盖）与其开着的 **PR #2**，以及仅本地的 `feat/m4-11-rc2-integration`——待守谷人裁决是否归档删除。
+- **CI**：推送触发的两次 run（`feat/nautilus` 与 `main`）均 **success**。
+
+**诚实边界**：① 本节加载验证走的是**组合路径**（真 cordis、假 webServer）而非真宿主启动——真启动发生在守谷人重启之后；② 重启后行为与当前实例不同（vault 三路由 404、两个旧 tab 消失），属预期；③ 未验 DOM（OQ-U6 依旧）。
+
+---
+
 ## E8 诚实边界（引用本归档时必须一并引用）
 
 1. **端上读数口径**：§E8 初稿时本层尚未装配（证据全来自离线探针）；**§E9 起已热装配进 profile `web`**，宿主路径已有端上四元组读数（OQ-3 收敛）。但 E5 的 1 小时档仍只有中间读数，且「连续 1 小时无内存增长」尚未给出完整序列。

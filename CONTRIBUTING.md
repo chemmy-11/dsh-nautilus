@@ -46,7 +46,7 @@
 |---|---|---|
 | 本地开发 | `npm run build` | **始终构建**；构建链纯 Node（`scripts/prepare.mjs` + `scripts/build-client.mjs`） |
 | 本地 dev 循环（装进 profile 后） | **`dsh plugin --profile web add link:<仓库路径>`** → `npm run build` → 重启宿主 | **用 `link:`（Windows 下是 Junction，指向仓库）**：`lib/` 建完即回流，无需重装。**`file:` 是安装副本，且「重跑 add」是空操作**——pnpm 认为依赖已装（`added 0`），副本会停在旧产物，实测因此出现「重启后毫无变化」；真要刷新得先 `remove` 再 `add`。`link:` 下实测**无需重启**：产物变更后启动图 rev **自动更新**（宿主 PID 未变、rev 连换两次，§E14），刷新页面即可；`file:` 副本下 rev 不更新，必须重启（§E13 实测） |
-| **git 安装**（`dsh plugin add github:chemmy-11/dsh-nautilus`；仓库未改名时用 `…/dsh-nexus`，改名后 GitHub 自动重定向旧名） | `prepare`（条件）+ `prepack` | 实测（pnpm 11.24）：pnpm 对 git 依赖**两个钩子都会跑**；真正构建的是 `prepack`，条件 `prepare`（`--if-dependency`）在被安装的副本（无 `.git`）里也构建、本地检出跳过，并让 allowBuilds 门**响亮报错**而非静默跳过。构建必须自包含，不得依赖旁边的 monorepo / 项目引用 |
+| **git 安装**（`dsh plugin add github:chemmy-11/dsh-nautilus`） | `prepare`（条件）+ `prepack` | 实测（pnpm 11.24）：pnpm 对 git 依赖**两个钩子都会跑**；真正构建的是 `prepack`，条件 `prepare`（`--if-dependency`）在被安装的副本（无 `.git`）里也构建、本地检出跳过，并让 allowBuilds 门**响亮报错**而非静默跳过。构建必须自包含，不得依赖旁边的 monorepo / 项目引用 |
 | npm / tarball | `prepack`（`npm pack` / `publish` 前） | 无条件构建，产物随 tarball 分发 |
 
 - **动构建入口或产物路径（新增/移除钩子、改 `files` 白名单、改 `main`/`exports`）时，`build` / `prepack` / `prepare` 三个钩子一起核**，并同 PR 更新 README 双语安装节与本节。
