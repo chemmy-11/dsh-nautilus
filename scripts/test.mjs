@@ -1,7 +1,7 @@
 /**
  * @dsh-external/dsh-nautilus — pure-function regression tests (zero deps, node:test).
  * Tests the BUILT artifacts (lib/) — run `npm run build` first (CI: install → build → test).
- * Coverage: analysis.ts (A 投影/S 形/爆发段/τ_e) + selfcheck.ts (自评三行) + scan.ts (R4 分支).
+ * Coverage: analysis.ts (A 投影/S 形/爆发段/τ_e) + selfcheck/ingest (M3-F.1 工具 + S1.1 多源通道) + pulse + 装配路径。
  * 依赖 node:sqlite（Node ≥ 22.13/24，CI node-version 24）与临时目录（mkdtemp）。
  */
 import { test } from 'node:test'
@@ -14,6 +14,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 
 import { missRateOf, smoothedMissRate, detectBurst, estimateTauE, analyzeSession, analyze } from '../lib/analysis.js'
 import { processSelfCheck, buildSelfCheckTool } from '../lib/selfcheck.js'
+import { validateIngest, ingestSelfCheck, QUOTE_MAX } from '../lib/selfcheck-ingest.js'
 import { openStore } from '../lib/store.js'
 import { DatabaseSync } from 'node:sqlite'
 import { cpuTimes, cpuUtilization, parseCounters, parseNvidiaSmi, collectLocal } from '../lib/pulse/collect.js'
@@ -103,50 +104,159 @@ test('analyze: 多会话分组（组内按 turn 升序）', () => {
   assert.deepEqual(a?.points.map((p) => p.turn), [1, 2]) // 组内升序
 })
 
-// ── selfcheck.ts ─────────────────────────────────────────────────────────────
+// ── selfcheck.ts / selfcheck-ingest.ts（M3-F.1 工具 + S1.1 共享口径）───────────
 
 function makeStore(rows) {
   let recorded = null
+  const records = []
   return {
-    rows,
+    rows, records,
     turnReads: (limit) => rows.slice(0, limit),
     setSelfCheck: (session, turn, check) => { recorded = { session, turn, check } },
+    insertSelfCheckRecord: (row) => { records.push(row); return records.length === 1 ? 'inserted' : 'duplicate' },
+    selfcheckWorkspaceOf: () => null,
     get recorded() { return recorded },
   }
 }
 
-test('processSelfCheck: 夹取/默认/落库/返回串', () => {
+test('processSelfCheck: 兼容夹取 + 双写（dsh_tool 主存储 + turn_read 过渡列）', () => {
   const store = makeStore([{ session: 's1', turn: 3 }])
-  const msg = processSelfCheck(store, { clarity: 1.5, defense: 'light', declaration: 1, session: 's1', turn: 3 })
+  const msg = processSelfCheck(store, { clarity: 1.5, defense: 'light', declaration: 0, session: 's1', turn: 3 })
   assert.ok(msg.startsWith('已记录 turn 3 自评'))
-  assert.deepEqual(store.recorded, { session: 's1', turn: 3, check: { clarity: 1, defense: 'light', declaration: 1 } })
+  // 旧列兼容夹取保留：clarity 1.5 → 1；非法 defense → none
+  assert.deepEqual(store.recorded, { session: 's1', turn: 3, check: { clarity: 1, defense: 'light', declaration: 0 } })
+  // 主存储 = 共享 ingest：身份字段齐备（agent/ext_ref 同源 sessionId，workspace 未归属 = null）
+  assert.equal(store.records.length, 1)
+  const r = store.records[0]
+  assert.equal(r.sourceKind, 'dsh_tool')
+  assert.equal(r.agent, 's1')
+  assert.equal(r.extRef, 's1')
+  assert.equal(r.turnOrdinal, 3)
+  assert.equal(r.clarity, 1)
+  assert.equal(r.workspace, null)
   // 非法值兜底：clarity<0 → 0；defense 未知 → none；declaration≠1 → 0
   const store2 = makeStore([{ session: 's1', turn: 1 }])
   processSelfCheck(store2, { clarity: -0.2, defense: 'nope', declaration: 2, session: 's1', turn: 1 })
   assert.deepEqual(store2.recorded.check, { clarity: 0, defense: 'none', declaration: 0 })
 })
 
-test('processSelfCheck: 缺省 session/turn → 最近一轮', () => {
+test('processSelfCheck（D-SC2 硬门）: declaration=1 无引文 → 拒且零写入', () => {
+  const store = makeStore([{ session: 's1', turn: 2 }])
+  const msg = processSelfCheck(store, { clarity: 0.5, defense: 'none', declaration: 1, session: 's1', turn: 2 })
+  assert.ok(msg.startsWith('自评被拒'), '拒绝文案必须显式')
+  assert.equal(store.recorded, null, '旧列不得被写')
+  assert.equal(store.records.length, 0, '新表不得被写')
+  // 超长引文同样拒
+  const m2 = processSelfCheck(store, { clarity: 0.5, defense: 'none', declaration: 1, quote: '字'.repeat(QUOTE_MAX + 1), session: 's1', turn: 2 })
+  assert.ok(m2.startsWith('自评被拒'))
+  assert.equal(store.records.length, 0)
+})
+
+test('processSelfCheck: declaration=1 带引文 → 落库含 quote；declaration=0 带引文 → 引文丢弃', () => {
+  const store = makeStore([{ session: 's1', turn: 5 }])
+  const ok = processSelfCheck(store, { clarity: 0.4, defense: 'heavy', declaration: 1, quote: ' 我选择离开这回路。 ', session: 's1', turn: 5 })
+  assert.ok(ok.startsWith('已记录 turn 5 自评'))
+  assert.equal(store.records[0].quote, '我选择离开这回路。', '引文要 trim 后存')
+  const before = store.records.length
+  processSelfCheck(store, { clarity: 0.1, defense: 'none', declaration: 0, quote: '多余引文', session: 's1', turn: 5 })
+  assert.equal(store.records[before].quote, null, 'declaration=0 的引文不落库（防歧义行）')
+})
+
+test('processSelfCheck: 缺省 session/turn → 最近一轮；空库 → 失败文案', () => {
   const store = makeStore([{ session: 's2', turn: 7 }])
   processSelfCheck(store, { clarity: 0.5, defense: 'heavy', declaration: 0 })
   assert.deepEqual(store.recorded, { session: 's2', turn: 7, check: { clarity: 0.5, defense: 'heavy', declaration: 0 } })
+  const empty = makeStore([])
+  assert.ok(processSelfCheck(empty, { clarity: 0.5, defense: 'none', declaration: 0 }).includes('尚无任何会话轮次'))
 })
 
-test('processSelfCheck: 空库 → 失败文案', () => {
-  const store = makeStore([])
-  const msg = processSelfCheck(store, { clarity: 0.5, defense: 'none', declaration: 0 })
-  assert.ok(msg.includes('尚无任何会话轮次'))
-})
-
-test('buildSelfCheckTool: schema 契约（additionalProperties/required/canonical output）', () => {
+test('buildSelfCheckTool: schema 契约（additionalProperties/required/canonical output/quote 字段在场）', () => {
   const tool = buildSelfCheckTool(makeStore([{ session: 's', turn: 1 }]))
   assert.equal(tool.name, 'record_turn_selfcheck')
   assert.equal(tool.parameters.additionalProperties, false)
   assert.deepEqual(tool.parameters.required, ['clarity', 'defense', 'declaration'])
   assert.equal(tool.parameters.properties.defense.enum.length, 3)
+  assert.equal(tool.parameters.properties.quote.type, 'string', 'D-SC2：quote 参数必须在场')
+  assert.equal(tool.parameters.properties.quote.maxLength, QUOTE_MAX)
+  assert.ok(tool.description.includes('quote'), '描述必须把引文要求说给模型')
   assert.equal(tool.output.schema.type, 'string')
   const rendered = tool.output.render({}, 'ok')
   assert.equal(rendered[0].text, 'ok')
+})
+
+test('validateIngest: 严格口径——合法/非法各判据（不夹取、不猜默认）', () => {
+  const base = { sourceKind: 'http', agent: 'harness-A', extRef: 'conv-9', turnOrdinal: 2, clarity: 0.5, defense: 'light', declaration: 0 }
+  assert.equal(validateIngest(base).ok, true)
+  assert.equal(validateIngest({ ...base, clarity: 1.2 }).error, 'invalid:clarity')
+  assert.equal(validateIngest({ ...base, clarity: '0.5' }).error, 'invalid:clarity')
+  assert.equal(validateIngest({ ...base, defense: 'max' }).error, 'invalid:defense')
+  assert.equal(validateIngest({ ...base, declaration: 2 }).error, 'invalid:declaration')
+  assert.equal(validateIngest({ ...base, sourceKind: 'carrier-pigeon' }).error, 'invalid:source_kind')
+  assert.equal(validateIngest({ ...base, turnOrdinal: 0 }).error, 'invalid:turn_ordinal')
+  assert.equal(validateIngest({ ...base, agent: '  ' }).error, 'invalid:agent')
+  assert.equal(validateIngest({ ...base, declaration: 1 }).error, 'quote-required')
+  assert.equal(validateIngest({ ...base, declaration: 1, quote: '原句' }).ok, true)
+  assert.equal(validateIngest({ ...base, declaration: 1, quote: '字'.repeat(QUOTE_MAX + 1) }).error, 'quote-too-long')
+  // ts_client / schema_version 非法即拒；合法归一为整数
+  assert.equal(validateIngest({ ...base, tsClient: -5 }).error, 'invalid:ts_client')
+  assert.equal(validateIngest({ ...base, tsClient: 1.9 }).record.tsClient, 1)
+  assert.equal(validateIngest({ ...base, schemaVersion: 0 }).error, 'invalid:schema_version')
+})
+
+test('ingestSelfCheck + store: 同键重投 = 修正覆盖（duplicate 标），行数不双增', () => {
+  const store = openStore(':memory:')
+  try {
+    const inp = { sourceKind: 'http', agent: 'h', extRef: 'c1', turnOrdinal: 1, clarity: 0.3, defense: 'none', declaration: 0 }
+    const first = ingestSelfCheck(store, inp)
+    assert.deepEqual(first, { ok: true, result: 'inserted' })
+    const second = ingestSelfCheck(store, { ...inp, clarity: 0.6 })
+    assert.deepEqual(second, { ok: true, result: 'duplicate' })
+    assert.equal(store.countSelfCheckRecords(), 1, '修正覆盖不得双写')
+    assert.equal(store.countSelfCheckRecords('http'), 1)
+    assert.equal(store.countSelfCheckRecords('dsh_tool'), 0)
+    // 唯一键含 source_kind：不同源同 (ext_ref, turn) 各存一行
+    assert.equal(ingestSelfCheck(store, { ...inp, sourceKind: 'dsh_tool' }).result, 'inserted')
+    assert.equal(store.countSelfCheckRecords(), 2)
+  } finally { store.close() }
+})
+
+test('migrateV5: v4 存库升级幂等、turn_read 数字不变、新库直达 v5（pulse 不冲突）', () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'nautilus-v5-'))
+  try {
+    const file = join(tmp, 'n.db')
+    // 伪造「升级前」状态：turn_read 有数据、user_version=4（pulse 已推进的存库形态）
+    {
+      const raw = new DatabaseSync(file)
+      raw.exec(`
+        CREATE TABLE turn_read (
+          session TEXT NOT NULL, turn INTEGER NOT NULL, ts INTEGER NOT NULL, question TEXT,
+          token_in INTEGER NOT NULL DEFAULT 0, token_out INTEGER NOT NULL DEFAULT 0,
+          cache_read INTEGER NOT NULL DEFAULT 0, duration_ms INTEGER, tps REAL,
+          clarity REAL, defense TEXT, declaration INTEGER,
+          PRIMARY KEY (session, turn)
+        );
+        INSERT INTO turn_read (session, turn, ts) VALUES ('s-a', 1, 100), ('s-a', 2, 200), ('s-b', 1, 300);
+        CREATE TABLE metric_sample (ts INTEGER NOT NULL, layer TEXT NOT NULL, metric TEXT NOT NULL, value REAL, tags TEXT, era TEXT NOT NULL DEFAULT 'api');
+        PRAGMA user_version = 4;
+      `)
+      raw.close()
+    }
+    const s1 = openStore(file)
+    assert.equal(s1.schemaVersion(), 5, 'v4 → v5')
+    assert.deepEqual(s1.turnTotals(), { turns: 3, tokenIn: 0, tokenOut: 0, cacheRead: 0 }, 'turn_read 数字不变')
+    assert.equal(s1.countSelfCheckRecords(), 0)
+    s1.close()
+    const s2 = openStore(file)
+    assert.equal(s2.schemaVersion(), 5, '重开幂等：不重复迁移、不回退')
+    assert.deepEqual(s2.turnTotals(), { turns: 3, tokenIn: 0, tokenOut: 0, cacheRead: 0 })
+    s2.close()
+    // 新库直达 v5；pulse 侧 v>4 直接返回（其表由自身构造 exec 幂等创建，不抢版本）
+    const fresh = openStore(join(tmp, 'fresh.db'))
+    assert.equal(fresh.schemaVersion(), 5)
+    fresh.close()
+  } finally {
+    try { rmSync(tmp, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }) } catch { /* Windows 句柄 GC 滞后：容忍 %TEMP% 残留 */ }
+  }
 })
 
 // ── pulse（OS 层）：采集纯函数 ────────────────────────────────────────────────
@@ -436,7 +546,7 @@ test('host bundle 单入口：pulse 作为子插件挂载并注册自身路由',
     })
     const deadline = Date.now() + 5000
     while (Date.now() < deadline && !routes.includes('/api/nautilus/pulse/state')) await new Promise((r) => setTimeout(r, 25))
-    // vault 观测腿下线（2026-09-27）后：无 /state · /vault · /action 三条
+    // vault 观测腿下线（2026-09-27）后：无 /state · /vault · /action 三条；S1.1 新增 /selfcheck
     assert.deepEqual([...routes].sort(), [
       '/api/nautilus/lfield',
       '/api/nautilus/m2/analysis',
@@ -446,6 +556,7 @@ test('host bundle 单入口：pulse 作为子插件挂载并注册自身路由',
       '/api/nautilus/pulse/control',
       '/api/nautilus/pulse/series',
       '/api/nautilus/pulse/state',
+      '/api/nautilus/selfcheck',
     ])
     assert.deepEqual([...tools], ['record_turn_selfcheck'])
     await fiber.dispose()
@@ -519,5 +630,111 @@ test('pulse 心跳控制：档位切换 / 立即采样 / 非法入参 400', asyn
     if (prevHome === undefined) delete process.env.DSH_HOME
     else process.env.DSH_HOME = prevHome
     rmSync(tmp, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+  }
+})
+
+// ── S1.1 自评 HTTP ingest（POST /api/nautilus/selfcheck：门序四分支 + 修正覆盖；真实装配路径）──
+
+test('selfcheck ingest 通道：默认关 403 → token 门 401 → 非法 400 → 合法 200/duplicate；空 token 启用即加载失败', async () => {
+  const { Readable } = await import('node:stream')
+  const tmp = mkdtempSync(join(tmpdir(), 'nautilus-sc-'))
+  const prevHome = process.env.DSH_HOME
+  process.env.DSH_HOME = tmp
+  try {
+    const { Context } = await import('@deepseek-ai/cordis')
+    const mod = await import(new URL('../lib/index.js', import.meta.url).href)
+    const { SELFCHECK_TOKEN_HEADER } = await import(new URL('../lib/routes.js', import.meta.url).href)
+
+    const waitRoute = async (handlers) => {
+      const deadline = Date.now() + 5000
+      while (Date.now() < deadline && !handlers.has('/api/nautilus/selfcheck')) await new Promise((r) => setTimeout(r, 25))
+      const handler = handlers.get('/api/nautilus/selfcheck')
+      assert.equal(typeof handler, 'function', 'selfcheck 路由必须注册（禁用态也在场——403 可判别，不是 404）')
+      return handler
+    }
+    // 真 Readable：handler 走 for-await（异步迭代），伪造 on() 的假流不可靠
+    const req = (method, body, token) => {
+      const r = new Readable({ read() {} })
+      r.method = method
+      r.headers = token === undefined ? {} : { [SELFCHECK_TOKEN_HEADER]: token }
+      if (body !== undefined) r.push(Buffer.from(JSON.stringify(body), 'utf8'))
+      r.push(null)
+      return r
+    }
+    const res = () => ({ statusCode: 0, payload: null, writeHead(s) { this.statusCode = s }, end(t) { this.payload = JSON.parse(String(t ?? '{}')) } })
+    const call = async (handler, method, body, token) => {
+      const r = res()
+      handler(req(method, body, token), r)
+      const dl = Date.now() + 3000
+      while (Date.now() < dl && r.statusCode === 0) await new Promise((x) => setTimeout(x, 10))
+      return r
+    }
+    const goodBody = { agent: 'harness-x', ext_ref: 'conv-1', turn_ordinal: 1, clarity: 0.3, defense: 'none', declaration: 0 }
+
+    // ① 默认关：恒 403
+    {
+      const handlers = new Map()
+      const ctx = new Context()
+      ctx.provide('webServer', { register(route) { handlers.set(route.path, route.handler); return () => {} } })
+      ctx.provide('tools', { register() {} })
+      const fiber = ctx.plugin(mod, { pulse: { enabled: false } })
+      const captured = await waitRoute(handlers)
+      const off = await call(captured, 'POST', goodBody, 'anything')
+      assert.equal(off.statusCode, 403, '未启用必须 403')
+      assert.equal(off.payload.error, 'ingest-disabled')
+      assert.equal((await call(captured, 'GET', undefined, 'anything')).statusCode, 405, '非 POST 必须 405')
+      await fiber.dispose()
+    }
+
+    // ② 配置响亮失败：enabled=true 且 token 空 → apply 直接抛（不留运行时静默 401）
+    assert.throws(
+      () => mod.apply({ effect: () => () => undefined }, { selfcheck: { ingest: { enabled: true, token: '   ', maxBodyBytes: 8192 } } }),
+      /token/,
+    )
+
+    // ③ 启用后全分支：401 → 400 → 200 inserted → 200 duplicate（修正覆盖，落库可验）
+    {
+      const handlers = new Map()
+      const ctx = new Context()
+      ctx.provide('webServer', { register(route) { handlers.set(route.path, route.handler); return () => {} } })
+      ctx.provide('tools', { register() {} })
+      const fiber = ctx.plugin(mod, {
+        pulse: { enabled: false },
+        selfcheck: { ingest: { enabled: true, token: 't-123', maxBodyBytes: 8192 } },
+      })
+      const deadline = Date.now() + 5000
+      while (Date.now() < deadline && !handlers.has('/api/nautilus/selfcheck')) await new Promise((r) => setTimeout(r, 25))
+      const h = handlers.get('/api/nautilus/selfcheck')
+
+      assert.equal((await call(h, 'POST', goodBody)).statusCode, 401, '缺 token 必须 401')
+      assert.equal((await call(h, 'POST', goodBody, 'wrong')).statusCode, 401, '错 token 必须 401')
+      assert.equal((await call(h, 'POST', { ...goodBody, clarity: 1.4 }, 't-123')).payload.error, 'invalid:clarity', '非法 clarity 必须 400+字段名')
+      const noQuote = await call(h, 'POST', { ...goodBody, declaration: 1 }, 't-123')
+      assert.equal(noQuote.statusCode, 400)
+      assert.equal(noQuote.payload.error, 'quote-required', 'D-SC2：declaration=1 无引文必须拒')
+      // JSON 合法但非对象体（字符串）→ bad-json 拒
+      const notObj = await call(h, 'POST', 'bare-string', 't-123')
+      assert.equal(notObj.statusCode, 400)
+      assert.equal(notObj.payload.error, 'bad-json')
+      const ins = await call(h, 'POST', { ...goodBody }, 't-123')
+      assert.equal(ins.statusCode, 200)
+      assert.equal(ins.payload.result, 'inserted')
+      const dup = await call(h, 'POST', { ...goodBody, clarity: 0.9 }, 't-123')
+      assert.equal(dup.payload.result, 'duplicate')
+      assert.equal(dup.payload.duplicate, true)
+      await fiber.dispose()
+
+      // 外部世界断言：库内 1 行、覆盖后 clarity=0.9、身份为 http 源
+      const raw = new DatabaseSync(join(tmp, 'nautilus', 'nautilus.db'))
+      const rows = raw.prepare('SELECT source_kind, agent, clarity, declaration, quote FROM selfcheck_record').all()
+      assert.equal(rows.length, 1, '修正覆盖不得双写')
+      assert.deepEqual({ ...rows[0] }, { source_kind: 'http', agent: 'harness-x', clarity: 0.9, declaration: 0, quote: null })
+      raw.close()
+    }
+  } finally {
+    if (prevHome === undefined) delete process.env.DSH_HOME
+    else process.env.DSH_HOME = prevHome
+    // Windows：node:sqlite 的文件句柄要等 GC 才释放，重试也可能吃 EPERM——%TEMP% 由系统回收，不因清理竞态误报测试失败
+    try { rmSync(tmp, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }) } catch { /* 容忍残留 */ }
   }
 })

@@ -11,7 +11,8 @@
  * GET  /api/nautilus/m2/analysis    → 白盒分析（形态 / 爆发段 / τ_e）
  * GET  /api/nautilus/lfield         → L 场读数独立指向（M4-L；每根会话计数）
  * POST /api/nautilus/lfield         → 切换 L 场读数指向（采集归属；既有会话归属不变）
- * Same-origin marker guard; registered as effect.
+ * POST /api/nautilus/selfcheck      → S1.1 外部 harness 自评 ingest（token 门，默认关；见 1-planning 决策 D-SC1）
+ * Same-origin marker guard; registered as effect.（/selfcheck 例外：调用方非浏览器，以 token 为门。）
  */
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { WebRoute } from '@deepseek-ai/dsh-host-webserver'
@@ -19,14 +20,20 @@ import type { NautilusStore } from './store.js'
 import { statSync, accessSync, constants } from 'node:fs'
 import { isAbsolute, resolve } from 'node:path'
 import { analyze } from './analysis.js'
+import { ingestSelfCheck } from './selfcheck-ingest.js'
 
 /** 集中常量：路由前缀（AGENTS.md §1-4）。 */
 const API_PREFIX = '/api/nautilus'
+
+/** 集中常量：自评 ingest 的 token 头名（外部 harness 钩子按此投递凭证）。 */
+export const SELFCHECK_TOKEN_HEADER = 'x-nautilus-selfcheck-token'
 
 export interface RouteDeps {
   store: NautilusStore
   /** L 场读数曲线窗口（天），默认 30。 */
   m2HistoryDays?: number
+  /** S1.1 自评 ingest 通道配置（缺省 = 关闭：路由注册但恒 403，禁用状态可判别）。 */
+  selfcheckIngest?: { enabled: boolean; token: string; maxBodyBytes?: number }
 }
 
 function json(res: ServerResponse, status: number, body: unknown): void {
@@ -197,6 +204,46 @@ export function registerNautilusRoutes(ctx: { webServer: { register(route: WebRo
     },
   }
 
-  for (const route of [m2State, annotations, turnText, analysis, lfield]) disposers.push(ctx.webServer.register(route))
+  // S1.1：外部 harness 自评 ingest（决策 D-SC1 通道 A；口径走共享 ingest，与 DSH 工具同一份校验）。
+  // 门序：方法 → 启用 → token → 体长 → JSON → 校验。默认 enabled=false：路由在场但恒 403（禁用可判别，不是 404）。
+  const selfcheck: WebRoute = {
+    kind: 'exact',
+    path: `${API_PREFIX}/selfcheck`,
+    handler: async (req, res): Promise<void> => {
+      if (req.method !== 'POST') return json(res, 405, { ok: false, error: 'method-not-allowed' })
+      const cfg = deps.selfcheckIngest
+      if (cfg === undefined || cfg.enabled !== true) return json(res, 403, { ok: false, error: 'ingest-disabled' })
+      const given = req.headers[SELFCHECK_TOKEN_HEADER]
+      if (typeof given !== 'string' || given === '' || given !== cfg.token) {
+        return json(res, 401, { ok: false, error: 'unauthorized' })
+      }
+      const limit = typeof cfg.maxBodyBytes === 'number' && cfg.maxBodyBytes > 0 ? cfg.maxBodyBytes : 8192
+      const chunks: Buffer[] = []
+      let size = 0
+      try {
+        for await (const c of req) {
+          size += (c as Buffer).length
+          if (size > limit) return json(res, 400, { ok: false, error: 'too-large' })
+          chunks.push(c as Buffer)
+        }
+      } catch { return json(res, 400, { ok: false, error: 'bad-json' }) }
+      let body: Record<string, unknown> | null = null
+      try { body = JSON.parse(Buffer.concat(chunks).toString('utf8')) as Record<string, unknown> } catch { body = null }
+      if (body === null || typeof body !== 'object' || Array.isArray(body)) {
+        return json(res, 400, { ok: false, error: 'bad-json' })
+      }
+      const outcome = ingestSelfCheck(deps.store, {
+        sourceKind: 'http',
+        agent: body.agent, extRef: body.ext_ref, turnOrdinal: body.turn_ordinal,
+        clarity: body.clarity, defense: body.defense, declaration: body.declaration,
+        quote: body.quote, model: body.model, workspace: body.workspace,
+        tsClient: body.ts_client, schemaVersion: body.schema_version,
+      })
+      if (!outcome.ok) return json(res, 400, { ok: false, error: outcome.error })
+      json(res, 200, { ok: true, result: outcome.result, duplicate: outcome.result === 'duplicate' })
+    },
+  }
+
+  for (const route of [m2State, annotations, turnText, analysis, lfield, selfcheck]) disposers.push(ctx.webServer.register(route))
   return () => { for (const d of disposers.reverse()) { try { d() } catch { /* 幂等清理 */ } } }
 }

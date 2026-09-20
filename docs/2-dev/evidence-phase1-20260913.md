@@ -505,6 +505,28 @@ client-modules: package @dsh-external/dsh-nexus resolves from multiple active Lo
 
 ---
 
+## E21 S1.1 自评多源采集：存储模型 + ingest 通道落地（2026-09-27，守谷人裁决「先按你定的存储模型来，直接提需求」）
+
+**交付面**（决策 D-SC1/2/3 见 `docs/1-planning/nautilus-selfcheck-multisource.md` v0.2）：
+
+| 件 | 内容 |
+|---|---|
+| v5 迁移 | `store.ts` `migrateV5`：`selfcheck_record` 表（唯一键 `source_kind+ext_ref+turn_ordinal`，`source_kind` 枚举预占 `mcp`）；`turn_read` 三列冻结保留（工具过渡双写） |
+| 共享 ingest | `src/selfcheck-ingest.ts`：校验+归一+落库唯一口径（D-SC3a 约束 1），DSH 工具 / HTTP / 未来 MCP 皆为薄壳 |
+| 工具改造 | `record_turn_selfcheck` 新增 `quote`；**declaration=1 无引文 → 拒绝且零写入**（D-SC2 硬门）；工具侧保留历史夹取 |
+| HTTP 通道 | `POST /api/nautilus/selfcheck`：门序 方法→启用→token→体长→JSON→校验；**默认关**（403 可判别）；`enabled=true` 且 token 空 → **加载时抛错**（响亮失败） |
+| 配置 | `selfcheck.ingest = { enabled:false, token:'', maxBodyBytes:8192 }`（全默认值入 schema，只改 `cordis.yml` 即可开关） |
+
+**门禁与测试（本地六件套 + 元数据全绿）**：`typecheck` ✓ · `build` ✓ · `check:deps` ✓ · `check:exports` ✓ · `check-meta` ✓ · shim 断言 ✓ · **`test` 27/27**（22 → 27：改写自评测 4 条按新契约 + 新增 `validateIngest` 判据、`insertSelfCheckRecord` 修正覆盖、`migrateV5` 幂等、HTTP 全分支 e2e）。
+
+**迁移前后数字对照**（测试路径，伪造 v4 存库）：`turn_read` 3 行 / `user_version=4` → 升级后 **仍 3 行 / version=5**、`selfcheck_record` 在场；重开不回退不重复。真实库（55.9 MB）的 v4→v5 需宿主重启触发，**本轮未发生**（见边界①）。
+
+**HTTP 四分支实测**（真实 `ctx.plugin` 装配 + 真 `Readable` 请求流）：默认关 → **403 `ingest-disabled`**；GET → 405；缺/错 token → **401**；`clarity:1.4` → **400 `invalid:clarity`**；`declaration=1` 无引文 → **400 `quote-required`**；合法体 → **200 `inserted`**，同键重投 → **200 `duplicate`** 且**库内单行、值覆盖为 0.9**（外部世界断言直查 SQLite）。
+
+**诚实边界**：① **端上未重启**——宿主半区新代码（路由/迁移/工具）在运行实例中未生效，3080 上 `/selfcheck` 现为 404、工具仍旧契约；重启窗口由守谷人执行后再补四元组。② S1.1 期间**面板仍读 `turn_read` 旧列**：HTTP 源自评只进库不进面板（S1.2 切读），面板覆盖率≠多源总覆盖。③ 非 DSH harness 的接入钩子（curl/Stop-hook 配置）**尚未配**——通道就绪不等于流量进来，接入侧文档待 S1.2 一并给。④ token 为明文头比对（`x-nautilus-selfcheck-token`），本机 HTTP 非加密信道——威胁模型是「本机其它进程」，如要跨机用必须自行加隧道；此限制如实入配置说明。
+
+---
+
 ## E8 诚实边界（引用本归档时必须一并引用）
 
 1. **端上读数口径**：§E8 初稿时本层尚未装配（证据全来自离线探针）；**§E9 起已热装配进 profile `web`**，宿主路径已有端上四元组读数（OQ-3 收敛）。但 E5 的 1 小时档仍只有中间读数，且「连续 1 小时无内存增长」尚未给出完整序列。

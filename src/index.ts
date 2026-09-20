@@ -38,6 +38,14 @@ export interface Config {
     /** L 场读数曲线窗口（天）。 */
     historyDays: number
   }
+  /** S1.1：外部 harness 自评 ingest 通道（决策 D-SC1；默认关——开启动作本身是部署决策）。 */
+  selfcheck: {
+    ingest: {
+      enabled: boolean
+      token: string
+      maxBodyBytes: number
+    }
+  }
   /** Phase 1：OS/GPU 采集层配置（子插件 pulse；enabled=false 时整层不挂载）。 */
   pulse: pulse.Config
 }
@@ -47,21 +55,33 @@ export const Config = z.object({
     enabled: z.boolean().default(true),
     historyDays: z.number().min(1).default(30),
   }).default({ enabled: true, historyDays: 30 }),
+  selfcheck: z.object({
+    ingest: z.object({
+      enabled: z.boolean().default(false),
+      token: z.string().default(''),
+      maxBodyBytes: z.number().min(256).max(65536).default(8192),
+    }).default({ enabled: false, token: '', maxBodyBytes: 8192 }),
+  }).default({ ingest: { enabled: false, token: '', maxBodyBytes: 8192 } }),
   // 复用 pulse 自己的 schema（含全部默认值）：同一条目内组态，非法配置照旧在加载时响亮失败
   pulse: pulse.Config,
 })
 
 export function apply(ctx: Context, config: Config): void {
+  // 响亮失败：开通道必须配 token（空 token 的「已启用」等于裸奔写库——非法组合在加载时拒，不留到运行时静默 401）
+  if (config.selfcheck.ingest.enabled && config.selfcheck.ingest.token.trim() === '') {
+    throw new Error('[nautilus] 非法配置：selfcheck.ingest.enabled=true 需要非空 token（默认 enabled=false 即关闭）')
+  }
   const dshHome = process.env.DSH_HOME || join(homedir(), '.dsh')
   // 数据目录 + 改名迁移（xuegulin → nexus → nautilus）：只在新目录缺失时搬，旧实例占用则回落旧路径，绝不覆盖数据
   const data = resolveDataDir(dshHome)
   const store = openStore(data.dbFile)
   ctx.effect(() => () => store.close())
 
-  // REST：L 场读数（m2/*）+ L 场指向（lfield）。vault 三条路由已随观测腿下线。
+  // REST：L 场读数（m2/*）+ L 场指向（lfield）+ 自评 ingest（selfcheck）。vault 三条路由已随观测腿下线。
   ctx.effect(() => registerNautilusRoutes(ctx, {
     store,
     m2HistoryDays: config.lField.historyDays,
+    selfcheckIngest: config.selfcheck.ingest,
   }), 'nautilus: routes')
 
   // M2：官方会话事件采集（L 场读数数据层；官方 session/event 直采，与团队底座零耦合）

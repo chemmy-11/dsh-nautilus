@@ -3,6 +3,7 @@
  * turn_read/turn_text/step_seen/annotation: M2/M3 L 场读数与人工标注（官方 session/event 直采）。
  * session_root: M4-L per-session L-field ownership ('' = owned by no pointing — global view only);
  * lfield_config: M4-L independent L-field pointing (single row; baseline_ts kept as legacy, no longer read).
+ * selfcheck_record: S1.1 多源自评（v5 迁移创建；唯一键 source_kind+ext_ref+turn_ordinal，见 1-planning 决策 D-SC3）。
  *
  * ⚠️ 历史残留表：`vault_meta` / `edit_event` / `vault_config`（vault 观测腿）已于 2026-09-27 下线。
  *    **代码不再读写、也不 drop**（红线 3：绝不销毁既有数据）——老库里它们仍在，新库不再创建。
@@ -31,6 +32,23 @@ export interface SelfCheck {
   clarity: number
   defense: 'none' | 'light' | 'heavy'
   declaration: 0 | 1
+}
+
+/** S1.1 多源自评行（selfcheck_record；口径 = 决策 D-SC3 定案版）。 */
+export interface SelfCheckRecordRow {
+  tsMs: number
+  tsClient: number | null
+  schemaVersion: number
+  sourceKind: 'dsh_tool' | 'http' | 'backfill' | 'mcp'
+  agent: string
+  model: string | null
+  workspace: string | null
+  extRef: string
+  turnOrdinal: number
+  clarity: number
+  defense: 'none' | 'light' | 'heavy'
+  declaration: 0 | 1
+  quote: string | null
 }
 
 export function openStore(dbFile: string): NautilusStore {
@@ -106,12 +124,13 @@ export class NautilusStore {
 
   /**
    * 迁移入口。**历史沿革**：v0→v1 曾是「vault_meta/edit_event 加 root 列」——vault 观测腿 2026-09-27 下线后
-   * 该步已删除（新库不再建这三张表；老库停在 v4，既有表保留为残留，不 drop）。
+   * 该步已删除（新库不再建这三张表；老库的既有表保留为残留，不 drop）。
    */
   private migrate(): void {
     const v = (this.db.prepare('PRAGMA user_version').get() as { user_version: number })?.user_version ?? 0
     if (v < 2) this.migrateV2()
     if (v < 3) this.migrateV3()
+    if (v < 5) this.migrateV5()
   }
 
 
@@ -151,6 +170,44 @@ export class NautilusStore {
       }
       this.db.prepare('UPDATE lfield_config SET baseline_ts = ? WHERE baseline_ts IS NULL').run(Date.now())
       this.db.exec('PRAGMA user_version = 3')
+      this.db.exec('COMMIT')
+    } catch (e) {
+      this.db.exec('ROLLBACK')
+      throw e
+    }
+  }
+
+  /**
+   * S1.1 迁移（user_version 4→5，决策 D-SC3 定案版）：自评多源表 `selfcheck_record`。
+   * 唯一键 (source_kind, ext_ref, turn_ordinal)——同键重投 = 修正覆盖（last-writer-wins，
+   * 与旧 turn_read 自评列同语义）；`source_kind` 枚举预占 'mcp'（D-SC3a 前瞻约束）。
+   * v4 槽已被 pulse（metric_sample）占用；M5 若复活改占 v6。幂等：IF NOT EXISTS + 版本单调。
+   */
+  private migrateV5(): void {
+    this.db.exec('BEGIN')
+    try {
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS selfcheck_record (
+          id             INTEGER PRIMARY KEY AUTOINCREMENT,
+          ts_ms          INTEGER NOT NULL,
+          ts_client      INTEGER,
+          schema_version INTEGER NOT NULL DEFAULT 1,
+          source_kind    TEXT    NOT NULL CHECK (source_kind IN ('dsh_tool','http','backfill','mcp')),
+          agent          TEXT    NOT NULL,
+          model          TEXT,
+          workspace      TEXT,
+          ext_ref        TEXT    NOT NULL,
+          turn_ordinal   INTEGER NOT NULL,
+          clarity        REAL    NOT NULL CHECK (clarity BETWEEN 0 AND 1),
+          defense        TEXT    NOT NULL CHECK (defense IN ('none','light','heavy')),
+          declaration    INTEGER NOT NULL CHECK (declaration IN (0,1)),
+          quote          TEXT,
+          CHECK (declaration = 0 OR quote IS NOT NULL)
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_sc_key ON selfcheck_record (source_kind, ext_ref, turn_ordinal);
+        CREATE INDEX IF NOT EXISTS ix_sc_ts ON selfcheck_record(ts_ms);
+      `)
+      this.db.exec('PRAGMA user_version = 5')
       this.db.exec('COMMIT')
     } catch (e) {
       this.db.exec('ROLLBACK')
@@ -332,11 +389,64 @@ export class NautilusStore {
     return rows.map((r) => mapTurnRow(r))
   }
 
-  /** M3-F.1：写入某轮自评三行（upsert，幂等——同一轮重复自评以新值覆盖）。 */
+  /** M3-F.1：写入某轮自评三行（upsert，幂等——同一轮重复自评以新值覆盖）。**S1.2 切读后停写**（过渡双写）。 */
   setSelfCheck(session: string, turn: number, check: SelfCheck): void {
     this.db.prepare(`
       UPDATE turn_read SET clarity = ?, defense = ?, declaration = ? WHERE session = ? AND turn = ?
     `).run(check.clarity, check.defense, check.declaration, session, turn)
+  }
+
+  // ── S1.1 自评多源表（selfcheck_record；口径 = 决策 D-SC3 定案版）───────────────
+
+  /** 全库 schema 版本（PRAGMA user_version；跨层诊断用）。 */
+  schemaVersion(): number {
+    return Number((this.db.prepare('PRAGMA user_version').get() as { user_version: number } | undefined)?.user_version ?? 0)
+  }
+
+  /**
+   * 落一条多源自评；同唯一键 (source_kind, ext_ref, turn_ordinal) 重投 = 修正覆盖。
+   * @returns 'inserted' 首投 / 'duplicate' 同键覆盖（响应面据此标 duplicate）。
+   */
+  insertSelfCheckRecord(row: SelfCheckRecordRow): 'inserted' | 'duplicate' {
+    const hit = this.db
+      .prepare('SELECT 1 AS x FROM selfcheck_record WHERE source_kind = ? AND ext_ref = ? AND turn_ordinal = ?')
+      .get(row.sourceKind, row.extRef, row.turnOrdinal)
+    this.db.prepare(`
+      INSERT INTO selfcheck_record
+        (ts_ms, ts_client, schema_version, source_kind, agent, model, workspace, ext_ref, turn_ordinal,
+         clarity, defense, declaration, quote)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(source_kind, ext_ref, turn_ordinal) DO UPDATE SET
+        ts_ms = excluded.ts_ms,
+        ts_client = excluded.ts_client,
+        schema_version = excluded.schema_version,
+        agent = excluded.agent,
+        model = excluded.model,
+        workspace = excluded.workspace,
+        clarity = excluded.clarity,
+        defense = excluded.defense,
+        declaration = excluded.declaration,
+        quote = excluded.quote
+    `).run(
+      row.tsMs, row.tsClient, row.schemaVersion, row.sourceKind, row.agent, row.model, row.workspace,
+      row.extRef, row.turnOrdinal, row.clarity, row.defense, row.declaration, row.quote,
+    )
+    return hit === undefined ? 'inserted' : 'duplicate'
+  }
+
+  /** 多源自评行数（可按 source_kind 过滤；诊断与验收对照用）。 */
+  countSelfCheckRecords(sourceKind?: string): number {
+    const r = sourceKind === undefined
+      ? this.db.prepare('SELECT COUNT(*) AS n FROM selfcheck_record').get()
+      : this.db.prepare('SELECT COUNT(*) AS n FROM selfcheck_record WHERE source_kind = ?').get(sourceKind)
+    return Number((r as { n: number } | undefined)?.n ?? 0)
+  }
+
+  /** 该会话的 L 场归属（session_root；'' = 未归属 → 返回 null，不存空串）。 */
+  selfcheckWorkspaceOf(session: string): string | null {
+    const r = this.db.prepare('SELECT root FROM session_root WHERE session = ?').get(session) as { root: string } | undefined
+    if (r === undefined || r.root === '') return null
+    return String(r.root)
   }
 
   // ── M3-F.2 完整问答原文（B 方案；前向积累） ─────────────────────────────────
