@@ -527,6 +527,25 @@ client-modules: package @dsh-external/dsh-nexus resolves from multiple active Lo
 
 ---
 
+## E22 T 系列宿主半区落地：逐轮人工标注「契合」（2026-09-27，守谷人「锁板。继续」）
+
+**交付面**（口径 = 决策 D-T1/T2/T3，契约 = dev-05；量表锁版 `schema_version=1`）：
+
+| 件 | 内容 |
+|---|---|
+| v6 迁移 | `turn_annotation`（一行一轮最新覆盖；CHECK 双门：fit/exempt 互斥、fit=4 必附引文；`fit_prev/quote_prev` 复标成对）+ `annotation_sample`（队列，origin 判定依据）。S1.1 的 v5 之后顺序推进，红线 3 幂等 |
+| 写读通道 | `POST/GET /api/nautilus/m2/turn-annotations`：**同源门（守谷人/工作台专用，与 S1.1 token 通道隔离）**；无原文拒（`no-turn-text`——不让人对摘要打五分制）；**origin 服务端判定**（在未完成队列→sample+回填，申报制杜绝） |
+| 生成器 | `scripts/annotation-sample.mjs`：周桶×形态分层 + per-session 上限 + seeded 确定性；`--kind recheck` 只取已标未复标（D-T4 噪声地板）；核心为导出纯函数（测试不 spawn 子进程，绕开沙箱 stdio 边界） |
+| 两线并行纪律 | UI 图表线同期在改 `test.mjs/workbench.ts`——本线**独立测试文件 `scripts/test-t.mjs`** + 选择性暂存（HEAD 版 test.mjs + 本线 5 处手术，UI 线 +116 行尾部 hunk 不入本提交）；`package.json` test 并列两文件 + 新增 `check:meta` |
+
+**门禁**：`npm test` **36/36**（test.mjs 30 + test-t 6；其中本线新增 6 条：migrateV6 幂等+turn_read 数字不变+CHECK 直插炸、upsert/fit_prev/coverage 双口径、origin 队列消费、生成器确定性+上限+recheck 出池、nextBatchId 序号、路由门序全分支 e2e 含中途快照）· typecheck/build/check:deps/check:exports/check-meta/shim 全绿。
+
+**迁移前后对照**（测试路径）：v5 存库（turn_read 3 行）→ v6，**行数与 token 汇总不变**；新库直达 v6；重开不回退。真实库 v5→v6 待宿主重启（与 S1.1 同窗口）。
+
+**诚实边界**：① **UI 半区挂账**——抽屉标注控件与曲线人工层标记未随本提交（等同文件并写风险解除后补，届时报 E23）；现阶段写路径 = 带同源头的 HTTP POST（curl 加 `-H "origin: http://127.0.0.1:3080"` 可用）。② 端上未重启（本线与 S1.1 同为离线证据 + 真实装配路径测试）。③ `2-dev/README.md` 的 dev-05 登记行待 UI 线收敛后补（避免选择性暂存三处化）。④ 人工真值也是自报（主体换了人）——噪声地板等首批 ≥50 条后的 recheck 批次量化，未量化前「契合读数」不得当作 A 的判定。
+
+---
+
 ## E8 诚实边界（引用本归档时必须一并引用）
 
 1. **端上读数口径**：§E8 初稿时本层尚未装配（证据全来自离线探针）；**§E9 起已热装配进 profile `web`**，宿主路径已有端上四元组读数（OQ-3 收敛）。但 E5 的 1 小时档仍只有中间读数，且「连续 1 小时无内存增长」尚未给出完整序列。

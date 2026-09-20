@@ -31,9 +31,10 @@
     "prepack": "node scripts/prepare.mjs",
     "prepare": "node scripts/prepare.mjs --if-dependency",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "node --test scripts/test.mjs",
+    "test": "node --test scripts/test.mjs scripts/test-t.mjs",
     "check:deps": "node scripts/check-deps.mjs",
-    "check:exports": "node scripts/check-exports.mjs"
+    "check:exports": "node scripts/check-exports.mjs",
+    "check:meta": "node .github/scripts/check-meta.mjs"
   },
   "exports": {
     ".": {

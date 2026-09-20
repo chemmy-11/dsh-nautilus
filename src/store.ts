@@ -131,6 +131,7 @@ export class NautilusStore {
     if (v < 2) this.migrateV2()
     if (v < 3) this.migrateV3()
     if (v < 5) this.migrateV5()
+    if (v < 6) this.migrateV6()
   }
 
 
@@ -208,6 +209,54 @@ export class NautilusStore {
         CREATE INDEX IF NOT EXISTS ix_sc_ts ON selfcheck_record(ts_ms);
       `)
       this.db.exec('PRAGMA user_version = 5')
+      this.db.exec('COMMIT')
+    } catch (e) {
+      this.db.exec('ROLLBACK')
+      throw e
+    }
+  }
+
+  /**
+   * T 系列迁移（user_version 5→6，决策 D-T2）：逐轮人工标注 `turn_annotation`
+   * （一行一轮、最新覆盖；fit/exempt 互斥与 fit=4 必附引文走 CHECK 双门；recheck 覆盖前旧值挪 `*_prev`）
+   * + 抽样队列 `annotation_sample`（origin 服务端判定依据）。
+   * 人工解读层不落 turn_read（dev-02 §5：解读不写回读数）。幂等：IF NOT EXISTS + 版本单调。
+   */
+  private migrateV6(): void {
+    this.db.exec('BEGIN')
+    try {
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS turn_annotation (
+          session        TEXT NOT NULL,
+          turn           INTEGER NOT NULL,
+          fit            INTEGER CHECK (fit BETWEEN 0 AND 4),
+          exempt         INTEGER NOT NULL DEFAULT 0 CHECK (exempt IN (0,1)),
+          quote          TEXT,
+          note           TEXT,
+          origin         TEXT NOT NULL CHECK (origin IN ('spot','sample')),
+          schema_version INTEGER NOT NULL DEFAULT 1,
+          fit_prev       INTEGER,
+          quote_prev     TEXT,
+          annotated_at   INTEGER NOT NULL,
+          updated_at     INTEGER NOT NULL,
+          PRIMARY KEY (session, turn),
+          CHECK ((fit IS NULL AND exempt = 1) OR (fit IS NOT NULL AND exempt = 0)),
+          CHECK (fit <> 4 OR quote IS NOT NULL)
+        );
+        CREATE INDEX IF NOT EXISTS ix_ta_ts ON turn_annotation(updated_at);
+        CREATE TABLE IF NOT EXISTS annotation_sample (
+          batch_id     TEXT    NOT NULL,
+          session      TEXT    NOT NULL,
+          turn         INTEGER NOT NULL,
+          kind         TEXT    NOT NULL DEFAULT 'sample' CHECK (kind IN ('sample','recheck')),
+          strata       TEXT    NOT NULL DEFAULT '',
+          sampled_at   INTEGER NOT NULL,
+          annotated_at INTEGER,
+          PRIMARY KEY (batch_id, session, turn)
+        );
+        CREATE INDEX IF NOT EXISTS ix_as_lookup ON annotation_sample(session, turn, annotated_at);
+      `)
+      this.db.exec('PRAGMA user_version = 6')
       this.db.exec('COMMIT')
     } catch (e) {
       this.db.exec('ROLLBACK')
@@ -447,6 +496,128 @@ export class NautilusStore {
     const r = this.db.prepare('SELECT root FROM session_root WHERE session = ?').get(session) as { root: string } | undefined
     if (r === undefined || r.root === '') return null
     return String(r.root)
+  }
+
+  // ── T 系列：逐轮人工标注（turn_annotation / annotation_sample；口径 = 决策 D-T2/T3）──
+
+  /**
+   * upsert 一条逐轮标注（一行一轮、最新覆盖）。覆盖已有标注时旧值挪入 `fit_prev/quote_prev`
+   * （D-T4 复标的成对数据；`annotated_at` 保持首次标注时刻，`updated_at` 记本次）。
+   * @returns 'inserted' | 'overwritten'
+   */
+  upsertTurnAnnotation(row: {
+    session: string; turn: number
+    fit: number | null; exempt: 0 | 1
+    quote: string | null; note: string | null
+    origin: 'spot' | 'sample'; schemaVersion: number
+  }): 'inserted' | 'overwritten' {
+    const now = Date.now()
+    const prev = this.db.prepare('SELECT fit, quote, annotated_at FROM turn_annotation WHERE session = ? AND turn = ?')
+      .get(row.session, row.turn) as { fit: number | null; quote: string | null; annotated_at: number } | undefined
+    if (prev === undefined) {
+      this.db.prepare(`
+        INSERT INTO turn_annotation (session, turn, fit, exempt, quote, note, origin, schema_version, fit_prev, quote_prev, annotated_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?)
+      `).run(row.session, row.turn, row.fit, row.exempt, row.quote, row.note, row.origin, row.schemaVersion, now, now)
+      return 'inserted'
+    }
+    this.db.prepare(`
+      UPDATE turn_annotation
+      SET fit = ?, exempt = ?, quote = ?, note = ?, origin = ?, schema_version = ?,
+          fit_prev = COALESCE(fit_prev, ?), quote_prev = COALESCE(quote_prev, ?),
+          updated_at = ?
+      WHERE session = ? AND turn = ?
+    `).run(row.fit, row.exempt, row.quote, row.note, row.origin, row.schemaVersion,
+      prev.fit ?? null, prev.quote ?? null, now, row.session, row.turn)
+    return 'overwritten'
+  }
+
+  /**
+   * 队列命中判定（origin 服务端判定的依据）：该轮在任一**未完成**队列行中 → 'sample' 并回填 annotated_at；
+   * 否则 'spot'。一次标注可命中多个批次（如两批重叠抽了同轮）——全部回填。
+   */
+  resolveAnnotationOrigin(session: string, turn: number): 'spot' | 'sample' {
+    const hits = this.db.prepare('SELECT batch_id FROM annotation_sample WHERE session = ? AND turn = ? AND annotated_at IS NULL')
+      .all(session, turn) as Array<{ batch_id: string }>
+    if (hits.length === 0) return 'spot'
+    this.db.prepare('UPDATE annotation_sample SET annotated_at = ? WHERE session = ? AND turn = ? AND annotated_at IS NULL')
+      .run(Date.now(), session, turn)
+    return 'sample'
+  }
+
+  listTurnAnnotations(): Array<{
+    session: string; turn: number; fit: number | null; exempt: 0 | 1
+    quote: string | null; note: string | null; origin: 'spot' | 'sample'
+    schemaVersion: number; fitPrev: number | null; annotatedAt: number; updatedAt: number
+  }> {
+    const rows = this.db.prepare('SELECT * FROM turn_annotation ORDER BY updated_at DESC').all() as Array<Record<string, unknown>>
+    return rows.map((r) => ({
+      session: String(r.session), turn: Number(r.turn),
+      fit: r.fit === null || r.fit === undefined ? null : Number(r.fit),
+      exempt: Number(r.exempt ?? 0) as 0 | 1,
+      quote: r.quote == null ? null : String(r.quote),
+      note: r.note == null ? null : String(r.note),
+      origin: String(r.origin) as 'spot' | 'sample',
+      schemaVersion: Number(r.schema_version ?? 1),
+      fitPrev: r.fit_prev === null || r.fit_prev === undefined ? null : Number(r.fit_prev),
+      annotatedAt: Number(r.annotated_at), updatedAt: Number(r.updated_at),
+    }))
+  }
+
+  /**
+   * 双口径覆盖计数（spot/sample 永不合并——决策 §7 边界 3）。
+   * pending = 队列里仍未标的候选；rechecked = 有 *_prev 的条数（噪声地板成对样本数）。
+   */
+  turnAnnotationCoverage(): {
+    spot: number; sample: { marked: number; pending: number }
+    exempted: number; byFit: Record<string, number>; rechecked: number; total: number
+  } {
+    const byOrigin = this.db.prepare(`
+      SELECT origin, COUNT(*) AS n, SUM(exempt) AS ex, SUM(CASE WHEN fit_prev IS NOT NULL THEN 1 ELSE 0 END) AS rc
+      FROM turn_annotation GROUP BY origin
+    `).all() as Array<{ origin: string; n: number; ex: number | null; rc: number | null }>
+    const fits = this.db.prepare('SELECT fit, COUNT(*) AS n FROM turn_annotation WHERE fit IS NOT NULL GROUP BY fit').all() as Array<{ fit: number; n: number }>
+    const pending = this.db.prepare('SELECT COUNT(*) AS n FROM annotation_sample WHERE annotated_at IS NULL').get() as { n: number }
+    const out = { spot: 0, sample: { marked: 0, pending: Number(pending.n ?? 0) }, exempted: 0, byFit: { '0': 0, '1': 0, '2': 0, '3': 0, '4': 0 } as Record<string, number>, rechecked: 0, total: 0 }
+    for (const r of byOrigin) {
+      const n = Number(r.n)
+      out.total += n
+      out.exempted += Number(r.ex ?? 0)
+      out.rechecked += Number(r.rc ?? 0)
+      if (r.origin === 'sample') out.sample.marked = n
+      else out.spot = n
+    }
+    for (const f of fits) out.byFit[String(Number(f.fit))] = Number(f.n)
+    return out
+  }
+
+  /** 已标注的 (session:turn) 键集（生成器排重：sample 不再抽已标、recheck 只抽已标未复标）。 */
+  annotatedTurnKeys(): { annotated: Set<string>; rechecked: Set<string> } {
+    const rows = this.db.prepare('SELECT session, turn, fit_prev FROM turn_annotation').all() as Array<{ session: string; turn: number; fit_prev: number | null }>
+    const annotated = new Set<string>()
+    const rechecked = new Set<string>()
+    for (const r of rows) {
+      const k = `${r.session}:${r.turn}`
+      annotated.add(k)
+      if (r.fit_prev !== null && r.fit_prev !== undefined) rechecked.add(k)
+    }
+    return { annotated, rechecked }
+  }
+
+  /** 入队（生成器与测试共用；PK 冲突 = 已入队，跳过不报错）。@returns 实际插入行数。 */
+  insertSampleBatch(rows: Array<{ batchId: string; session: string; turn: number; kind: 'sample' | 'recheck'; strata: string }>): number {
+    const stmt = this.db.prepare(`
+      INSERT OR IGNORE INTO annotation_sample (batch_id, session, turn, kind, strata, sampled_at)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `)
+    let n = 0
+    this.db.exec('BEGIN')
+    try {
+      const now = Date.now()
+      for (const r of rows) { const c = stmt.run(r.batchId, r.session, r.turn, r.kind, r.strata, now); n += Number(c.changes) }
+      this.db.exec('COMMIT')
+    } catch (e) { this.db.exec('ROLLBACK'); throw e }
+    return n
   }
 
   // ── M3-F.2 完整问答原文（B 方案；前向积累） ─────────────────────────────────

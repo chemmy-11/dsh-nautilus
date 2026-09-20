@@ -12,6 +12,8 @@
  * GET  /api/nautilus/lfield         → L 场读数独立指向（M4-L；每根会话计数）
  * POST /api/nautilus/lfield         → 切换 L 场读数指向（采集归属；既有会话归属不变）
  * POST /api/nautilus/selfcheck      → S1.1 外部 harness 自评 ingest（token 门，默认关；见 1-planning 决策 D-SC1）
+ * GET  /api/nautilus/m2/turn-annotations   → T 系列逐轮人工标注清单 + spot/sample 双口径覆盖
+ * POST /api/nautilus/m2/turn-annotations   → 标注 upsert（origin 服务端判定；fit=4 必附引文；无原文拒）
  * Same-origin marker guard; registered as effect.（/selfcheck 例外：调用方非浏览器，以 token 为门。）
  */
 import type { IncomingMessage, ServerResponse } from 'node:http'
@@ -20,7 +22,7 @@ import type { NautilusStore } from './store.js'
 import { statSync, accessSync, constants } from 'node:fs'
 import { isAbsolute, resolve } from 'node:path'
 import { analyze } from './analysis.js'
-import { ingestSelfCheck } from './selfcheck-ingest.js'
+import { ingestSelfCheck, QUOTE_MAX } from './selfcheck-ingest.js'
 
 /** 集中常量：路由前缀（AGENTS.md §1-4）。 */
 const API_PREFIX = '/api/nautilus'
@@ -244,6 +246,55 @@ export function registerNautilusRoutes(ctx: { webServer: { register(route: WebRo
     },
   }
 
-  for (const route of [m2State, annotations, turnText, analysis, lfield, selfcheck]) disposers.push(ctx.webServer.register(route))
+  // T 系列：逐轮人工标注（契合 · 混合入口；决策 D-T3）。同源门（守谷人 / 工作台专用）。
+  // 语义校验在落库前做完——库里 CHECK 只是最后一道墙，不是第一道。
+  const NOTE_MAX = 500
+  const turnAnnotations: WebRoute = {
+    kind: 'exact',
+    path: `${API_PREFIX}/m2/turn-annotations`,
+    handler: async (req, res): Promise<void> => {
+      if (!browserSameOriginMarker(req)) return json(res, 403, { ok: false, error: 'forbidden' })
+      if (req.method === 'GET') {
+        json(res, 200, { revision: Date.now(), annotations: deps.store.listTurnAnnotations(), coverage: deps.store.turnAnnotationCoverage() })
+        return
+      }
+      if (req.method !== 'POST') return json(res, 405, { ok: false, error: 'method-not-allowed' })
+      const body = await readJson(req) as {
+        session?: unknown; turn?: unknown; fit?: unknown; exempt?: unknown; quote?: unknown; note?: unknown
+      } | null
+      if (body === null || typeof body !== 'object' || Array.isArray(body)) return json(res, 400, { ok: false, error: 'bad-json' })
+      const session = typeof body.session === 'string' ? body.session.trim() : ''
+      const turn = typeof body.turn === 'number' && Number.isInteger(body.turn) && body.turn >= 1 ? body.turn : null
+      if (session === '' || session.length > 160 || turn === null) return json(res, 400, { ok: false, error: 'invalid:session_or_turn' })
+      // 被标轮次的原文必须在场（锁版口径 §3：不让人对着摘要打五分制）
+      if (deps.store.getTurnText(session, turn) === null) return json(res, 400, { ok: false, error: 'no-turn-text' })
+      const exempt = body.exempt === 1 || body.exempt === true ? 1 : 0
+      const fit = typeof body.fit === 'number' && Number.isInteger(body.fit) && body.fit >= 0 && body.fit <= 4 ? body.fit : null
+      if ((fit === null) !== (exempt === 1)) return json(res, 400, { ok: false, error: 'invalid:fit-xor-exempt' })
+      let quote: string | null = null
+      if (body.quote !== undefined && body.quote !== null) {
+        if (typeof body.quote !== 'string') return json(res, 400, { ok: false, error: 'invalid:quote' })
+        const q = body.quote.trim()
+        if (q !== '') {
+          if (q.length > QUOTE_MAX) return json(res, 400, { ok: false, error: 'quote-too-long' })
+          quote = q
+        }
+      }
+      if (fit === 4 && quote === null) return json(res, 400, { ok: false, error: 'quote-required' })
+      if (fit !== 4) quote = null
+      let note: string | null = null
+      if (body.note !== undefined && body.note !== null) {
+        if (typeof body.note !== 'string') return json(res, 400, { ok: false, error: 'invalid:note' })
+        const t = body.note.trim()
+        if (t !== '') note = t.length > NOTE_MAX ? t.slice(0, NOTE_MAX) : t
+      }
+      // origin 服务端判定（申报制污染口径，杜绝）：在未完成队列中 = sample，否则 spot
+      const origin = deps.store.resolveAnnotationOrigin(session, turn)
+      const result = deps.store.upsertTurnAnnotation({ session, turn, fit, exempt, quote, note, origin, schemaVersion: 1 })
+      json(res, 200, { ok: true, origin, result, overwritten: result === 'overwritten' })
+    },
+  }
+
+  for (const route of [m2State, annotations, turnText, analysis, lfield, selfcheck, turnAnnotations]) disposers.push(ctx.webServer.register(route))
   return () => { for (const d of disposers.reverse()) { try { d() } catch { /* 幂等清理 */ } } }
 }
