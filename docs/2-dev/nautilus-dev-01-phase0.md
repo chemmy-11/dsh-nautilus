@@ -3,7 +3,7 @@
 > 版本 v0.1（2026-09-12 起草，**待开发组评审**）
 > 上游：[../1-planning/nautilus-opening-report.md](../1-planning/nautilus-opening-report.md) §六 Phase 0 · [../1-planning/nautilus-research-2-positioning.md](../1-planning/nautilus-research-2-positioning.md) §五
 > 证据归档：[./evidence-phase0-20260912.md](./evidence-phase0-20260912.md)（执行命令 / 预期 / 实际输出 / 观察结论）
-> 核查环境：dsh `0.1.5-rc.1` · Node `v24.18.0` · Windows · nexus 库 427 轮 / 70 会话 · 会话日志 18 份（v3 格式）
+> 核查环境：dsh `0.1.5-rc.1` · Node `v24.18.0` · Windows · nautilus 库 427 轮 / 70 会话 · 会话日志 18 份（v3 格式）
 
 ---
 
@@ -118,9 +118,9 @@ ttftMs: timing.stepStartTime !== null && timing.firstTokenTime !== null
 
 | 方案 | 说明 | 证据 / 成本 |
 |---|---|---|
-| **原地演进**（建议） | 继续用本包；`cordis.patch.yml` 追加 `insert` 行，多插件各行一个入口 | 机制已具备：`package.json` 已声明 `dsh.bundle.patch`，官方文档明确「组合包 = 附带配置层的 npm 包」，**单包可插多行**；安装链 `dsh plugin add github:chemmy-11/dsh-nexus` 不变 |
+| **原地演进**（建议） | 继续用本包；`cordis.patch.yml` 追加 `insert` 行，多插件各行一个入口 | 机制已具备：`package.json` 已声明 `dsh.bundle.patch`，官方文档明确「组合包 = 附带配置层的 npm 包」，**单包可插多行**；安装链 `dsh plugin add github:chemmy-11/dsh-nautilus` 不变 |
 | monorepo 多包 | pnpm workspace 下 pulse/infer/core 各自成包 + 一个聚合 bundle 包 | 现有 CI（actionlint / check-deps / check-meta / client shim）是**单包假设**；升格需重做门禁与发布链 |
-| 新仓库 | nexus 冻结，nautilus 另起 | 与上游 R7 的隔离诉求一致，但与「验收已建立的工程纪律」重复投入；且本工作区目录已改名为 `dsh-nautilus`，事实上已按原地演进的形态在走 |
+| 新仓库 | nautilus 冻结，nautilus 另起 | 与上游 R7 的隔离诉求一致，但与「验收已建立的工程纪律」重复投入；且本工作区目录已改名为 `dsh-nautilus`，事实上已按原地演进的形态在走 |
 
 **推荐理由**：D2 的原始诉求是「不要污染 M4 主线」——这在单包内也能做到：新代码落独立子目录（如 `src/pulse/`、`src/core/`）+ 独立 patch 行，等价于隔离，且不付出重建 CI 的代价。**真正需要重估的时点是 Phase 4**（安装链 CI 化）：届时按实际包边界再判。
 
@@ -156,7 +156,7 @@ ttftMs: timing.stepStartTime !== null && timing.firstTokenTime !== null
 
 1. **判定依据**（原设计为「会话记录补 model/endpoint 字段」，现升级为逐调用）：`assistant/message.message.source.{provider,model}`。会话级 era = 该会话调用的 provider 集合 → 单值即该 era；**多值时标 `mixed`**，归因报告必须显式声明（见 OQ-P0-1）。
 2. **落库**：`metric_sample` / `metric_event` 沿用 `era` 列；`turn_read` 侧补 `provider` / `model` 列（逐调用粒度建议另立 `call_read`，与 M5 的 `call_p` 同粒度，避免污染 turn 口径）。
-3. **回溯能力**：provider 字段在**全量历史**可得（实测 18 会话 783 调用 100%），故 era 可在部署后**一次性回溯标注**，与 nexus 既有的 vault 指向回溯机制同构。
+3. **回溯能力**：provider 字段在**全量历史**可得（实测 18 会话 783 调用 100%），故 era 可在部署后**一次性回溯标注**，与 nautilus 既有的 vault 指向回溯机制同构。
 4. **对照集规则**：沿用 1-planning §4.4——`api` 时代只用「对照」（弱因果），`local` 时代才谈「归因」（强因果闭合）。
 5. **当前实测**：18 会话全部为云端 API provider（3 个），**库里尚不存在 local era 数据**——era 机制在 Phase 0–3 期间处于「已定义、待数据」状态。
 

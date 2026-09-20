@@ -81,11 +81,11 @@
 | infer | [loongsuite/dsh-plugin](https://github.com/loongsuite/dsh-plugin) | DSH 事件→OTel GenAI span 树（**含 TTFT**）——读源码确认 TTFT 推导字段 | Phase 0 源码研读 + Phase 2a 数据源参照 |
 | infer | NVIDIA [GenAI-Perf](https://github.com/triton-inference-server/perf_analyzer) | TTFT/TPOT/并发的标准化测量方法学 | Phase 2b 口径参照 |
 | infer | [frcooper/ollama-exporter](https://github.com/frcooper/ollama-exporter)（47★） | Ollama 指标化社区先例 | Phase 2b Ollama 路线口径参照 |
-| core | `node:sqlite`（nexus 已用，零依赖） | `DatabaseSync` 存储驱动，延续零依赖惯例 | 沿用，不引原生依赖 |
+| core | `node:sqlite`（nautilus 已用，零依赖） | `DatabaseSync` 存储驱动，延续零依赖惯例 | 沿用，不引原生依赖 |
 | core | [OpenLIT](https://github.com/openlit/openlit)（2.7k★） | GPU/主机指标的 nvidia-smi→OTel 管线（含解析健壮性处理） | Phase 1 前研读其实现；同时监控其走向（竞合，见 §1.1） |
 | core | OTel JS SDK（@opentelemetry/*） | 官方 SDK，OTLP 导出 | R10 兼容桥（Phase 4 可选） |
 | 工作台 | [mcp-grafana](https://github.com/grafana/mcp-grafana) | ops 数据工具化的官方参考实现（工具粒度/只读边界） | L1 工具集设计参照 |
-| 工作台 | nexus client（本仓库已有） | DSH client slots + 双 tab SVG 看板（放大/筛选/问答回看） | L2 面板复用 |
+| 工作台 | nautilus client（本仓库已有） | DSH client slots + 双 tab SVG 看板（放大/筛选/问答回看） | L2 面板复用 |
 | 工作台 | [Grafana 看板 25193](https://grafana.com/grafana/dashboards/25193-neurix-ollama-nvidia-gpu/) | Ollama+NVIDIA 联动面板布局 | L2 三层联动视图布局参照 |
 
 ---
@@ -126,7 +126,7 @@
 |---|---|---|---|---|
 | **L0 数据底座** | 三层指标统一建模（OTel GenAI 对齐）+ era 因果上下文 + 时间窗对齐管道 | 无 UI，core + SQLite | LangSmith SmithDB（本地极简版） | Phase 0–3（第一期计划不变） |
 | **L1 工具化** | ops 能力封装为 DSH 工具集：`query_metrics` / `correlated_snapshot(ts, window, era)` / `triage_bad_cases` / `annotate` / `attribution_report` | agent 可调用 | mcp-grafana、Datadog MCP——**方向相反**：大厂把云上数据暴露给外部 agent，Nautilus 把本地数据暴露给宿主内 agent | **Phase 4 重心调整**（原「bad case 封装为工具」扩为完整工具集） |
-| **L2 工作台呈现** | 双通道：client 面板（三层联动视图 + 归因报告页，复用 nexus client slots）+ 会话内工具调用可视化 | 用户看的 | ChatKit / Agent Builder 的 agentic UI 思路，但**内生零外挂** | 新增（Phase 4 与 5 之间，独立小 Phase） |
+| **L2 工作台呈现** | 双通道：client 面板（三层联动视图 + 归因报告页，复用 nautilus client slots）+ 会话内工具调用可视化 | 用户看的 | ChatKit / Agent Builder 的 agentic UI 思路，但**内生零外挂** | 新增（Phase 4 与 5 之间，独立小 Phase） |
 | **L3 自主运维循环** | 定期巡检 → 发现异常 → 建立假设 → 查数验证 → 输出报告 → **人工批准**改进动作 | agent 干活的 | Bits Investigation / Assistant Investigations；差异 = **假设驱动 + 预言检验表 + 人工门控（白盒 vs 黑盒）** | Phase 5 形态升级；era=local 时代完全兑现 |
 
 阶梯依赖：L1 依赖 L0；L2 依赖 L1（面板展示的就是工具返回的数据）；L3 依赖 L0–L2 全部。每一级独立可发布、可归档证据，延续「跑通即归档」纪律。

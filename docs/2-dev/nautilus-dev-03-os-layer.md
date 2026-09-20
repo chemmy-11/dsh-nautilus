@@ -8,11 +8,11 @@
 
 | 项 | 位置 | 说明 |
 |---|---|---|
-| 插件入口 | `src/pulse/index.ts` | **独立插件行** `id: pulse`（`cordis.patch.yml`），与 nexus 同包不同入口、同库不同表 |
+| 插件入口 | `src/pulse/index.ts` | **独立插件行** `id: pulse`（`cordis.patch.yml`），与 nautilus 同包不同入口、同库不同表 |
 | 采集层 | `src/pulse/collect.ts` | 零依赖本地族 + GPU（纯函数解析，exec 可注入） |
 | 计数器助手 | `src/pulse/counters.ts` | **常驻** PowerShell 子进程 + 行协议（见 §3.2） |
 | 存储层 | `src/pulse/store.ts` | `metric_sample` + v3→v4 迁移 + 保留清理 |
-| 只读校验路由 | `src/pulse/routes.ts` | `/api/nexus/pulse/state`、`/api/nexus/pulse/series`（UI 层导入的取数口） |
+| 只读校验路由 | `src/pulse/routes.ts` | `/api/nautilus/pulse/state`、`/api/nautilus/pulse/series`（UI 层导入的取数口） |
 | 离线验收器 | `scripts/pulse-probe.mjs` | 不经宿主跑完整采集+落库，用于证据链与 soak |
 
 ## 2. 指标口径（实现值）
@@ -76,17 +76,17 @@ CREATE INDEX idx_sample_q ON metric_sample(metric, ts);
 CREATE INDEX idx_sample_ts ON metric_sample(ts);
 ```
 
-- **同库不同表**：`~/.dsh/nexus/nexus.db`，**不动** turn 系表；`journal_mode=WAL` + `busy_timeout=3000`（与 nexus 是两个连接）。
-- **迁移 v3 → v4 且只在 v3 推进**：`user_version` 是全库共享序列——若库仍停在 v<3（nexus 未迁移），pulse **只建表不推进版本**，否则会把 nexus 的 v1–v3 迁移永久跳过。**副作用**：M5 设计文档原预留的 v4（`call_p`）顺延为 **v5**，已在此登记。
+- **同库不同表**：`~/.dsh/nautilus/nautilus.db`，**不动** turn 系表；`journal_mode=WAL` + `busy_timeout=3000`（与 nautilus 是两个连接）。
+- **迁移 v3 → v4 且只在 v3 推进**：`user_version` 是全库共享序列——若库仍停在 v<3（nautilus 未迁移），pulse **只建表不推进版本**，否则会把 nautilus 的 v1–v3 迁移永久跳过。**副作用**：M5 设计文档原预留的 v4（`call_p`）顺延为 **v5**，已在此登记。
 - **保留**：每小时 `prune` 掉早于 `retentionDays`（默认 14 天）的原始采样；**1 分钟档聚合留 Phase 3**（OQ-1）——5 s × 15 指标 ≈ 26 万行/天，14 天 ≈ 360 万行（SQLite 可承受，但长期历史需要降采样档）。
 
 ## 5. 接口（UI 层导入用）
 
 | 路由 | 说明 |
 |---|---|
-| `GET /api/nexus/pulse/state` | 采集器状态（ticks/最近一次耗时/各族可用性/助手 shell 与重启次数）+ 每指标最新值 + 库统计 |
-| `GET /api/nexus/pulse/series?metric=&windowMs=&maxPoints=` | 单指标序列（按桶取均值，点数 ≤ maxPoints） |
-| `POST /api/nexus/pulse/control` | **心跳运行时控制**（2026-09-13 新增）：`{ intervalMs: 1000\|5000 }` 定时档 · `{ mode: 'manual' }` 手动档（停定时器）· `{ sample: true }` 立即采一次（任何档位可用）。合法区间 1000–600000ms，非法即 400；只改节律，采样仍走同一条 tick 路径（同库同表，不产生第二套口径）。响应回 `{ ok, collector }` |
+| `GET /api/nautilus/pulse/state` | 采集器状态（ticks/最近一次耗时/各族可用性/助手 shell 与重启次数）+ 每指标最新值 + 库统计 |
+| `GET /api/nautilus/pulse/series?metric=&windowMs=&maxPoints=` | 单指标序列（按桶取均值，点数 ≤ maxPoints） |
+| `POST /api/nautilus/pulse/control` | **心跳运行时控制**（2026-09-13 新增）：`{ intervalMs: 1000\|5000 }` 定时档 · `{ mode: 'manual' }` 手动档（停定时器）· `{ sample: true }` 立即采一次（任何档位可用）。合法区间 1000–600000ms，非法即 400；只改节律，采样仍走同一条 tick 路径（同库同表，不产生第二套口径）。响应回 `{ ok, collector }` |
 
 **心跳档位（UI 暴露三档）**：`1 s` / `5 s` / `手动`。1 s 档只加密**本地族**的采样；计数器族与 GPU 族仍按各自周期（`countersIntervalMs` 15 s / `gpuIntervalMs` 10 s）——它们是重活，不随心跳线性加密。手动档下读数只在点「采一次」时更新。
 

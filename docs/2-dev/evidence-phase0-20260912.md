@@ -1,4 +1,7 @@
-# 证据归档 · Phase 0（2026-09-12）
+# 证据归档 · Phase 0
+
+> **命名说明（2026-09-20 追加）**：本归档成文时插件名为 `dsh-nexus`（包 `@dsh-external/dsh-nexus`）、路由前缀 `/api/nexus/*`、数据目录 `~/.dsh/nexus/`、Loader 条目 `id: nexus`；同日全仓库统一改名为 **nautilus**（包 `@dsh-external/dsh-nautilus`、`/api/nautilus/*`、`~/.dsh/nautilus/`、`id: nautilus`）。**下文命令与原始输出保留当时原文**（证据不可改写），阅读时按上述对照。旧数据目录由 `src/home.ts` 的改名迁移自动搬迁（只在新缺失时执行）。
+（2026-09-12）
 
 > 配套文档：[./nautilus-dev-01-phase0.md](./nautilus-dev-01-phase0.md)
 > 归档纪律（沿用仓库惯例）：执行命令 / 预期输出 / 实际输出 / 观察结论四段式；**只读核查**——本轮除本仓库 `docs/` 外未改动任何文件，未触碰 vault、未改动 dsh profile。

@@ -18,14 +18,14 @@
 - [ ] `npm run check:deps` + `npm run check:exports` + `node .github/scripts/check-meta.mjs` 通过（单实例合约 / prerelease 分支 / peer 覆盖 devDep pin / 命名空间插件无 default 导出 / bundle+client 双半 / files 清单）
 - [ ] 改了 `.github/workflows/` 时本地跑过 `actionlint`（+ shellcheck）：CI 内自查救不了工作流本身解析失败（0 jobs 静默形态）
 - [ ] 实弹验证：涉及面板 / 路由 / 迁移 / 事件订阅的改动，在注入器或 profile 环境实测并记录**环境四元组**（dsh 版本 + profile 名 + 装配方式 + 结果）
-- [ ] 数据兼容：schema 变更带 v{N+1} 幂等迁移，旧库（`~/.dsh/nexus/nexus.db`）可无损升级；改名/搬迁类迁移只在新缺失时执行，绝不覆盖
+- [ ] 数据兼容：schema 变更带 v{N+1} 幂等迁移，旧库（`~/.dsh/nautilus/nautilus.db`）可无损升级；改名/搬迁类迁移只在新缺失时执行，绝不覆盖
 
 ## 自查（工程红线，详见 CONTRIBUTING）
 
 - [ ] 单实例合约：in-box 包（`@deepseek-ai/*`、cordis/vendor 系）只在 peerDependencies，未进 dependencies；peer 范围带显式 prerelease 分支，且覆盖 devDep pin 的宿主版本（`check:deps` R3）
 - [ ] 宿主适配（如涉及）：契约面逐项核对（session/event · webServer.register · tools.register · 客户端 slots / 虚拟模块名），README 兼容性节与 vault 适配记录已同步
 - [ ] profile 装配：bundle 变更走 `dsh plugin add/remove`；若用过 patch 热装配，重启前已收敛（无同 `id` 双挂载）
-- [ ] vault 只读：未对 vaultRoot 写入任何文件；观测数据仅在 `~/.dsh/nexus/`
+- [ ] vault 只读：未对 vaultRoot 写入任何文件；观测数据仅在 `~/.dsh/nautilus/`
 - [ ] 事件名 / 路由前缀 / 配置项走集中常量与 Config schema，无裸字符串漂移
 - [ ] 无敏感信息（token / 密钥 / 不必要的本机绝对路径）
 - [ ] 导出形态：函数形态插件只用命名导出（`name` / `inject` / `Config` / `apply`），**无 `export default`**；可选服务用 `ctx.get(name)`，不写 `ctx.<name>`（AGENTS.md §2）

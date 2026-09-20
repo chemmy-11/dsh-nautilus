@@ -11,17 +11,23 @@
 
 | 名称 | 指什么 | 状态 |
 |---|---|---|
-| `dsh-nexus` / `@dsh-external/dsh-nexus` | **本仓库这枚插件**（原 xuegulin，2026-08-31 改名）：宿主平面观测——vault 元数据 + 会话读数 + 双面板 | 已上线运行 |
+| ~~`dsh-nexus` / `@dsh-external/dsh-nexus`~~ → **`dsh-nautilus` / `@dsh-external/dsh-nautilus`** | **本仓库这枚插件**（沿革：xuegulin → 2026-08-31 改名 nexus → **2026-09-20 统一改名为 nautilus**）：宿主平面观测——vault 元数据 + 会话读数 + 面板 | 已上线运行 |
 | Nautilus 的 **nexus 层** | 三层架构中的**应用层腿**（app layer），与 pulse（OS/GPU）、infer（模型）并列 | 本文件定义 |
 | **DSH_Nexus 神经系统规范** | **另一个未立项插件**（暂名 `dsh-nexus`）：漂移度量（输出对声明意图的遵从度，工程量） | N1 待立项 |
 
-⚠️ **第三项与第一项重名**：规范 v3.0（08-27/28）把漂移层暂名 `dsh-nexus`，而 xuegulin 于 08-31 改名 `dsh-nexus`。规范 §七明确二者「正交」（漂移度 ≠ A 投影）——重名会持续制造误读，见 **D-N0**。
+⚠️ **D-N0 现状（2026-09-20 更新）**：本仓库这枚插件已统一改名为 **nautilus**，故「第三项（漂移层暂名 `dsh-nexus`）与第一项重名」**已解除**——现在 `nexus` 一名只剩两处用法：
+
+| 剩余用法 | 说明 | 状态 |
+|---|---|---|
+| **Nautilus 的 nexus 层**（概念） | 三层架构的应用层腿，与 pulse / infer 并列 | **层名暂保留 nexus**：产品已叫 Nautilus，若层名也叫 nautilus 会与产品名撞车。**待守谷人裁决**（备选：层名改 `app`／`app-layer`，即 pulse / infer / app） |
+| **DSH_Nexus 神经系统规范**（未立项） | 漂移度量插件，暂名 `dsh-nexus` | 该项目尚未立项，命名届时再定；**当前与本仓库无重名冲突** |
 
 ---
 
 ## 1. 定位（一句话）
 
-**nexus = Nautilus 的应用层腿：把宿主会话事件变成「应用层事实」，并保留自己独立的 vault/会话看板；对 Nautilus 只承担「被聚合」，不承担「聚合」。**
+**nexus（层名）= Nautilus 的应用层腿：把宿主会话事件变成「应用层事实」，并保留自己独立的 vault/会话看板；对 Nautilus 只承担「被聚合」，不承担「聚合」。**
+（实现这层的插件现名 **nautilus**：`@dsh-external/dsh-nautilus`——层名待裁决，见 D-N0。）
 
 | 维度 | 做 | 不做 |
 |---|---|---|

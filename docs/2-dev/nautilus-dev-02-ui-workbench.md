@@ -3,7 +3,7 @@
 > 版本 **v0.1**（2026-09-12 起草，**待开发组评审**）
 > 定版依据：守谷人 2026-09-12 裁定——**S4「瑞士制图」为主皮肤**，浅/暗双主题随宿主 UI 切换；nexus 层补人工标注 UI 后设计定版。
 > 交互原型（视觉与交互的唯一权威参照）：[./ui-s4-prototype.html](./ui-s4-prototype.html)——本文档描述其落地口径，与原型冲突时以原型视觉、本文档契约为准并回写修订。
-> 上游：[../1-planning/nautilus-nexus-positioning.md](../1-planning/nautilus-nexus-positioning.md)（L2 工作台呈现 · 差异化矩阵）· AGENTS.md §3（客户端半区契约）
+> 上游：[../1-planning/nautilus-nautilus-positioning.md](../1-planning/nautilus-nautilus-positioning.md)（L2 工作台呈现 · 差异化矩阵）· AGENTS.md §3（客户端半区契约）
 
 ---
 
@@ -68,7 +68,7 @@
 | 入口 | slot / 服务 | 作用域 | 约束与事实 |
 |---|---|---|---|
 | **全局面板**（工作台的正解） | `sidebar.panellist`（list，root）+ `main` keyed slot（root）+ `ctx.layout.selectPanel(id\|null)` | **root（与会话无关）** | panellist 注册图标项 `{id, order?, label}`（id 即 MainPanelId），侧栏按钮点击 → `selectPanel(id)` 后面板**占据整个中栏**（替换会话界面，composer 天然不在场）；`null` 回会话。布局几何：左栏 264–420px（收起 56px，窗口 <1024px 自动收起）、右栏首开 45%（上限 70%）、**中栏最小 400px**。`conversation` 这个 key 为会话界面保留。已装包中无消费者（task-board 走的是 `html[data-*]` overlay 绕法），一等注册需 `dsh.client.inject` 增列 `dsh-client-ui-layout`（服务）与 `dsh-client-ui-sidebar`（slot key 类型） |
-| **会话 View 页签**（nexus 现用） | `conversation.view`（list，**session**） | 逐会话 | 顶栏页签；**blank session 不渲染该 slot**；composer 同壳（现用 body 类隐藏是合规绕法）；View 选择规则 = 持久化偏好 > `chat`，绝不取第一个注册者 |
+| **会话 View 页签**（nautilus 现用） | `conversation.view`（list，**session**） | 逐会话 | 顶栏页签；**blank session 不渲染该 slot**；composer 同壳（现用 body 类隐藏是合规绕法）；View 选择规则 = 持久化偏好 > `chat`，绝不取第一个注册者 |
 | 右侧停靠栏 | `rightbar.session` + `ctx.sidebarRight.openTab(kind)` / `openTabIn(sessionId, kind)` | 逐会话（可按 sessionId 寻址） | 页签式停靠面；宽度 45%~70%，可全屏；空间不足确定性收起 |
 | 侧栏脚部动作 | `sidebar.footer.action`（list，root） | root | Settings 旁的小动作位（列宽状态 only） |
 | 设置 | `settings.section` / 插件设置卡（`settings.plugin.item`） | root | 标准设置卡（host 半 `installSettingsSection` 配对） |
@@ -115,7 +115,7 @@
 | 假设卡 | id 加粗 + 陈述 + 状态徽标（验证中=朱红/成立=ok/证伪=灰）+ 预言关联 + 证据链/反事实展开区 |
 | 预言表 | P1–P9 中文描述 + 状态下拉 + 备注输入 + 行内保存；顶部三态计数 |
 | 报告页 | **唯一使用衬线正文处**（Georgia/思源宋栈，行高 1.95）——S2 气质的局部借用，仅限报告内容排版；元数据块网格化；人工门控朱红边框块 |
-| 抽屉 | 400px 右滑 + 遮罩；Esc/遮罩/关闭钮三路退出；打开期间暂停轮询（沿 nexus M4.2 惯例） |
+| 抽屉 | 400px 右滑 + 遮罩；Esc/遮罩/关闭钮三路退出；打开期间暂停轮询（沿 nautilus M4.2 惯例） |
 | toast | 底部居中 2.2s，用于一切 mock 写操作回执 |
 | 口径注记 | 每个图表下方必带（Fact First）：统计口径 / 混杂来源 / 诚实边界（示意数据声明） |
 
@@ -157,9 +157,9 @@
 
 | 端点 | 方法 | 语义 |
 |---|---|---|
-| `/api/nexus/m2/turn-annotations?root=` | GET | 当前视图口径的标注列表（session/turn/tag/note/author/时间戳） |
-| `/api/nexus/m2/turn-annotations` | POST | upsert（`session+turn` 唯一；带 `revision` 乐观校验，冲突 409） |
-| `/api/nexus/m2/turn-annotations` | DELETE | 按 `session+turn` 删除（软删或硬删见 OQ-U4） |
+| `/api/nautilus/m2/turn-annotations?root=` | GET | 当前视图口径的标注列表（session/turn/tag/note/author/时间戳） |
+| `/api/nautilus/m2/turn-annotations` | POST | upsert（`session+turn` 唯一；带 `revision` 乐观校验，冲突 409） |
+| `/api/nautilus/m2/turn-annotations` | DELETE | 按 `session+turn` 删除（软删或硬删见 OQ-U4） |
 
 **存储**：新表 `turn_annotation`（`session`/`turn` 复合主键 + `tag`/`note`/`author`/`ts`），走 v{N+1} 幂等迁移；`annotation` 表（预言）不动。`author` 取宿主侧可得的会话主体标识，取不到先落 `'local'`。
 
@@ -168,10 +168,10 @@
 ## 7. 工程实现对齐（客户端半区）
 
 - 形态：普通 Cordis 客户端插件，命名导出（**无 `export default apply`**，AGENTS.md §2）；`inject` 列 `slots`；slot key `conversation.view`。
-- 渲染：React `createElement`（无 JSX）；**零新依赖**；图表 SVG 自绘（沿 nexus LineChart 路线扩展联动层）；样式组件内 `<style>` 一次性注入，class 前缀已迁移为 `nt-`（U1）。
+- 渲染：React `createElement`（无 JSX）；**零新依赖**；图表 SVG 自绘（沿 nautilus LineChart 路线扩展联动层）；样式组件内 `<style>` 一次性注入，class 前缀已迁移为 `nt-`（U1）。
 - 全局面板注入（§3.0）：`dsh.client.inject` 增列 `@deepseek-ai/dsh-client-ui-layout`（`ctx.layout.selectPanel`）与 `@deepseek-ai/dsh-client-ui-sidebar`（`sidebar.panellist` slot key 类型）；panellist 项写 `options.id`、main 写 `options.key`，两值同为 `MainPanelId`（同值即「图标行 ↔ 主区面板」的绑定）。
 - 令牌层落地步骤：现 `STYLE` 中硬编码别名处改写为 `--nt-*` 引用；`--nt-*` 默认值取 `var(--dsw-alias-*, <fallback>)` 形式（宿主令牌优先，原型色为 fallback）——**亮暗切换零组件改动**的关键。
-- 状态与轮询：沿 nexus 现有 `revision` 轮询惯例；抽屉打开期间暂停（M4.2 惯例）；标注写操作走 §6 API，失败 toast 不静默。
+- 状态与轮询：沿 nautilus 现有 `revision` 轮询惯例；抽屉打开期间暂停（M4.2 惯例）；标注写操作走 §6 API，失败 toast 不静默。
 - 原型 → 组件映射：原型每视图 ≈ 一个组件函数；stat/面板/表格/抽屉先抽公共件再铺视图；era 措辞分级收口为单一 `eraWord()` 帮助函数（避免「对照/归因」裸串漂移——集中常量纪律）。
 - 门禁：五件套 + client shim 断言；`lib/` 重建后**在既有 URL 刷新**验收（postmortem 0003）。
 
@@ -186,7 +186,7 @@
 | 槽位标识字段 | `list` → `options.id`；`keyed` → `options.key`（传错抛 `keyed slot main requires options.key`，并拖垮整批浏览器半区插件集） | ⚠️ 硬契约，见 §E10 |
 | 逐会话双 tab | 同文件，`conversation.view` ×2（Vault 观测 / L 场读数） | ✅ 保留（加法，不替换） |
 | 取数口径 | §6 现成只读 API：`/state` · `/m2/state?root=all` · `/m2/annotations` · `/m2/turn-text` · `/pulse/state` | ✅ 未命中率对齐 `routes.ts:167`（`tokenIn/(tokenIn+cacheRead)`） |
-| 唯一写路径 | `POST /api/nexus/m2/annotations`（预言标注） | ✅ 失败 toast 不静默 |
+| 唯一写路径 | `POST /api/nautilus/m2/annotations`（预言标注） | ✅ 失败 toast 不静默 |
 | 缺席态 | INFER 层未接入 / 无数据 → 缺席文案与诚实边界，不写 0 | ✅ 全视图覆盖 |
 | 浏览器渲染确认 | 既有页面刷新后人工确认（device-auth 门，无自动化） | ⏳ 待守谷人 |
 | `dsh.client.inject` 新值生效 | 重启后已生效（启动图行含 layout/sidebar 两条边，§E12） | ✅ 收敛 |
@@ -217,5 +217,5 @@
 ## 关联文件
 
 - [./ui-s4-prototype.html](./ui-s4-prototype.html) — 交互原型（视觉与交互权威参照，含双主题与人工标注演示）
-- [../1-planning/nautilus-nexus-positioning.md](../1-planning/nautilus-nexus-positioning.md) — 上游：L2 阶梯、差异化矩阵
+- [../1-planning/nautilus-nautilus-positioning.md](../1-planning/nautilus-nautilus-positioning.md) — 上游：L2 阶梯、差异化矩阵
 - `../AGENTS.md` §3/§7 — 客户端半区契约、GUI 验收红线；`../../CONTRIBUTING.md` — 工程约定权威

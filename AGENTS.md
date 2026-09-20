@@ -10,13 +10,13 @@
 
 ## 0. 项目是什么
 
-- **观测插件**（`@dsh-external/dsh-nexus`，bundle 形态）：vault 元数据快照 + 编辑统计 + 逐轮会话遥测 + L 场读数面板。扩展方向见 `docs/1-planning/`（三层指标 pulse / infer / nexus + era 因果上下文 + Agentic Ops 工作台）。
+- **观测插件**（`@dsh-external/dsh-nautilus`，bundle 形态）：vault 元数据快照 + 编辑统计 + 逐轮会话遥测 + L 场读数面板。扩展方向见 `docs/1-planning/`（三层指标 pulse / infer / nexus + era 因果上下文 + Agentic Ops 工作台）。
 - 定位红线：**观测，不干预**。不改宿主源码、不改宿主行为、不写用户数据；归因结论人工主导，AI 只辅助检索与编码。
 
 ## 1. 五条不可违（违反即回滚，不看进度）
 
 1. **单实例合约**：in-box 包（`@deepseek-ai/*`）只进 `peerDependencies`，严禁 `dependencies`；peer 范围必须带**显式 prerelease 分支**且**覆盖 devDep 的 pin**；非 scoped 的 `cordis`/`schemastery` 不在 dsh 安装闭包内，一律用 `@deepseek-ai/cordis` / `@deepseek-ai/schemastery`。`npm run check:deps` 自动校验（R1/R2/R3）。
-2. **vault 只读**：对 `vaultRoot` 零写入（不创建、不修改任何 vault 内文件）；观测数据与配置只在 `~/.dsh/nexus/`。
+2. **vault 只读**：对 `vaultRoot` 零写入（不创建、不修改任何 vault 内文件）；观测数据与配置只在 `~/.dsh/nautilus/`。
 3. **迁移幂等**：SQLite schema 变更走 v{N+1} 顺序迁移，可重复执行；改名/搬迁类迁移仅在新缺失时执行，**绝不覆盖既有数据**。
 4. **集中常量**：事件名 / 路由前缀 / API 路径集中定义（范例：`src/index.ts` 的 `SESSION_EVENT`、`src/routes.ts` 的 `API_PREFIX`），禁止裸字符串散落——拼写漂移没有编译期保护。
 5. **profile 卫生**：装配只走 `dsh plugin add/remove` + `dsh --profile <name> --dump-config` 验证；禁手改 profile 的 `package.json`、禁在 profile 内手动 install。热装配只在重启会中断会话时允许，且必须**重启前收敛**（patch 层与 bundle 层同 `id` 会双挂载，`webServer.register` 对重复 `(kind,path)` 直接抛错）。
@@ -35,7 +35,7 @@
 ## 3. 客户端半区（browser half）
 
 - **两半同包**：host 在 `src/`、浏览器在 `src/client/`，以 `./client` 子路径导出并用 `dsh.client` 声明；产物必须是 loader 的 **lazy-CJS factory**（本仓库由 `scripts/build-client.mjs` 产出，`window.__ModuleLoader__.load`）。
-- **单 Loader 条目（硬契约）**：带 `dsh.client` 的包**整个包只允许一个 Loader 条目**——bundle patch 里插两行（如 `@dsh-external/dsh-nexus` + `.../pulse`）或 profile patch 再手动 insert 一次，会让 client-modules 组合期抛 `resolves from multiple active Loader sources`，后果是 **`dsh web` 直接启动失败**。多能力用**单条目 + 子插件挂载**（`ctx.plugin(pulse, config.pulse)`），子配置进父插件 `Config` 的子节；`check-meta` 守条目数，测试守子插件路由。
+- **单 Loader 条目（硬契约）**：带 `dsh.client` 的包**整个包只允许一个 Loader 条目**——bundle patch 里插两行（如 `@dsh-external/dsh-nautilus` + `.../pulse`）或 profile patch 再手动 insert 一次，会让 client-modules 组合期抛 `resolves from multiple active Loader sources`，后果是 **`dsh web` 直接启动失败**。多能力用**单条目 + 子插件挂载**（`ctx.plugin(pulse, config.pulse)`），子配置进父插件 `Config` 的子节；`check-meta` 守条目数，测试守子插件路由。
 - 客户端插件就是普通 Cordis 插件：`Context` 来自 `@deepseek-ai/cordis`（`@deepseek-ai/dsh-client-runtime` 在 0.1.5 已移除，属死名）；`ctx.slots` 由 `@deepseek-ai/dsh-client-ui-renderer` 提供，slot key 类型由归属 UI 包增强声明，`slots.inject(key)` + `slots.register(def, Component)`。
 - **注册选项随槽位 kind 变**：`list` 槽（`conversation.view` / `sidebar.panellist`）用 `id`，`keyed` 槽（`main`）用 **`key`**；给错字段抛 `keyed slot main requires options.key`，且**整批浏览器半区插件集挂载失败**（旁证：ui-conversation 注册主区为 `{ name: 'main', key: 'conversation' }`）。全局面板 = `sidebar.panellist` 图标行 + `main` 面板，两值同为 `MainPanelId`。
 - `dsh.client.inject` 是**信息性**包名边（列 UI 提供方包名）；`dsh.client.external` 才是**硬模块边**——非基线模块的同步 `require` 不列进去就是运行时模块缺失。
@@ -54,7 +54,7 @@
 
 ## 5. 观测数据层
 
-- **存储**：`node:sqlite`（`DatabaseSync`，零依赖），库在 `~/.dsh/nexus/nexus.db`，schema 版本记在 `PRAGMA user_version`。
+- **存储**：`node:sqlite`（`DatabaseSync`，零依赖），库在 `~/.dsh/nautilus/nautilus.db`，schema 版本记在 `PRAGMA user_version`。
 - **采集**：官方 `session/event` 直采（零宿主源码修改）；事件信封 `{type, seq, time, data}`；逐轮用量 `usage.{inputTokens,outputTokens,cacheReadTokens}`。
 - **已实测可得**（Phase 0，见 `docs/2-dev/`）：TTFT = `assistant/message.data.stream` 首块时间 − `step/start` 时间（宿主 GUI 同式）；model/endpoint = `assistant/message.message.source.{provider,model}`（逐调用）。新增指标先查这两处，别急着自己打点。
 - **不得阻塞主循环**：全量扫描 / 分析 / P 计算走后台串行队列 + 增量水位（`file_size` 之类），一次一个会话，处理完释放。

@@ -50,7 +50,7 @@
 | npm / tarball | `prepack`（`npm pack` / `publish` 前） | 无条件构建，产物随 tarball 分发 |
 
 - **动构建入口或产物路径（新增/移除钩子、改 `files` 白名单、改 `main`/`exports`）时，`build` / `prepack` / `prepare` 三个钩子一起核**，并同 PR 更新 README 双语安装节与本节。
-- **`allowBuilds` 是硬门槛**：实测未放行时，只有 `prepack` 的包会被 pnpm **静默跳过构建**（装出来没有 `lib/`，加载期才炸）；声明条件 `prepare` 后 pnpm 改为直接报 `ERR_PNPM_GIT_DEP_PREPARE_NOT_ALLOWED` 并给出确切的键（形如 `@dsh-external/dsh-nexus@git+…#<sha>`）。放行等同授权该包在安装时执行构建代码，按官方建议**锁定 commit SHA**。
+- **`allowBuilds` 是硬门槛**：实测未放行时，只有 `prepack` 的包会被 pnpm **静默跳过构建**（装出来没有 `lib/`，加载期才炸）；声明条件 `prepare` 后 pnpm 改为直接报 `ERR_PNPM_GIT_DEP_PREPARE_NOT_ALLOWED` 并给出确切的键（形如 `@dsh-external/dsh-nautilus@git+…#<sha>`）。放行等同授权该包在安装时执行构建代码，按官方建议**锁定 commit SHA**。
 
 ## 宿主版本适配（dsh 升级流程）
 
@@ -70,12 +70,12 @@
 ## 工程红线（事故教训固化）
 
 1. **单实例合约**：in-box 包（`@deepseek-ai/*`：宿主族 `@deepseek-ai/dsh-*` 与 `@deepseek-ai/cordis`/`@deepseek-ai/schemastery`；非 scoped 的 `cordis`/`schemastery` 不在 dsh 安装闭包内、不要用）只进 peerDependencies，严禁 dependencies；peer 范围带显式 prerelease 分支（当前 `@deepseek-ai/dsh-host-webserver`: `^0.1.1-rc.2 || ^0.1.2-alpha.2 || ^0.1.5-rc.1 || ^0.1.6-alpha.1`；**每个分支都必须自带预发布标签**——裸 `^0.1.6` 会静默排除 alpha 线，`check:deps` R4 拦此），且 **devDep pin 的版本必须落在 peer 范围内**（`check:deps` R3 自动校验）；遇「peer 装不上」查解析路径，禁止塞 dependencies 修复（hoist 双实例 → 模块级 Symbol 错位 → 全 tool 链崩溃）。
-2. **vault 只读**：对 vaultRoot 零写入（不创建 / 不修改任何 vault 内文件）；观测数据与配置只在 `~/.dsh/nexus/`。
+2. **vault 只读**：对 vaultRoot 零写入（不创建 / 不修改任何 vault 内文件）；观测数据与配置只在 `~/.dsh/nautilus/`。
 3. **迁移幂等**：SQLite schema 变更走 v{N+1} 顺序迁移，可重复执行；改名 / 搬迁类迁移仅在新缺失时执行，绝不覆盖已有数据。
 4. **集中常量**：事件名 / 路由前缀 / API 路径集中定义，避免裸字符串拼写漂移失去编译期保护。
 5. **profile 卫生**：装配变更只走 `dsh plugin add/remove` + `dsh --profile <name> --dump-config` 验证；禁手改 profile 的 package.json、禁在 profile 内手动 install。
    **热装配例外**（重启会中断会话时的本地调试）：只允许在 profile 的 `cordis.patch.yml` 用户层用 `insert` 挂本地路径（`patchReload: live` 保存即生效），且 (a) 不动 bundle 列表；(b) **重启前必须收敛**——删掉 patch 行、改走 `dsh plugin add`，否则 bundle 层与 patch 层同 `id` 双挂载（`webServer.register` 对重复 `(kind,path)` 直接抛错）；(c) 跨重启的正式装配一律走 bundle。
-6. **单 Loader 条目**（带客户端半区的包）：本包声明 `dsh.client`，因此**整个包只允许一个 Loader 条目**。在 bundle patch / profile patch 里为同一包插两行（例如 `@dsh-external/dsh-nexus` + `@dsh-external/dsh-nexus/pulse`，或再用绝对路径手动 insert 一次）会让 client-modules 组合期抛
+6. **单 Loader 条目**（带客户端半区的包）：本包声明 `dsh.client`，因此**整个包只允许一个 Loader 条目**。在 bundle patch / profile patch 里为同一包插两行（例如 `@dsh-external/dsh-nautilus` + `@dsh-external/dsh-nautilus/pulse`，或再用绝对路径手动 insert 一次）会让 client-modules 组合期抛
    `client-modules: package <name> resolves from multiple active Loader sources`，
    后果不是降级而是**宿主启动失败**（2026-09-13 实测：`dsh web` 起不来，且症状离根因很远）。
    **多能力的正确形态**：单条目 + 源码内子插件挂载（`ctx.plugin(pulse, config.pulse)`），配置收进父插件 `Config` 的一个子节。

@@ -1,5 +1,7 @@
 # 证据归档 · Phase 1（pulse OS/GPU 层）
 
+> **命名说明（2026-09-20 追加）**：本归档成文时插件名为 `dsh-nexus`（包 `@dsh-external/dsh-nexus`）、路由前缀 `/api/nexus/*`、数据目录 `~/.dsh/nexus/`、Loader 条目 `id: nexus`；同日全仓库统一改名为 **nautilus**（包 `@dsh-external/dsh-nautilus`、`/api/nautilus/*`、`~/.dsh/nautilus/`、`id: nautilus`）。**下文命令与原始输出保留当时原文**（证据不可改写），阅读时按上述对照。旧数据目录由 `src/home.ts` 的改名迁移自动搬迁（只在新缺失时执行）。
+
 > 配套文档：[./nautilus-dev-03-os-layer.md](./nautilus-dev-03-os-layer.md)
 > **环境四元组**：dsh `0.1.5-rc.2` · profile `web`（§E1–E7 走离线探针；**§E9 起已热装配**，§E10 为客户端半区端上校验）· 运行方式：Node 直调 `lib/pulse/*`（不经宿主）· Windows 11 / Windows PowerShell 5.1（**本机无 pwsh**）/ RTX 5060 Laptop 8GB / Node v24.18.0
 > 归档纪律：执行命令 / 预期 / 实际 / 观察结论；**只读验收**（数据写入探针临时库或 `$TEMP`，不污染 `~/.dsh/nexus/nexus.db`）。
@@ -389,6 +391,36 @@ client-modules: package @dsh-external/dsh-nexus resolves from multiple active Lo
 **⑤ 记录**：本文件 + `README.md`/`README.en.md`「兼容性」双向更新（宿主支持矩阵 + 适配验证）+ `CONTRIBUTING.md` 红线 1 的 peer 范围。
 
 **诚实边界**：① 实装由守谷人手动执行（本次未代装，profile 保持原样）；② 探测在 `.dsh-next\nexus\nexus.db` 建了库并写入少量采样（新家自有数据，装插件后可继续用；要干净可删该目录）；③ DOM 仍未由我观测（OQ-U6）；④ 稳定版宿主仍在运行上一版宿主代码（`/pulse/control` 与 `mode/intervalMs` 需重启 3080 才生效——上一轮遗留项）；⑤ 1 s 档开销仍未实测。
+
+---
+
+## E17 全仓库统一改名 nexus → nautilus（2026-09-20，守谷人指派）
+
+**触发**：守谷人「现在名称全部统一为 nautilus」。
+
+**改动面（38 文件 / 312 处自动替换 + 手工语义更新）**
+
+| 维度 | 旧 | 新 |
+|---|---|---|
+| 包名 | @dsh-external/dsh-nexus | **@dsh-external/dsh-nautilus** |
+| bundle patch 条目 | id: nexus | **id: nautilus** |
+| 路由前缀 | /api/nexus/* | **/api/nautilus/*** |
+| 数据目录 / 库 | ~/.dsh/nexus/nexus.db | **~/.dsh/nautilus/nautilus.db** |
+| 客户端插件 id | @dsh-external/dsh-nexus-panel 等 | …-nautilus-panel 等 |
+| 日志前缀 / 事件名 | [nexus] · nexus/vault-root-changed | [nautilus] · nautilus/vault-root-changed |
+| 类型名 | NexusStore / NexusState / NexusView / registerNexusRoutes | NautilusStore / NautilusState / NautilusView / registerNautilusRoutes |
+
+**冻结项（未改名，待裁决）**：**概念名「nexus 层」**（三层架构的 app 层腿，8 处：`nexus 层` / `pulse / infer / nexus` / `NEXUS/INFER/PULSE`）。理由：产品已叫 Nautilus，层名若也叫 nautilus 会与产品名正面撞车——已在 `docs/1-planning/nautilus-nexus-positioning.md` 的 **D-N0** 记为待裁决（备选：层名改 `app`／`app-layer`，即 pulse / infer / app）。
+
+**改名迁移（新增 `src/home.ts`）**：`resolveDataDir(dshHome)` 负责 xuegulin/xuegu.db → nexus/nexus.db → nautilus/nautilus.db 的幂等搬迁——**只在新目录缺失时执行**（红线 3：绝不覆盖既有数据）；搬迁失败（旧实例仍持有句柄 → Windows EBUSY）时**回落旧路径继续用**并告警，下次重启再迁——不让库打不开，也不让数据分叉。
+
+**装配收敛**：包名变了 → 已装 profile 的 `dsh.profile.bundles` 会指向不存在的包（重启即起不来）。已按 sanctioned 通道换名：`dsh plugin --profile web remove @dsh-external/dsh-nexus` + `add link:L:/dsh-nautilus` → `--dump-config` 得**单条目** `- id: nautilus` / `name: "@dsh-external/dsh-nautilus"`。
+
+**实测（dsh 0.1.6-alpha.2，3099 进程内叠加探测，核完已停）**：启动日志 `[nautilus] Pulse OS/GPU 层已挂载（子插件）`、`db=…\.dsh-next\nautilus\nautilus.db`（**迁移自动完成**）；启动图行 `@dsh-external/dsh-nautilus`（无旧名残留）；bundle 143663B 内含 `sidebar.panellist` / `nt-hb-lab` / `/api/nautilus/pulse/control` / `/api/nautilus/state`；`/api/nautilus/{state,vault,lfield,m2/state,m2/analysis,m2/annotations,pulse/state}` 全 **200**；旧前缀 `/api/nexus/state` → **404**（预期）；心跳 `{mode:manual,sample:true}` → 200。数据目录核对：`nexus/` 已消失、`nautilus/nautilus.db` 131072B，库内 `metric_sample=54` / `user_version=4`（无损）。六件套全绿（`test` 22/22，`check-meta` 已按新包名核 patch）。
+
+**破坏性影响（必须知道）**：包名与路由前缀都是 **breaking**——① 两个宿主（稳定 3080 / dsh-next 3081）**都要重启**才会切到新名与新前缀；② 重启前刷新页面会看到面板数据缺席（客户端已指向 `/api/nautilus/*`，运行中的宿主仍是旧路由），这是预期而非故障；③ 稳定版宿主重启时才会执行 `~/.dsh/nexus → nautilus` 的搬迁（当前该目录仍存在，正常运行中）。
+
+**诚实边界**：① DOM 仍未由我观测（OQ-U6）；② 稳定版宿主**重启后**的行为（新名加载 + 目录迁移）我未实测（重启会中断本会话，需守谷人执行）；③ 「nexus 层」概念名保留是**我的判断**，未获裁决。
 
 ---
 

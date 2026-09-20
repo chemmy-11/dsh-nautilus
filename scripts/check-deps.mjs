@@ -1,5 +1,5 @@
 /**
- * @dsh-external/dsh-nexus — 依赖合规 lint（CI/本地同款，2026-08 事故教训）。
+ * @dsh-external/dsh-nautilus — 依赖合规 lint（CI/本地同款，2026-08 事故教训）。
  * 规则：
  *  R1 单实例合约：dependencies 禁止 in-box 包（@deepseek-ai/* 与 cordis/cosmokit/schemastery）；
  *  R2 预发布分支：@deepseek-ai/dsh* 宿主族包的 peerDependencies 范围必须含显式 '-rc' 下限

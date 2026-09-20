@@ -1,12 +1,12 @@
 /**
- * @dsh-external/dsh-nexus — M3-F.1 A 腿二自评工具（agent 每轮即时自评三行）。
+ * @dsh-external/dsh-nautilus — M3-F.1 A 腿二自评工具（agent 每轮即时自评三行）。
  * 守谷人拍板（2026-08-25）：agent 每轮自评——推理态在每轮结束时调用本工具：
  *   clarity 0–1（清晰度增量 ≈ A·Δτ 代理）/ defense none|light|heavy（Γ 代理，P3）/ declaration 0|1（P2 弱检测）。
  * 装配纪律：**零运行时第三方 import**（dsh-tools 未装配，运行时 import 会崩溃——底座教训）；
  * 工具定义按 defineTool 返回形状手写（JSON Schema + execute），duck-type 经 ctx.tools.register。
  */
 
-/** store 最小接口（主线程 NexusStore 满足）。 */
+/** store 最小接口（主线程 NautilusStore 满足）。 */
 export interface StoreLike {
   turnReads(limit: number): Array<{ session: string; turn: number }>
   setSelfCheck(session: string, turn: number, check: { clarity: number; defense: 'none' | 'light' | 'heavy'; declaration: 0 | 1 }): void

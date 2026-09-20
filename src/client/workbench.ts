@@ -1,12 +1,12 @@
 /**
- * @dsh-external/dsh-nexus — Nautilus 工作台（全局面板，S4「瑞士制图」）。
+ * @dsh-external/dsh-nautilus — Nautilus 工作台（全局面板，S4「瑞士制图」）。
  *
  * 规格：docs/2-dev/nautilus-dev-02-ui-workbench.md（§2 令牌 / §3 五视图+抽屉+era 条 / §4 组件 / §5 人工标注 / §6 数据契约）
  * 入口：sidebar.panellist 图标（root）+ main keyed 面板（root），两者 id 同值 = MainPanelId（§3.0 实测契约）。
  *
  * 数据口径（只读；唯一写操作是预言标注 POST /m2/annotations）：
- *   · NEXUS 层：/api/nexus/state（vault 总量/今日/本周）、/api/nexus/m2/state（逐轮读数/曲线/自评覆盖）
- *   · PULSE 层：/api/nexus/pulse/state（每指标最新值 + 采集器健康度）
+ *   · NEXUS 层：/api/nautilus/state（vault 总量/今日/本周）、/api/nautilus/m2/state（逐轮读数/曲线/自评覆盖）
+ *   · PULSE 层：/api/nautilus/pulse/state（每指标最新值 + 采集器健康度）
  *   · INFER 层：Phase 2a 才落库（TTFT/provider）——当前所有视图显示缺席态，不编造、不写 0 假读数
  * 空数据是正常态（本阶段允许）。
  */
@@ -147,7 +147,7 @@ export type PulseState = {
   latest: PulsePoint[]
 }
 export type DaySummary = { edits: number; created: number; modified: number; deleted: number }
-export type NexusState = { activeRoot: string; totals: { totalFiles: number; totalChars: number }; today: DaySummary; week: DaySummary; recent: Array<{ ts: number; path: string; kind: string }> }
+export type NautilusState = { activeRoot: string; totals: { totalFiles: number; totalChars: number }; today: DaySummary; week: DaySummary; recent: Array<{ ts: number; path: string; kind: string }> }
 export type M2Point = { session: string; turn: number; ts: number; tokenIn: number; tokenOut: number; cacheRead: number; durationMs: number | null; tps: number | null; question?: string | null; clarity?: number | null; defense?: string | null; declaration?: number | null }
 export type M2State = {
   pointing: string
@@ -361,7 +361,7 @@ export function Spark(props: {
 
 /**
  * 交互曲线（NEXUS 轮次专用；OS 层不用此组件——PULSE 是等间隔连续采样，无采样点语义）。
- * S4 定稿视觉 + 原 dsh-nexus 交互回归：
+ * S4 定稿视觉 + 原 dsh-nautilus 交互回归：
  *   · 滚轮放缩（以指针为锚点，min 4 点，双击复位）——wheel 需非 passive 监听才能 preventDefault；
  *   · 右键按住拖动 = 平移时间窗（contextmenu 已抑制）；
  *   · 悬停采样点 → 竖参考线 + 简略看板（该轮读数摘要；上缘/右缘自动翻面）；
@@ -559,8 +559,8 @@ export function CurveChart(props: {
 
 // ── 视图 1：总览 ──────────────────────────────────────────────────────────────
 
-export function OverviewView(props: { nexus: NexusState | null; m2: M2State | null; pulse: PulseState | null; vault: VaultInfo | null; lfield: LfieldInfo | null; rescanning: boolean; onRescan: () => void; onOpenTurn: (s: string, t: number) => void }): ReactNode {
-  const { nexus, m2, pulse } = props
+export function OverviewView(props: { nautilus: NautilusState | null; m2: M2State | null; pulse: PulseState | null; vault: VaultInfo | null; lfield: LfieldInfo | null; rescanning: boolean; onRescan: () => void; onOpenTurn: (s: string, t: number) => void }): ReactNode {
+  const { nautilus, m2, pulse } = props
   const n = m2?.totals
   const hr = n?.hitRate
   const last = pulse?.collector.lastTickTs ?? null
@@ -568,8 +568,8 @@ export function OverviewView(props: { nexus: NexusState | null; m2: M2State | nu
   const stale = lagMs !== null && lagMs > 180000
   const rows: Array<{ layer: string; label: string; value: string; note?: string; warn?: boolean }> = [
     { layer: 'PULSE', label: '采集器心跳', value: last === null ? '未采样' : fmtTime(last), note: pulse === null ? 'pulse 未装配' : 'tick ' + String(pulse.collector.ticks) + ' · 库内 ' + String(pulse.db.rows) + ' 行 · shell=' + String(pulse.collector.shellPath === null ? '无' : pulse.collector.shellPath), warn: stale },
-    { layer: 'NEXUS', label: 'vault 总量', value: nexus === null ? '—' : fmtBytes(nexus.totals.totalChars) + ' / ' + String(nexus.totals.totalFiles) + ' 文件', note: nexus === null ? '读取中或接口缺席' : 'root=' + nexus.activeRoot },
-    { layer: 'NEXUS', label: '今日写入', value: nexus === null ? '—' : String(nexus.today.edits) + ' 次', note: nexus === null ? '—' : '新建 ' + String(nexus.today.created) + ' · 修改 ' + String(nexus.today.modified) + ' · 删除 ' + String(nexus.today.deleted) },
+    { layer: 'NEXUS', label: 'vault 总量', value: nautilus === null ? '—' : fmtBytes(nautilus.totals.totalChars) + ' / ' + String(nautilus.totals.totalFiles) + ' 文件', note: nautilus === null ? '读取中或接口缺席' : 'root=' + nautilus.activeRoot },
+    { layer: 'NEXUS', label: '今日写入', value: nautilus === null ? '—' : String(nautilus.today.edits) + ' 次', note: nautilus === null ? '—' : '新建 ' + String(nautilus.today.created) + ' · 修改 ' + String(nautilus.today.modified) + ' · 删除 ' + String(nautilus.today.deleted) },
     { layer: 'NEXUS', label: '窗口缓存命中率', value: hr === null || hr === undefined ? '—' : (hr * 100).toFixed(1) + '%', note: n === undefined ? '—' : '读 ' + String(n.cacheRead) + ' / 未命中 ' + String(n.missToken) + ' 令牌 · ' + String(n.turns) + ' 轮', warn: hr !== null && hr !== undefined && hr < 0.5 },
     { layer: 'INFER', label: '推理时延 TTFT', value: '—', note: 'Phase 2a 采集（provider 侧未接入）', warn: false },
     { layer: 'INFER', label: '层间对齐度', value: '—', note: '需 INFER 落地后方可计算 τ_e', warn: false },
@@ -633,8 +633,8 @@ export function OverviewView(props: { nexus: NexusState | null; m2: M2State | nu
         createElement('table', { className: 'nt-tbl' },
           createElement('tbody', null,
             ...[
-              ['当前指向', props.vault === null ? (nexus === null ? '—' : shortRoot(nexus.activeRoot)) : (props.vault.known.find((k) => k.root === (props.vault === null ? '' : props.vault.active))?.displayName ?? shortRoot(props.vault.active)), 'NEXUS'],
-              ['完整路径', props.vault === null ? (nexus?.activeRoot ?? '—') : props.vault.active, ''],
+              ['当前指向', props.vault === null ? (nautilus === null ? '—' : shortRoot(nautilus.activeRoot)) : (props.vault.known.find((k) => k.root === (props.vault === null ? '' : props.vault.active))?.displayName ?? shortRoot(props.vault.active)), 'NEXUS'],
+              ['完整路径', props.vault === null ? (nautilus?.activeRoot ?? '—') : props.vault.active, ''],
               ['可达性', props.vault === null ? '—' : (props.vault.exists ? '存在' : '不存在') + ' · ' + (props.vault.readable ? '可读' : '不可读'), ''],
               ['已知根', props.vault === null ? '—' : String(props.vault.known.length) + ' 个（含历史指向）', ''],
             ].map(([k, v, tag]) => createElement('tr', { key: k },
@@ -653,7 +653,7 @@ export function OverviewView(props: { nexus: NexusState | null; m2: M2State | nu
       title: 'L 场读数（独立指向）', fig: 'FIG.08',
       note: 'M4-L：L 场读数的归属根与 vault 编辑统计**相互独立**（同一会话在不同根下读数分开计）。此处只呈现计数，读数明细在曲线与抽屉里。',
       children: props.lfield === null
-        ? Empty({ text: 'L 场接口不可用（/api/nexus/lfield）' })
+        ? Empty({ text: 'L 场接口不可用（/api/nautilus/lfield）' })
         : createElement('div', null,
           createElement('table', { className: 'nt-tbl' },
             createElement('thead', null, createElement('tr', null, ...['归属根', '读数条数'].map((h) => createElement('th', { key: h }, h)))),
@@ -685,7 +685,7 @@ export function curveLabel(key: CurveKey): string { return key === 'miss' ? '未
 export type AnalysisRow = { session: string; shape: string; tauE: number | null; burst: { fromTurn: number; toTurn: number; direction: string } | null }
 export const SHAPE_LABEL: Record<string, string> = { sigmoid: 'S 形', 'inverse-sigmoid': '反 S 形', rising: '上升', falling: '下降', unknown: '形态未定' }
 
-/** M4.3 vault 指向（GET /api/nexus/vault）。 */
+/** M4.3 vault 指向（GET /api/nautilus/vault）。 */
 export type VaultInfo = {
   revision: number
   active: string
@@ -693,7 +693,7 @@ export type VaultInfo = {
   readable: boolean
   known: Array<{ root: string; displayName: string | null; active: number; confirmedAt: number | null }>
 }
-/** M4-L L 场读数指向与计数（GET /api/nexus/lfield）。 */
+/** M4-L L 场读数指向与计数（GET /api/nautilus/lfield）。 */
 export type LfieldInfo = {
   revision: number
   active: string
@@ -732,11 +732,11 @@ export function CurveView(props: {
   const [range, setRange] = useState<7 | 30>(7)
   const [full, setFull] = useState(false)
   // 数据源：NEXUS 轮次（事件驱动，非等间隔）/ PULSE 采样（等间隔，斜率可读）
-  const [source, setSource] = useState<'nexus' | 'pulse'>('nexus')
+  const [source, setSource] = useState<'nautilus' | 'pulse'>('nautilus')
   const metrics = (props.pulse?.latest ?? []).map((l) => l.metric)
   const [picked, setPicked] = useState<string>('')
   const metric = picked !== '' && metrics.includes(picked) ? picked : (metrics[0] ?? '')
-  const series = useJson<PulseSeries>('/api/nexus/pulse/series?metric=' + encodeURIComponent(metric) + '&windowMs=3600000&maxPoints=240', metric === '' || source !== 'pulse' || props.paused === true, 60000)
+  const series = useJson<PulseSeries>('/api/nautilus/pulse/series?metric=' + encodeURIComponent(metric) + '&windowMs=3600000&maxPoints=240', metric === '' || source !== 'pulse' || props.paused === true, 60000)
   // 全屏：Esc 退出（图表高度由 CurveChart 自测容器，无需宿主侧实测）
   useEffect(() => {
     if (!full) return undefined
@@ -846,10 +846,10 @@ export function CurveView(props: {
   }
   return createElement('div', null,
     createElement('div', { className: 'nt-wb-seg', style: { marginBottom: 10 } },
-      createElement('button', { className: source === 'nexus' ? 'on' : '', onClick: () => setSource('nexus') }, 'NEXUS 轮次'),
+      createElement('button', { className: source === 'nautilus' ? 'on' : '', onClick: () => setSource('nautilus') }, 'NEXUS 轮次'),
       createElement('button', { className: source === 'pulse' ? 'on' : '', onClick: () => setSource('pulse') }, 'PULSE 采样'),
     ),
-    source === 'nexus'
+    source === 'nautilus'
       ? createElement('div', null,
         createElement('div', { style: { marginBottom: 10, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' } },
           metricSeg,
@@ -959,7 +959,7 @@ export function ProphecyView(props: { ann: AnnotationsState | null; m2: M2State 
   const save = async (status: string): Promise<void> => {
     setBusy(cur)
     try {
-      const r = await fetch('/api/nexus/m2/annotations', {
+      const r = await fetch('/api/nautilus/m2/annotations', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ prophecy: cur, status, note: note === '' ? (mine?.note ?? null) : note }),
@@ -974,7 +974,7 @@ export function ProphecyView(props: { ann: AnnotationsState | null; m2: M2State 
       '标注是解释层：它记录人对读数的解读，永不写回读数本身（读数不可变）。标注表与 pulse 表同库，POST 是唯一写路径。'),
     Panel({
       title: '预言标注', fig: 'FIG.05',
-      note: 'P1–P9 为登记在案的预言清单；状态与备注存于 nexus_ui_annotation。',
+      note: 'P1–P9 为登记在案的预言清单；状态与备注存于 annotation。',
       children: createElement('div', null,
         createElement('div', { style: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' } },
           createElement('select', { className: 'nt-select', value: cur, onChange: (e: { target: { value: string } }) => { setCur(e.target.value); setNote('') } },
@@ -1005,8 +1005,8 @@ export function ProphecyView(props: { ann: AnnotationsState | null; m2: M2State 
 }
 // ── 视图 5：报告 ──────────────────────────────────────────────────────────────
 
-export function ReportView(props: { nexus: NexusState | null; m2: M2State | null; pulse: PulseState | null; era: Era; ann: AnnotationsState | null; analysis: AnalysisRow[] | null; vault: VaultInfo | null }): ReactNode {
-  const { nexus, m2, pulse, era } = props
+export function ReportView(props: { nautilus: NautilusState | null; m2: M2State | null; pulse: PulseState | null; era: Era; ann: AnnotationsState | null; analysis: AnalysisRow[] | null; vault: VaultInfo | null }): ReactNode {
+  const { nautilus, m2, pulse, era } = props
   const n = m2?.totals
   const curve = m2?.curve ?? []
   const from = curve.length === 0 ? null : curve[0].ts
@@ -1018,7 +1018,7 @@ export function ReportView(props: { nexus: NexusState | null; m2: M2State | null
   const shapeText = Object.entries(shapeCount).sort((a, b) => b[1] - a[1]).map(([k, v]) => (SHAPE_LABEL[k] ?? k) + ' ' + String(v)).join(' · ')
   const taus = rows.map((r) => r.tauE).filter((v): v is number => v !== null && Number.isFinite(v)).sort((a, b) => a - b)
   const tauMedian = taus.length === 0 ? null : taus[Math.floor(taus.length / 2)]
-  const pointing = props.vault === null ? (nexus?.activeRoot ?? '—') : (props.vault.known.find((k) => k.root === (props.vault === null ? '' : props.vault.active))?.displayName ?? shortRoot(props.vault.active))
+  const pointing = props.vault === null ? (nautilus?.activeRoot ?? '—') : (props.vault.known.find((k) => k.root === (props.vault === null ? '' : props.vault.active))?.displayName ?? shortRoot(props.vault.active))
   const save = (name: string, text: string, mime: string): void => {
     if (typeof document === 'undefined') return
     const url = URL.createObjectURL(new Blob([text], { type: mime }))
@@ -1032,7 +1032,7 @@ export function ReportView(props: { nexus: NexusState | null; m2: M2State | null
     a.remove()
     setTimeout(() => URL.revokeObjectURL(url), 0)
   }
-  const snapshot = { generatedAt: new Date().toISOString(), era, claiming: eraWord(era), nexus, m2, pulse, annotations: props.ann, analysis: props.analysis, vault: props.vault }
+  const snapshot = { generatedAt: new Date().toISOString(), era, claiming: eraWord(era), nautilus, m2, pulse, annotations: props.ann, analysis: props.analysis, vault: props.vault }
   const md = [
     '# Nautilus 观测报告（中间报告）',
     '',
@@ -1040,7 +1040,7 @@ export function ReportView(props: { nexus: NexusState | null; m2: M2State | null
     '- era：' + era + '（措辞档位：' + eraWord(era) + '）',
     '- 观测窗口：' + win,
     '- 读数样本：' + String(curve.length) + ' 轮 / ' + String(props.m2 === null ? 0 : Object.keys(props.m2.sessionMeta).length) + ' 会话',
-    '- 层在场：NEXUS ' + (nexus === null ? '缺席' : '在场') + ' · PULSE ' + (pulse === null ? '缺席' : '在场') + ' · INFER 缺席（Phase 2a）',
+    '- 层在场：NEXUS ' + (nautilus === null ? '缺席' : '在场') + ' · PULSE ' + (pulse === null ? '缺席' : '在场') + ' · INFER 缺席（Phase 2a）',
     '',
     '## 一并附带的诚实边界',
     '',
@@ -1050,7 +1050,7 @@ export function ReportView(props: { nexus: NexusState | null; m2: M2State | null
     '4. 人工标注 ' + String(marked) + ' 条已检验；未标注项一律视为未检验，不并入结论。',
     '',
   ].join(String.fromCharCode(10))
-  const gateOk = nexus !== null && pulse !== null
+  const gateOk = nautilus !== null && pulse !== null
   return createElement('div', { className: 'nt-report' },
     createElement('div', { className: 'meta' },
       ...([
@@ -1058,7 +1058,7 @@ export function ReportView(props: { nexus: NexusState | null; m2: M2State | null
         ['era', era + ' · ' + eraWord(era)],
         ['观测窗口', win],
         ['读数样本', String(curve.length) + ' 轮 / ' + String(props.m2 === null ? 0 : Object.keys(props.m2.sessionMeta).length) + ' 会话'],
-        ['层在场', 'NEXUS ' + (nexus === null ? '缺席' : '在场') + ' · PULSE ' + (pulse === null ? '缺席' : '在场') + ' · INFER 缺席'],
+        ['层在场', 'NEXUS ' + (nautilus === null ? '缺席' : '在场') + ' · PULSE ' + (pulse === null ? '缺席' : '在场') + ' · INFER 缺席'],
         ['人工标注', String(marked) + ' 条已检验'],
         ['vault 指向', pointing],
         ['白盒分析', rows.length === 0 ? '无检出' : String(rows.length) + ' 会话 · ' + (shapeText === '' ? '形态未定' : shapeText) + ' · τ_e 中位 ' + (tauMedian === null ? '—' : String(tauMedian) + ' turn')],
@@ -1094,7 +1094,7 @@ export function Drawer(props: { target: DrawerTarget; point: M2Point | null; onC
     let alive = true
     setLoading(true)
     setText(null)
-    const url = '/api/nexus/m2/turn-text?session=' + encodeURIComponent(props.target.session) + '&turn=' + String(props.target.turn)
+    const url = '/api/nautilus/m2/turn-text?session=' + encodeURIComponent(props.target.session) + '&turn=' + String(props.target.turn)
     fetch(url, { headers: { 'sec-fetch-site': 'same-origin' } })
       .then((r) => (r.ok ? r.json() : null))
       .then((j) => { if (alive) setText(j as TurnText) })
@@ -1168,23 +1168,23 @@ export function Workbench(props: { onExitToConversation?: () => void; sessionNam
   const [toast, setToast] = useState<string | null>(null)
   const [nonce, setNonce] = useState(0)
   const paused = drawer !== null
-  const nexus = useJson<NexusState>('/api/nexus/state', paused, 120000, nonce)
-  const m2 = useJson<M2State>('/api/nexus/m2/state?root=all', paused, 120000, nonce)
+  const nautilus = useJson<NautilusState>('/api/nautilus/state', paused, 120000, nonce)
+  const m2 = useJson<M2State>('/api/nautilus/m2/state?root=all', paused, 120000, nonce)
   // 实时读数：OS 层每 1s 重取最新值（/pulse/state 只查 15 行 latest，代价可忽略）；
   // 手动档下值不会变，但重取同样廉价，故不额外分支。
-  const pulse = useJson<PulseState>('/api/nexus/pulse/state', paused, 1000, nonce)
-  const ann = useJson<AnnotationsState>('/api/nexus/m2/annotations', paused, 120000, nonce)
+  const pulse = useJson<PulseState>('/api/nautilus/pulse/state', paused, 1000, nonce)
+  const ann = useJson<AnnotationsState>('/api/nautilus/m2/annotations', paused, 120000, nonce)
   // nexus 层接入（M4.3 / M4-L / M3-F.3）：指向、L 场计数、白盒分析——原先只有旧 tab 能看到
-  const vault = useJson<VaultInfo>('/api/nexus/vault', paused, 120000, nonce)
-  const lfield = useJson<LfieldInfo>('/api/nexus/lfield', paused, 120000, nonce)
-  const analysisRaw = useJson<{ results?: AnalysisRow[] } | AnalysisRow[]>('/api/nexus/m2/analysis?root=all', paused, 600000, nonce)
+  const vault = useJson<VaultInfo>('/api/nautilus/vault', paused, 120000, nonce)
+  const lfield = useJson<LfieldInfo>('/api/nautilus/lfield', paused, 120000, nonce)
+  const analysisRaw = useJson<{ results?: AnalysisRow[] } | AnalysisRow[]>('/api/nautilus/m2/analysis?root=all', paused, 600000, nonce)
   // /m2/analysis 返回 { revision, results }（routes.ts）——归一化为数组，兼容直接数组形态；
   // 未归一化时 rows.reduce 对对象调用会抛错（假设/报告视图渲染失败的根因）
   const analysis = Array.isArray(analysisRaw) ? analysisRaw : (analysisRaw?.results ?? null)
   const [rescanning, setRescanning] = useState(false)
   const onRescan = (): void => {
     setRescanning(true)
-    fetch('/api/nexus/action', {
+    fetch('/api/nautilus/action', {
       method: 'POST',
       headers: { 'content-type': 'application/json', 'sec-fetch-site': 'same-origin' },
       body: JSON.stringify({ kind: 'rescan' }),
@@ -1202,11 +1202,11 @@ export function Workbench(props: { onExitToConversation?: () => void; sessionNam
   const ok = (v: unknown): string => (v === null ? '缺席' : '在场')
   // 用 createElement 渲染视图组件（**不可**写成 OverviewView({...}) 直接调用）：
   // 直接调用会把子组件的 hooks 算进父组件，切换视图时 hooks 数量变化 → React 抛错、整页渲染失败。
-  const body = view === 'overview' ? createElement(OverviewView, { nexus, m2, pulse, vault, lfield, rescanning, onRescan, onOpenTurn: (s: string, t: number) => setDrawer({ session: s, turn: t }) })
+  const body = view === 'overview' ? createElement(OverviewView, { nautilus, m2, pulse, vault, lfield, rescanning, onRescan, onOpenTurn: (s: string, t: number) => setDrawer({ session: s, turn: t }) })
     : view === 'curve' ? createElement(CurveView, { m2, era, pulse, paused, analysis, sessionNameOf: props.sessionNameOf, onOpenTurn: (s: string, t: number) => setDrawer({ session: s, turn: t }) })
     : view === 'hypotheses' ? createElement(HypothesesView, { m2, ann, analysis, vault, onProphecy: (id: string) => { setView('prophecy'); setToast('已跳到预言标注：' + id) } })
     : view === 'prophecy' ? createElement(ProphecyView, { ann, m2, toast: setToast, reload: () => setNonce((v) => v + 1) })
-    : createElement(ReportView, { nexus, m2, pulse, era, ann, analysis, vault })
+    : createElement(ReportView, { nautilus, m2, pulse, era, ann, analysis, vault })
   return createElement('div', { className: 'nt-wb' },
     createElement('div', { className: 'nt-wb-top' },
       props.onExitToConversation !== undefined
@@ -1215,7 +1215,7 @@ export function Workbench(props: { onExitToConversation?: () => void; sessionNam
       createElement('div', { className: 'nt-wb-brand' }, 'NAUTILUS', createElement('small', null, 'Observation Workbench')),
       createElement('div', { className: 'nt-wb-seg' }, ...(['overview', 'curve', 'hypotheses', 'prophecy', 'report'] as ViewKey[]).map((k) => createElement('button', { key: k, className: k === view ? 'on' : '', onClick: () => setView(k) }, VIEW_LABEL[k]))),
       createElement('div', { className: 'nt-wb-right' },
-        createElement('span', null, 'NEXUS ' + ok(nexus) + ' · PULSE ' + ok(pulse)),
+        createElement('span', null, 'NEXUS ' + ok(nautilus) + ' · PULSE ' + ok(pulse)),
         createElement('span', null, '刷新 ' + (pulse === null ? '—' : fmtTime(pulse.collector.lastTickTs))),
         createElement(PulseHeartbeat, {
           mode: pulse === null ? 'auto' : pulse.collector.mode,

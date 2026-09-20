@@ -1,11 +1,11 @@
 /**
- * @dsh-external/dsh-nexus — pulse 存储层（`metric_sample`，上游 §4.3）。
+ * @dsh-external/dsh-nautilus — pulse 存储层（`metric_sample`，上游 §4.3）。
  *
- * 与 nexus **同库不同表**（`~/.dsh/nexus/nexus.db`）：pulse 只建自己的采样长表，不碰 turn 系表。
+ * 与 nautilus **同库不同表**（`~/.dsh/nautilus/nautilus.db`）：pulse 只建自己的采样长表，不碰 turn 系表。
  *
- * 迁移：`user_version 3 → 4`。**只在库已到 v3 时推进版本**——若库仍停在 v<3（nexus 还没迁移），
- * 本层只做幂等建表、不推进版本：`user_version` 是全库共享序列，抢先写 4 会让 nexus 的 v1–v3
- * 迁移被永久跳过。等 nexus 迁到 v3 后的下一次启动，pulse 再补上版本推进。
+ * 迁移：`user_version 3 → 4`。**只在库已到 v3 时推进版本**——若库仍停在 v<3（nautilus 还没迁移），
+ * 本层只做幂等建表、不推进版本：`user_version` 是全库共享序列，抢先写 4 会让 nautilus 的 v1–v3
+ * 迁移被永久跳过。等 nautilus 迁到 v3 后的下一次启动，pulse 再补上版本推进。
  * （M5 设计文档原预留 v4 给 `call_p`——现由本层占用 v4，M5 顺延为 v5，已记在开发文档里。）
  *
  * 两个连接同库并发：开 WAL + busy_timeout，读写不互相阻塞。
@@ -67,7 +67,7 @@ export class PulseStore {
       this.db.exec('PRAGMA user_version = ' + SCHEMA_VERSION)
       return
     }
-    console.warn('[pulse] schema 版本 ' + v + ' < v' + (SCHEMA_VERSION - 1) + '：只建表、暂不推进版本（等 nexus 迁移到 v' + (SCHEMA_VERSION - 1) + '）')
+    console.warn('[pulse] schema 版本 ' + v + ' < v' + (SCHEMA_VERSION - 1) + '：只建表、暂不推进版本（等 nautilus 迁移到 v' + (SCHEMA_VERSION - 1) + '）')
   }
 
   schemaVersion(): number {

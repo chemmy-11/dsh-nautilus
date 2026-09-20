@@ -1,5 +1,5 @@
 /**
- * @dsh-external/dsh-nexus — pulse 离线验收器（不经宿主；Phase 1 证据链的执行入口）。
+ * @dsh-external/dsh-nautilus — pulse 离线验收器（不经宿主；Phase 1 证据链的执行入口）。
  *
  * 用法：
  *   node scripts/pulse-probe.mjs [--ticks N] [--intervalMs N] [--minutes M] [--db <file>] [--json] [--no-counters] [--no-gpu]
@@ -8,7 +8,7 @@
  * 与宿主路径的差别（必须随读数一起引用）：
  *   · 子进程走 `node:child_process`（宿主里走 `ctx.subprocess` seam）；
  *   · 本地族口径完全一致（同一份 lib/pulse/collect.js）；
- *   · 默认写**临时库**（--db 可指向真实库），故本器不污染 ~/.dsh/nexus/nexus.db。
+ *   · 默认写**临时库**（--db 可指向真实库），故本器不污染 ~/.dsh/nautilus/nautilus.db。
  */
 import { execFile } from 'node:child_process'
 import { mkdtempSync, rmSync } from 'node:fs'

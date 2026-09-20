@@ -1,5 +1,5 @@
 /**
- * @dsh-external/dsh-nexus — nexus.db (SQLite, node:sqlite, zero deps).
+ * @dsh-external/dsh-nautilus — nautilus.db (SQLite, node:sqlite, zero deps).
  * vault_meta: file metadata baseline; edit_event: edit operations (only fs.watch channel writes).
  * turn_read/turn_text/annotation: M2/M3 L-field readings (session/event feed).
  * session_root: M4-L per-session L-field ownership ('' = owned by no pointing — global view only);
@@ -52,12 +52,12 @@ export interface SelfCheck {
   declaration: 0 | 1
 }
 
-export function openStore(dbFile: string, initialRoot = ''): NexusStore {
+export function openStore(dbFile: string, initialRoot = ''): NautilusStore {
   mkdirSync(dirname(dbFile), { recursive: true })
-  return new NexusStore(dbFile, initialRoot)
+  return new NautilusStore(dbFile, initialRoot)
 }
 
-export class NexusStore {
+export class NautilusStore {
   private readonly db: DatabaseSync
   /** 迁移/首启前的种子 root（config.vaultRoot）——仅作初始指向与升级兜底。 */
   private readonly initialRoot: string
@@ -302,7 +302,7 @@ export class NexusStore {
 
   /**
    * 首次绑定接管：迁移期未归属（root=''）的观测数据归入新指向——
-   * 本机迁移前始终只观测这一个库（nexus 现状），旧行不丢、统计无缝；仅 vault_config
+   * 本机迁移前始终只观测这一个库（nautilus 现状），旧行不丢、统计无缝；仅 vault_config
    * 此前为空（首次确认）时由调用方触发；已有多库记录后不再接管（'' 行保持悬置）。
    */
   reclaimUnowned(root: string): number {

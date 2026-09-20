@@ -1,5 +1,5 @@
 /**
- * @dsh-external/dsh-nexus — pure-function regression tests (zero deps, node:test).
+ * @dsh-external/dsh-nautilus — pure-function regression tests (zero deps, node:test).
  * Tests the BUILT artifacts (lib/) — run `npm run build` first (CI: install → build → test).
  * Coverage: analysis.ts (A 投影/S 形/爆发段/τ_e) + selfcheck.ts (自评三行) + scan.ts (R4 分支).
  * 依赖 node:sqlite（Node ≥ 22.13/24，CI node-version 24）与临时目录（mkdtemp）。
@@ -158,7 +158,7 @@ test('scanVault: 基线创建 → 未变跳过（R4）→ 改动更新', async (
   try {
     writeFileSync(join(vault, 'a.md'), '---\ntitle: x\n---\n正文 abc', 'utf8')
     writeFileSync(join(vault, 'b.md'), 'hello world', 'utf8')
-    const store = openStore(join(tmp, 'nexus.db'))
+    const store = openStore(join(tmp, 'nautilus.db'))
     try {
       const r1 = await scanVault(store, vault, [])
       assert.deepEqual({ created: r1.created, updated: r1.updated, removed: r1.removed }, { created: 2, updated: 0, removed: 0 })
@@ -302,7 +302,7 @@ test('client bundle：ModuleLoader 往返 + 命名导出面 + 面板注册契约
   vm.createContext(sandbox)
   vm.runInContext(src, sandbox, { filename: 'lib/client.js' })
   assert.ok(registration !== null, 'bundle 必须调用 window.__ModuleLoader__.load')
-  assert.equal(registration.id, '@dsh-external/dsh-nexus')
+  assert.equal(registration.id, '@dsh-external/dsh-nautilus')
 
   const react = {
     createElement: (type, props, ...kids) => ({ type, props, kids }),
@@ -347,16 +347,16 @@ test('client bundle：ModuleLoader 往返 + 命名导出面 + 面板注册契约
   }
   exportsObj.apply(ctx)
   assert.deepEqual(calls, [
-    'effect:@dsh-external/dsh-nexus: panel',
+    'effect:@dsh-external/dsh-nautilus: panel',
     'inject:conversation.view',
-    'register:conversation.view|@dsh-external/dsh-nexus-panel',
-    'effect:@dsh-external/dsh-nexus: lfield panel',
+    'register:conversation.view|@dsh-external/dsh-nautilus-panel',
+    'effect:@dsh-external/dsh-nautilus: lfield panel',
     'inject:conversation.view',
-    'register:conversation.view|@dsh-external/dsh-nexus-lfield-panel',
-    'effect:@dsh-external/dsh-nexus: workbench icon',
+    'register:conversation.view|@dsh-external/dsh-nautilus-lfield-panel',
+    'effect:@dsh-external/dsh-nautilus: workbench icon',
     'inject:sidebar.panellist',
     'register:sidebar.panellist|nautilus-workbench',
-    'effect:@dsh-external/dsh-nexus: workbench panel',
+    'effect:@dsh-external/dsh-nautilus: workbench panel',
     'inject:main',
     'register:main|nautilus-workbench',
   ])
@@ -406,19 +406,19 @@ test('host bundle 单入口：pulse 作为子插件挂载并注册自身路由',
       pulse: { enabled: true, enableCounters: false, enableGpu: false, intervalMs: 60000, dbFile: ':memory:' },
     })
     const deadline = Date.now() + 5000
-    while (Date.now() < deadline && !routes.includes('/api/nexus/pulse/state')) await new Promise((r) => setTimeout(r, 25))
+    while (Date.now() < deadline && !routes.includes('/api/nautilus/pulse/state')) await new Promise((r) => setTimeout(r, 25))
     assert.deepEqual([...routes].sort(), [
-      '/api/nexus/action',
-      '/api/nexus/lfield',
-      '/api/nexus/m2/analysis',
-      '/api/nexus/m2/annotations',
-      '/api/nexus/m2/state',
-      '/api/nexus/m2/turn-text',
-      '/api/nexus/pulse/control',
-      '/api/nexus/pulse/series',
-      '/api/nexus/pulse/state',
-      '/api/nexus/state',
-      '/api/nexus/vault',
+      '/api/nautilus/action',
+      '/api/nautilus/lfield',
+      '/api/nautilus/m2/analysis',
+      '/api/nautilus/m2/annotations',
+      '/api/nautilus/m2/state',
+      '/api/nautilus/m2/turn-text',
+      '/api/nautilus/pulse/control',
+      '/api/nautilus/pulse/series',
+      '/api/nautilus/pulse/state',
+      '/api/nautilus/state',
+      '/api/nautilus/vault',
     ])
     assert.deepEqual([...tools], ['record_turn_selfcheck'])
     await fiber.dispose()
@@ -429,7 +429,7 @@ test('host bundle 单入口：pulse 作为子插件挂载并注册自身路由',
   }
 })
 
-// ── OS 层心跳档位控制（/api/nexus/pulse/control）──────────────────────────────
+// ── OS 层心跳档位控制（/api/nautilus/pulse/control）──────────────────────────────
 
 test('pulse 心跳控制：档位切换 / 立即采样 / 非法入参 400', async () => {
   const tmp = mkdtempSync(join(tmpdir(), 'nautilus-hb-'))
@@ -447,9 +447,9 @@ test('pulse 心跳控制：档位切换 / 立即采样 / 非法入参 400', asyn
       pulse: { enabled: true, enableCounters: false, enableGpu: false, intervalMs: 60000, dbFile: ':memory:' },
     })
     const deadline = Date.now() + 5000
-    while (Date.now() < deadline && !handlers.has('/api/nexus/pulse/control')) await new Promise((r) => setTimeout(r, 25))
-    const control = handlers.get('/api/nexus/pulse/control')
-    const state = handlers.get('/api/nexus/pulse/state')
+    while (Date.now() < deadline && !handlers.has('/api/nautilus/pulse/control')) await new Promise((r) => setTimeout(r, 25))
+    const control = handlers.get('/api/nautilus/pulse/control')
+    const state = handlers.get('/api/nautilus/pulse/state')
     assert.equal(typeof control, 'function', 'control 路由必须注册')
     assert.equal(typeof state, 'function', 'state 路由必须注册')
 

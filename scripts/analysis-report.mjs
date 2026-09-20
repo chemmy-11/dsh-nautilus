@@ -7,7 +7,7 @@ import { homedir } from 'node:os'
 import { analyze } from '../lib/analysis.js'
 
 const scope = process.argv[2] ?? 'all'
-const db = new DatabaseSync(join(homedir(), '.dsh', 'nexus', 'nexus.db'))
+const db = new DatabaseSync(join(homedir(), '.dsh', 'nautilus', 'nautilus.db'))
 
 let where = ''
 const params = []

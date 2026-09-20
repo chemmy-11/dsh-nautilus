@@ -1,5 +1,5 @@
 /**
- * @dsh-external/dsh-nexus — client panels (conversation.view tabs, official contract).
+ * @dsh-external/dsh-nautilus — client panels (conversation.view tabs, official contract).
  * M3-UI: 主题令牌化（--nt-* 层，默认映射 --dsw-alias-*，U1 起——映射表见 docs/2-dev/nautilus-dev-02-ui-workbench.md §2）+ 卡片化布局 + 图表升级（网格/渐变/分色/图例）+ 交互增补。
  * 零新依赖：样式经组件内 <style> 注入（一次性，class 前缀 nt-）；SVG 自绘。
  *
@@ -59,7 +59,7 @@ type M2State = {
 type Annotation = { prophecy: string; status: string; note: string | null; updatedAt: number }
 type AnnotationsState = { revision: number; annotations: Annotation[] }
 
-// M4.3：vault 指向（GET /api/nexus/vault）
+// M4.3：vault 指向（GET /api/nautilus/vault）
 type VaultInfo = {
   revision: number
   active: string
@@ -68,7 +68,7 @@ type VaultInfo = {
   known: Array<{ root: string; displayName: string | null; active: number; confirmedAt: number | null }>
 }
 
-// M4-L：L 场读数独立指向（GET /api/nexus/lfield）
+// M4-L：L 场读数独立指向（GET /api/nautilus/lfield）
 type LfieldInfo = {
   revision: number
   active: string
@@ -76,7 +76,7 @@ type LfieldInfo = {
   known: Array<{ root: string; displayName: string | null; active: number; confirmedAt: number | null }>
 }
 
-type NexusState = {
+type NautilusState = {
   revision: number
   activeRoot: string
   totals: { totalFiles: number; totalChars: number }
@@ -395,8 +395,8 @@ function LineChart(props: { series: Series[]; w: number; h: number; onOpenDetail
 
 // ── Tab① Vault 观测 ──────────────────────────────────────────────────────────
 
-function NexusView(): ReactNode {
-  const [state, setState] = useState<NexusState | null>(null)
+function NautilusView(): ReactNode {
+  const [state, setState] = useState<NautilusState | null>(null)
   const [vault, setVault] = useState<VaultInfo | null>(null)
   const [failed, setFailed] = useState(false)
   const [range, setRange] = useState<'today' | 'week'>('today')
@@ -408,11 +408,11 @@ function NexusView(): ReactNode {
   useHideComposer()
 
   const load = (): void => {
-    fetch('/api/nexus/state', { headers: { 'sec-fetch-site': 'same-origin' } })
-      .then((r) => (r.ok ? (r.json() as Promise<NexusState>) : Promise.resolve(null)))
+    fetch('/api/nautilus/state', { headers: { 'sec-fetch-site': 'same-origin' } })
+      .then((r) => (r.ok ? (r.json() as Promise<NautilusState>) : Promise.resolve(null)))
       .then((s) => { setState(s); setFailed(s === null) })
       .catch(() => { setState(null); setFailed(true) })
-    fetch('/api/nexus/vault', { headers: { 'sec-fetch-site': 'same-origin' } })
+    fetch('/api/nautilus/vault', { headers: { 'sec-fetch-site': 'same-origin' } })
       .then((r) => (r.ok ? (r.json() as Promise<VaultInfo>) : Promise.resolve(null)))
       .then((v) => { if (v) setVault(v) })
       .catch(() => undefined)
@@ -429,7 +429,7 @@ function NexusView(): ReactNode {
     // 二次确认（切换后仅显示新库数据；旧数据保留可回切——观测记录不可逆，不删除）
     if (!window.confirm('切换后仅显示新 vault 数据；旧数据保留，可回切查看。确认切换？')) return
     setBusy(true)
-    fetch('/api/nexus/vault', {
+    fetch('/api/nautilus/vault', {
       method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ root: newRoot }),
     }).then((r) => (r.ok ? r.json() : Promise.resolve(null)))
@@ -438,7 +438,7 @@ function NexusView(): ReactNode {
       .finally(() => setBusy(false))
   }
 
-  if (failed && state === null) return createElement('div', { className: 'nt-empty' }, 'Vault 观测数据不可用（/api/nexus/state）')
+  if (failed && state === null) return createElement('div', { className: 'nt-empty' }, 'Vault 观测数据不可用（/api/nautilus/state）')
   if (state === null) return createElement('div', { className: 'nt-empty' }, 'Vault 观测加载中...')
 
   const summary = range === 'today' ? state.today : state.week
@@ -553,7 +553,7 @@ function NexusView(): ReactNode {
 
 // ── Tab② L 场读数 ────────────────────────────────────────────────────────────
 
-function NexusLFieldView(): ReactNode {
+function NautilusLFieldView(): ReactNode {
   const [state, setState] = useState<M2State | null>(null)
   const [lfield, setLfield] = useState<LfieldInfo | null>(null)
   const [viewMode, setViewMode] = useState<'vault' | 'all'>('vault')
@@ -574,26 +574,26 @@ function NexusLFieldView(): ReactNode {
   // M4.11：视图两态——?root=all 全局（全部工作区）| 默认 = 当前 vault 指向
   const viewQ = viewMode === 'all' ? '?root=all' : ''
   const load = (): void => {
-    fetch(`/api/nexus/m2/state${viewQ}`, { headers: { 'sec-fetch-site': 'same-origin' } })
+    fetch(`/api/nautilus/m2/state${viewQ}`, { headers: { 'sec-fetch-site': 'same-origin' } })
       .then((r) => (r.ok ? (r.json() as Promise<M2State>) : Promise.resolve(null)))
       .then((s) => { setState(s); setFailed(s === null) })
       .catch(() => { setState(null); setFailed(true) })
-    fetch('/api/nexus/lfield', { headers: { 'sec-fetch-site': 'same-origin' } })
+    fetch('/api/nautilus/lfield', { headers: { 'sec-fetch-site': 'same-origin' } })
       .then((r) => (r.ok ? (r.json() as Promise<LfieldInfo>) : Promise.resolve(null)))
       .then((l) => { if (l) setLfield(l) })
       .catch(() => undefined)
-    fetch('/api/nexus/m2/annotations', { headers: { 'sec-fetch-site': 'same-origin' } })
+    fetch('/api/nautilus/m2/annotations', { headers: { 'sec-fetch-site': 'same-origin' } })
       .then((r) => (r.ok ? (r.json() as Promise<AnnotationsState>) : Promise.resolve(null)))
       .then((a) => { if (a) { setAnn(a); const m: Record<string, string> = {}; for (const x of a.annotations) if (x.note) m[x.prophecy] = x.note; setNotes(m) } })
       .catch(() => undefined)
-    fetch(`/api/nexus/m2/analysis${viewQ}`, { headers: { 'sec-fetch-site': 'same-origin' } })
+    fetch(`/api/nautilus/m2/analysis${viewQ}`, { headers: { 'sec-fetch-site': 'same-origin' } })
       .then((r) => (r.ok ? (r.json() as Promise<{ results: AnalysisResult[] }>) : Promise.resolve(null)))
       .then((a) => { if (a) setAnalysis(a.results) })
       .catch(() => undefined)
   }
 
   const openTurnText = (meta: { session: string; turn: number }): void => {
-    fetch(`/api/nexus/m2/turn-text?session=${encodeURIComponent(meta.session)}&turn=${meta.turn}`, { headers: { 'sec-fetch-site': 'same-origin' } })
+    fetch(`/api/nautilus/m2/turn-text?session=${encodeURIComponent(meta.session)}&turn=${meta.turn}`, { headers: { 'sec-fetch-site': 'same-origin' } })
       .then((r) => (r.ok ? (r.json() as Promise<TurnTextResp>) : Promise.resolve(null)))
       .then((t) => { if (t) setTextDetail(t) })
       .catch(() => setTextDetail(null))
@@ -615,7 +615,7 @@ function NexusLFieldView(): ReactNode {
     return () => window.removeEventListener('keydown', h)
   }, [chartMode])
 
-  if (failed && state === null) return createElement('div', { className: 'nt-empty' }, 'L 场读数不可用（/api/nexus/m2/state）')
+  if (failed && state === null) return createElement('div', { className: 'nt-empty' }, 'L 场读数不可用（/api/nautilus/m2/state）')
   if (state === null) return createElement('div', { className: 'nt-empty' }, 'L 场读数加载中...')
 
   // 口径：usage.inputTokens = 未命中；总输入 = input + cache
@@ -682,7 +682,7 @@ function NexusLFieldView(): ReactNode {
   const DEF_LABEL: Record<string, string> = { none: '无', light: '轻', heavy: '重' }
 
   const saveAnn = (prophecy: string, status: string, note: string): void => {
-    fetch('/api/nexus/m2/annotations', {
+    fetch('/api/nautilus/m2/annotations', {
       method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ prophecy, status, note: note.trim() === '' ? null : note }),
     }).then((r) => (r.ok ? load() : undefined)).catch(() => undefined)
@@ -694,7 +694,7 @@ function NexusLFieldView(): ReactNode {
   const vaultSessions = lfield === null || lfield.active === '' ? 0 : (lfield.counts[lfield.active] ?? 0)
   const switchLfield = (root: string): void => {
     if (!window.confirm('切换后新会话读数归入新指向；既有会话归属不变。确认切换 L 场指向？')) return
-    fetch('/api/nexus/lfield', {
+    fetch('/api/nautilus/lfield', {
       method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ root }),
     }).then((r) => { if (r.ok) { setViewMode('vault'); load() } }).catch(() => undefined)
@@ -937,23 +937,23 @@ export function apply(ctx: {
     () => ctx.slots.inject('conversation.view', () =>
       ctx.slots.register({
         name: 'conversation.view',
-        id: '@dsh-external/dsh-nexus-panel',
+        id: '@dsh-external/dsh-nautilus-panel',
         order: 30,
         label: () => 'Vault 观测',
-      }, NexusView),
+      }, NautilusView),
     ),
-    '@dsh-external/dsh-nexus: panel',
+    '@dsh-external/dsh-nautilus: panel',
   )
   ctx.effect(
     () => ctx.slots.inject('conversation.view', () =>
       ctx.slots.register({
         name: 'conversation.view',
-        id: '@dsh-external/dsh-nexus-lfield-panel',
+        id: '@dsh-external/dsh-nautilus-lfield-panel',
         order: 35,
         label: () => 'L 场读数',
-      }, NexusLFieldView),
+      }, NautilusLFieldView),
     ),
-    '@dsh-external/dsh-nexus: lfield panel',
+    '@dsh-external/dsh-nautilus: lfield panel',
   )
   // 工作台入口（§3.0 实测契约）：sidebar.panellist 的 list id 与 main 的 key 同值——同一条记录既提供侧栏图标行，
   // 又提供主区面板；侧栏壳自己渲染按钮并调 layout.selectPanel(id)，故此处不注册任何点击逻辑。
@@ -968,7 +968,7 @@ export function apply(ctx: {
         label: () => WORKBENCH_LABEL,
       }, WorkbenchIcon),
     ),
-    '@dsh-external/dsh-nexus: workbench icon',
+    '@dsh-external/dsh-nautilus: workbench icon',
   )
   ctx.effect(
     () => ctx.slots.inject('main', () =>
@@ -983,6 +983,6 @@ export function apply(ctx: {
           sessionNameOf,
         })),
     ),
-    '@dsh-external/dsh-nexus: workbench panel',
+    '@dsh-external/dsh-nautilus: workbench panel',
   )
 }

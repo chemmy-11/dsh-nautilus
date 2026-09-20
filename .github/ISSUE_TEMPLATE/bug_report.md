@@ -24,7 +24,7 @@ title: '[bug] <一句话现象>'
 
 ## 证据
 
-<!-- 日志（`[nexus]` 前缀行）、`/api/nexus/state` 返回、面板截图；SQLite 数据异常请附查询结果与涉及的迁移版本 -->
+<!-- 日志（`[nautilus]` 前缀行）、`/api/nautilus/state` 返回、面板截图；SQLite 数据异常请附查询结果与涉及的迁移版本 -->
 
 ## 怀疑点
 

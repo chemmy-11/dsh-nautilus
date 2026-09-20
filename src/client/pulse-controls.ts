@@ -1,8 +1,8 @@
 /**
- * @dsh-external/dsh-nexus — OS 层心跳档位控件（1s / 5s / 手动）。
+ * @dsh-external/dsh-nautilus — OS 层心跳档位控件（1s / 5s / 手动）。
  *
  * 放在独立文件：工作台主文件由守谷人并行优化，控件以组件形式插入，避免互相改同一段代码。
- * 契约：POST /api/nexus/pulse/control
+ * 契约：POST /api/nautilus/pulse/control
  *   { intervalMs: 1000 | 5000 }  → 定时档
  *   { mode: 'manual' }           → 手动档（停定时器）
  *   { sample: true }             → 立即采一次（任何档位可用）
@@ -31,7 +31,7 @@ export interface PulseHeartbeatProps {
 
 async function postControl(body: Record<string, unknown>): Promise<{ ok: boolean; msg: string }> {
   try {
-    const r = await fetch('/api/nexus/pulse/control', {
+    const r = await fetch('/api/nautilus/pulse/control', {
       method: 'POST',
       headers: { 'content-type': 'application/json', 'sec-fetch-site': 'same-origin' },
       body: JSON.stringify(body),

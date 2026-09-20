@@ -1,8 +1,8 @@
-# dsh-nexus
+# dsh-nautilus
 
 English | [中文](./README.md)
 
-An observation plugin for DeepSeek Harness (`dsh`, package `@dsh-external/dsh-nexus`): **dual-panel quantitative observation** for your Obsidian vault and AI conversations — vault-side metadata snapshots and edit statistics, plus conversation-side per-turn telemetry and curve-shape analysis. Read-only against the vault; all observation data is stored privately (`~/.dsh/nexus/`) and survives restarts and reloads without loss or double-counting.
+An observation plugin for DeepSeek Harness (`dsh`, package `@dsh-external/dsh-nautilus`): **dual-panel quantitative observation** for your Obsidian vault and AI conversations — vault-side metadata snapshots and edit statistics, plus conversation-side per-turn telemetry and curve-shape analysis. Read-only against the vault; all observation data is stored privately (`~/.dsh/nautilus/`) and survives restarts and reloads without loss or double-counting.
 
 ## ① Vault observation
 
@@ -16,7 +16,7 @@ An observation plugin for DeepSeek Harness (`dsh`, package `@dsh-external/dsh-ne
 Turning "how far a conversation moved the knowledge base" into numbers — **session-level LLM observability + quantified self-review + curve-shape analysis**:
 
 - **Metric definitions**: tokens (input/output/cache-hit), cache hit & miss rates (miss rate = the A projection), TPS & decode time, and a per-turn subjective clarity self-rating (0–1) — **objective and subjective tracks cross-validate each other, bounding each side's bias** (the objective curve is confounded by cache warm-up and novel topics; self-reports by reporting bias);
-- **Direct official-event capture**: subscribes to the host's `session/event` (**zero host-source modifications, no third-party plugin dependencies**), with data isolated in a private directory (`~/.dsh/nexus/`, SQLite);
+- **Direct official-event capture**: subscribes to the host's `session/event` (**zero host-source modifications, no third-party plugin dependencies**), with data isolated in a private directory (`~/.dsh/nautilus/`, SQLite);
 - **Two-tab dashboard**: SVG curves with **zoom, filtering (time window / session) and per-turn Q&A replay** (full transcript of any turn);
 - **Repeatable analysis pipeline**: shape classification (sigmoid / rising / falling / inverse-sigmoid) · characteristic-time (τ_e) detection · bucketed comparison — first run: **vault sessions show a 13.7% miss rate vs 5.6% for non-pointed workspaces**, consistent with knowledge work's higher exploration density;
 - **Self-review coverage**: per-session coverage badge (assessed / total turns + missing turn numbers), warning below 80%;
@@ -38,7 +38,7 @@ Turning "how far a conversation moved the knowledge base" into numbers — **ses
 - **Client entry**: a client plugin is an ordinary Cordis plugin (`Context` from `@deepseek-ai/cordis`; `@deepseek-ai/dsh-client-runtime` was removed in 0.1.5); the UI registry `ctx.slots` is provided by `@deepseek-ai/dsh-client-ui-renderer`; cross-plugin imports are type-only and the runtime requires only the baseline `react`;
 - **Adaptation run (2026-09-13, dsh 0.1.5-rc.2)**: the contract surface was diffed first — the rc.1 → rc.2 artifacts of `dsh-host-webserver` / `dsh-session` / `dsh-tools` / `dsh-client-ui-renderer` / `dsh-client-ui-conversation` are byte-identical apart from the version field (no interface change, hence no code change); the devDep is pinned exactly to `0.1.5-rc.2` (cordis 4.0.2 / schemastery 3.18.2 match rc.2's own dependencies); `typecheck` / `build` / `test` (12/12) / `check:deps` / `check-meta` / the client shim all pass; the isolated-`DSH_HOME` entry smoke passes (Standard Schema defaults and invalid-value rejection + 8 routes + 1 tool + 2 event subscriptions + 6 disposers + fresh DB at schema v3 / 9 tables). The previous 0.1.5-rc.1 run (2026-09-10) was equally green.
 
-- **Adaptation run (2026-09-20, dsh 0.1.6-alpha.2 via the side-by-side `dsh-next` install)**: the contract surface was checked item by item against the type declarations under `C:\Users\15266\dsh-next\node_modules\@deepseek-ai\*` — slot registration options (`keyed -> options.key` / `list -> options.id|order|label`, label still accepting a thunk, plus a new optional `priority`), `ctx.layout.selectPanel(MainPanelId|null)`, `sidebar.panellist` and `SidebarPanelMetadata`, `WebRoute{kind,path,handler}`, `ctx.subprocess` (`spawn(graceMs/maxBytes/signal)` + `exitCode/signal/readFrom`) and the `dsh.client` manifest fields (`platform/inject/immediately?/external?`) are all unchanged, hence **no code change**; a `^0.1.6-alpha.1` peer branch was added (devDep still pinned to `0.1.5-rc.2`, both hosts coexist); `check:deps` gained R4 (every host peer branch must carry a prerelease tag) with a negative test (a bare `^0.1.6` is rejected with the offending branch named). **On-host verification**: 0.1.6 was booted with `dsh-next --profile web --patch <temp overlay>` on port 3099 (the overlay is process-local, **the profile is untouched**): the startup log shows `[nexus] Pulse OS/GPU layer mounted (sub-plugin)` and `[pulse] mode=auto interval=5000ms exec=ctx.subprocess db=...\.dsh-next\nexus\nexus.db`; the boot graph contains our row (rev `a05f2c1db892a264-51`) and the served bundle carries the workbench and heartbeat-control markers; `/api/nexus/{state,vault,lfield,m2/state,m2/analysis,m2/annotations,pulse/state}` all return **200** (pulse: 15 metrics, `shell=powershell`, `gpuOk=true`); `POST /pulse/control` switches to 1s -> `{mode:auto,intervalMs:1000}`, `{mode:manual,sample:true}` -> ticks 5 -> 6, and an out-of-range tier -> **400**; all six gates pass (`test` 22/22).
+- **Adaptation run (2026-09-20, dsh 0.1.6-alpha.2 via the side-by-side `dsh-next` install)**: the contract surface was checked item by item against the type declarations under `C:\Users\15266\dsh-next\node_modules\@deepseek-ai\*` — slot registration options (`keyed -> options.key` / `list -> options.id|order|label`, label still accepting a thunk, plus a new optional `priority`), `ctx.layout.selectPanel(MainPanelId|null)`, `sidebar.panellist` and `SidebarPanelMetadata`, `WebRoute{kind,path,handler}`, `ctx.subprocess` (`spawn(graceMs/maxBytes/signal)` + `exitCode/signal/readFrom`) and the `dsh.client` manifest fields (`platform/inject/immediately?/external?`) are all unchanged, hence **no code change**; a `^0.1.6-alpha.1` peer branch was added (devDep still pinned to `0.1.5-rc.2`, both hosts coexist); `check:deps` gained R4 (every host peer branch must carry a prerelease tag) with a negative test (a bare `^0.1.6` is rejected with the offending branch named). **On-host verification**: 0.1.6 was booted with `dsh-next --profile web --patch <temp overlay>` on port 3099 (the overlay is process-local, **the profile is untouched**): the startup log shows `[nautilus] Pulse OS/GPU layer mounted (sub-plugin)` and `[pulse] mode=auto interval=5000ms exec=ctx.subprocess db=...\.dsh-next\nautilus\nautilus.db`; the boot graph contains our row (rev `a05f2c1db892a264-51`) and the served bundle carries the workbench and heartbeat-control markers; `/api/nautilus/{state,vault,lfield,m2/state,m2/analysis,m2/annotations,pulse/state}` all return **200** (pulse: 15 metrics, `shell=powershell`, `gpuOk=true`); `POST /pulse/control` switches to 1s -> `{mode:auto,intervalMs:1000}`, `{mode:manual,sample:true}` -> ticks 5 -> 6, and an out-of-range tier -> **400**; all six gates pass (`test` 22/22).
 
 ## Installation
 
@@ -46,12 +46,12 @@ Turning "how far a conversation moved the knowledge base" into numbers — **ses
 dsh plugin --profile <name> add github:chemmy-11/dsh-nautilus
 ```
 
-This repository does not commit `lib/`, so a **git-form install builds in place at install time** (`prepare` / `prepack` → `scripts/prepare.mjs`). pnpm ≥10 **requires allowing `allowBuilds` in the profile's `pnpm-workspace.yaml`** (key like `@dsh-external/dsh-nexus@git+…#<sha>`) — measured: without it pnpm fails loudly and prints the exact key (the quieter failure mode is worse: an installed package with no `lib/`, which only breaks at load time); allowing it authorizes running the package's build code at install time, so **pin a commit SHA**. The build probes `$DSH_CHECKOUT` / `~/dsh-harness` and falls back to npm-devDeps mode (devDependencies are installed by the package manager for git installs). A local `npm install` / `npm ci` never builds implicitly (use `npm run build`).
+This repository does not commit `lib/`, so a **git-form install builds in place at install time** (`prepare` / `prepack` → `scripts/prepare.mjs`). pnpm ≥10 **requires allowing `allowBuilds` in the profile's `pnpm-workspace.yaml`** (key like `@dsh-external/dsh-nautilus@git+…#<sha>`) — measured: without it pnpm fails loudly and prints the exact key (the quieter failure mode is worse: an installed package with no `lib/`, which only breaks at load time); allowing it authorizes running the package's build code at install time, so **pin a commit SHA**. The build probes `$DSH_CHECKOUT` / `~/dsh-harness` and falls back to npm-devDeps mode (devDependencies are installed by the package manager for git installs). A local `npm install` / `npm ci` never builds implicitly (use `npm run build`).
 
 Config example (in the profile's `cordis.patch.yml`; `vaultRoot` is optional — confirm pointing in the panel instead, config only seeds it):
 
 ```yaml
-- id: nexus
+- id: nautilus
   config:
     vaultRoot: 'C:/path/to/your/obsidian/vault'
     exclude: [dsh-docs]
@@ -64,13 +64,13 @@ Config example (in the profile's `cordis.patch.yml`; `vaultRoot` is optional —
 
 | Endpoint | Description |
 |---|---|
-| `GET /api/nexus/state` | vault totals / today / week / recent edit stream |
-| `GET/POST /api/nexus/vault` | vault pointing status / switch |
-| `GET /api/nexus/m2/state` | session readings (latest / totals / curve / selfcheck coverage; `?root=all` switches to the global view) |
-| `GET/POST /api/nexus/m2/annotations` | hypothesis annotations read/write |
-| `GET /api/nexus/m2/turn-text` | full Q&A transcript of a turn |
-| `GET /api/nexus/m2/analysis` | white-box analysis (sigmoid / bursts / τ_e) |
-| `GET/POST /api/nexus/lfield` | L-field pointing status / switch |
+| `GET /api/nautilus/state` | vault totals / today / week / recent edit stream |
+| `GET/POST /api/nautilus/vault` | vault pointing status / switch |
+| `GET /api/nautilus/m2/state` | session readings (latest / totals / curve / selfcheck coverage; `?root=all` switches to the global view) |
+| `GET/POST /api/nautilus/m2/annotations` | hypothesis annotations read/write |
+| `GET /api/nautilus/m2/turn-text` | full Q&A transcript of a turn |
+| `GET /api/nautilus/m2/analysis` | white-box analysis (sigmoid / bursts / τ_e) |
+| `GET/POST /api/nautilus/lfield` | L-field pointing status / switch |
 
 ## Build
 

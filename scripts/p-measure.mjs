@@ -7,7 +7,7 @@
 //   §9 #2：『我ai』的必要性原为弱形式（不可证伪 → 可记录）——本脚本给它一个读数。
 //
 // 与 analysis-report.mjs 的分工（重要）：
-//   analysis-report.mjs 从 SQLite（~/.dsh/nexus/nexus.db）读 turn_read，
+//   analysis-report.mjs 从 SQLite（~/.dsh/nautilus/nautilus.db）读 turn_read，
 //   那是 **prompt 侧** 的 A 投影（缓存未命中率）——「模型看到的上下文有多新」。
 //   本脚本从 **会话日志原文件**（~/.dsh/sessions/**/session.v3.jsonl.zstd）读，
 //   算的是 **回答侧** 的量——「这一轮的输出有多少不能从在场历史推出」。
@@ -28,7 +28,7 @@
 //   模型实际 prompt 严格大于此集合（适配器包装等）→ 本读数系统性 **高估 P**。
 //   判读用相对值（会话间 / 类别间 / 轮次间），不用绝对值。
 //
-// 用法（在 dsh-nexus 仓库根下运行）：
+// 用法（在 dsh-nautilus 仓库根下运行）：
 //   node scripts/p-measure.mjs --session <id> [--n 5] [--json]
 //   node scripts/p-measure.mjs --all [--n 5] [--min-calls 3] [--json]
 //   node scripts/p-measure.mjs --vault [--n 5] [--json]      # 只跑 L 场指向工作区的会话
@@ -226,7 +226,7 @@ function findSessions (filter = null) {
 /** L 场指向工作区（复刻 analysis-report.mjs 的口径：目录名 = 绝对路径转义）
  *  L:\L_workspace\... → --L-L_workspace-...  （驱动器冒号去掉，分隔符转 '-'，两侧加 '--'） */
 function vaultWorkspacePrefix () {
-  const db = new DatabaseSync(join(homedir(), '.dsh', 'nexus', 'nexus.db'), { readOnly: true })
+  const db = new DatabaseSync(join(homedir(), '.dsh', 'nautilus', 'nautilus.db'), { readOnly: true })
   const root = db.prepare('SELECT root FROM lfield_config WHERE id = 1').get()?.root ?? ''
   if (!root) return null
   const escaped = root.replace(/^([A-Za-z]):/, '$1').replace(/[\\/]/g, '-')

@@ -7,14 +7,14 @@
 | 版本 | v0.1（draft，待开发组评审） |
 | 日期 | 2026-09-12 |
 | 前身文档 | 《DSH Nautilus 插件开发规划书 v1.1》（AI 起草）——本报告在其方向上重做技术设计与调研支撑，差异见附录 A |
-| 基座仓库 | `dsh-nautilus`（原 `dsh-nexus`；应用层插件，功能冻结待迁移） |
+| 基座仓库 | `dsh-nautilus`（原 `dsh-nautilus`；应用层插件，功能冻结待迁移） |
 | 状态 | 含 **3 个待决策点（D1–D3）**，决策通过后方可进入 Phase 0 |
 
 ---
 
 ## 0. 摘要
 
-本课题在已验证的应用层观测闭环（dsh-nexus：268 轮 / 3.99 亿 token 真实会话、缓存未命中率分桶定位、主客观交叉验证）基础上，向下扩展系统资源层与模型推理层，以核心调度层完成三层指标的时间对齐与关联归因，形成端侧 AI Ops 全链路闭环。与现有云数据中心方案（DeepFlow、Prometheus 系、LLM tracing 生态）对比，本课题的定位空隙在于：**单机 Windows 端侧、观测对象跨越 API 时代与本地部署时代的切换、假设驱动的闭环归因**。报告给出同类工作综述、指标口径的行业标准对齐、era 因果上下文设计、运行时选型决策点与修订后的阶段计划。
+本课题在已验证的应用层观测闭环（dsh-nautilus：268 轮 / 3.99 亿 token 真实会话、缓存未命中率分桶定位、主客观交叉验证）基础上，向下扩展系统资源层与模型推理层，以核心调度层完成三层指标的时间对齐与关联归因，形成端侧 AI Ops 全链路闭环。与现有云数据中心方案（DeepFlow、Prometheus 系、LLM tracing 生态）对比，本课题的定位空隙在于：**单机 Windows 端侧、观测对象跨越 API 时代与本地部署时代的切换、假设驱动的闭环归因**。报告给出同类工作综述、指标口径的行业标准对齐、era 因果上下文设计、运行时选型决策点与修订后的阶段计划。
 
 ---
 
@@ -30,7 +30,7 @@ LLM 工作负载正从数据中心向个人端侧迁移（本地推理、Agent �
 
 对「个人 AI 工作负载」（一个宿主进程 + 一条 LLM 通路 + 一个知识库）做**跨层、跨时代、闭环归因**的观测，目前没有现成方案。这是本课题的选题依据。
 
-### 1.2 已有基础（dsh-nexus 现状盘点）
+### 1.2 已有基础（dsh-nautilus 现状盘点）
 
 | 能力 | 现状 | 对本课题的意义 |
 |---|---|---|
@@ -38,7 +38,7 @@ LLM 工作负载正从数据中心向个人端侧迁移（本地推理、Agent �
 | 数据规模 | 268 轮 / 3.99 亿 token 真实交互 | 归因研究有真实底料，非玩具数据 |
 | 分析管线 | 形态分类 / τ_e 检出 / 分桶对照，首轮实证 13.7% vs 5.6% | 分桶方法可复用到跨层对照 |
 | 方法论 | 主客观交叉验证、预言检验表（P1–P9）、证据归档、可重复管线 | 防止关联归因退化为相关系数表演的纪律基础 |
-| 工程 | 纯 TS Cordis 插件，CI 门禁 + tag 发布，SQLite 私有存储（`~/.dsh/nexus/`） | 聚合包的安装链与数据目录约束 |
+| 工程 | 纯 TS Cordis 插件，CI 门禁 + tag 发布，SQLite 私有存储（`~/.dsh/nautilus/`） | 聚合包的安装链与数据目录约束 |
 
 ### 1.3 核心研究问题
 
@@ -96,10 +96,10 @@ LLM 工作负载正从数据中心向个人端侧迁移（本地推理、Agent �
 
 | 指标 | 状态 | 本课题对应 |
 |---|---|---|
-| `gen_ai.client.operation.duration` | 稳定 | nexus 逐轮 `duration_ms`（已有） |
-| `gen_ai.client.token.usage`（`gen_ai.token.type=input/output`） | 稳定 | nexus `token_in/out`（已有） |
+| `gen_ai.client.operation.duration` | 稳定 | nautilus 逐轮 `duration_ms`（已有） |
+| `gen_ai.client.token.usage`（`gen_ai.token.type=input/output`） | 稳定 | nautilus `token_in/out`（已有） |
 | `gen_ai.server.time_to_first_token` | incubating | API 时代待验证可得性（§4.4/Phase 0）；本地时代取 vLLM `time_to_first_token_seconds` |
-| `gen_ai.server.time_per_output_token` | incubating | nexus `tps` 的倒数语义；vLLM `request_time_per_output_token_seconds` |
+| `gen_ai.server.time_per_output_token` | incubating | nautilus `tps` 的倒数语义；vLLM `request_time_per_output_token_seconds` |
 
 **共同局限**：以上方案全部是「服务端/应用侧」视角，不闭合资源层——这正是本课题与它们的分界线。采用其命名体系的价值：指标口径外部可比，未来可无痛桥接 OTel 生态。
 
@@ -140,7 +140,7 @@ LLM 工作负载正从数据中心向个人端侧迁移（本地推理、Agent �
 ┌──────────────────────────── DSH Nautilus ────────────────────────────┐
 │                                                                       │
 │  pulse（OS/GPU 层）         infer（模型推理层）        nexus（应用层）    │
-│  系统指标 5s 轮询            API 时代：会话事件派生       现有 dsh-nexus  │
+│  系统指标 5s 轮询            API 时代：会话事件派生       现有 dsh-nautilus  │
 │  + dsh 宿主进程级指标        本地时代：引擎 /metrics      功能冻结，只加接口│
 │        │                        │                        │            │
 │        └───────────┬────────────┴────────────────────────┘            │
@@ -148,7 +148,7 @@ LLM 工作负载正从数据中心向个人端侧迁移（本地推理、Agent �
 │               nautilus-core                                           │
 │    指标注册 · era 因果上下文 · 时间窗对齐 · 关联快照 · 插件生命周期       │
 │                    ▼                                                  │
-│      SQLite（~/.dsh/nexus/，长表 + 事件表 + 现有 turn 库）              │
+│      SQLite（~/.dsh/nautilus/，长表 + 事件表 + 现有 turn 库）              │
 │                    ▼                                                  │
 │            看板 / 关联快照报告 / 归因案例归档                            │
 └───────────────────────────────────────────────────────────────────────┘
@@ -169,9 +169,9 @@ LLM 工作负载正从数据中心向个人端侧迁移（本地推理、Agent �
 | `nautilus.pulse.net.io_rate` | OS | 网络收发速率 | USE | 同上 | 5s | — |
 | `nautilus.pulse.proc.dsh.<rss|cpu>` | OS | **dsh 宿主进程级** | USE(进程视角) | 同上 | 5s | 与应用层弱因果对照的主指标 |
 | `nautilus.pulse.gpu.<util|mem|temp>` | OS | GPU 利用率/显存/温度 | DCGM 口径 | nvidia-smi/NVML 轮询；**无 N 卡整族缺席** | 5s | 显存 >95% |
-| `nautilus.infer.turn.duration` | 应用/模型 | 逐轮耗时 | `gen_ai.client.operation.duration` | nexus 已有 `duration_ms` | 每轮 | P95 基线偏移 |
-| `nautilus.infer.turn.tokens` | 应用/模型 | 输入/输出 token | `gen_ai.client.token.usage` | nexus 已有 | 每轮 | — |
-| `nautilus.infer.turn.tps` | 应用/模型 | 解码吞吐 | `time_per_output_token` 倒数语义 | nexus 已有 | 每轮 | — |
+| `nautilus.infer.turn.duration` | 应用/模型 | 逐轮耗时 | `gen_ai.client.operation.duration` | nautilus 已有 `duration_ms` | 每轮 | P95 基线偏移 |
+| `nautilus.infer.turn.tokens` | 应用/模型 | 输入/输出 token | `gen_ai.client.token.usage` | nautilus 已有 | 每轮 | — |
+| `nautilus.infer.turn.tps` | 应用/模型 | 解码吞吐 | `time_per_output_token` 倒数语义 | nautilus 已有 | 每轮 | — |
 | `nautilus.infer.turn.ttft` | 模型 | 首 token 延迟 | `gen_ai.server.time_to_first_token` | **待 Phase 0 验证宿主事件可得性** | 每轮（若可得） | — |
 | `nautilus.infer.session.model/endpoint` | 应用 | 命中的模型/端点 | OTel 属性 | session/event 字段落库 | 每会话 | era 判定依据 |
 | `nautilus.infer.engine.ttft/tpot` | 模型 | 引擎侧 TTFT/TPOT | vLLM `time_to_first_token_seconds` 等 | vLLM `/metrics`（本地时代） | 每请求 | — |
@@ -180,7 +180,7 @@ LLM 工作负载正从数据中心向个人端侧迁移（本地推理、Agent �
 
 ### 4.3 数据模型与存储
 
-沿用 `~/.dsh/nexus/`；驱动沿用现有 `node:sqlite`（`DatabaseSync`，零依赖，`src/store.ts` 已用，符合插件零依赖惯例）；新增两张表，**不与现有 turn 库混表**（修正前身「写入同一张表」的 schema 坏味道）：
+沿用 `~/.dsh/nautilus/`；驱动沿用现有 `node:sqlite`（`DatabaseSync`，零依赖，`src/store.ts` 已用，符合插件零依赖惯例）；新增两张表，**不与现有 turn 库混表**（修正前身「写入同一张表」的 schema 坏味道）：
 
 ```sql
 -- 采样型（pulse 全部 + infer 引擎 gauge）
@@ -216,7 +216,7 @@ CREATE TABLE metric_event (
 3. **归因规则**：归因报告强制声明 era 与对照集——
    - `api` 时代对照集 = { `pulse.proc.dsh.*` 宿主进程级, `infer.turn.*` }（客户端资源争用影响体感的**弱因果**，结论措辞用「对照」而非「归因」）；
    - `local` 时代对照集 = 全三层（强因果闭合）。
-4. **切换**：本地部署落地后，core 切换 era 上下文即可，Phase 0–3 的管道工作零改动复用；历史数据按 endpoint 回溯分类（与 nexus 已有的 vault 指向回溯机制同构，设计直接复用）。
+4. **切换**：本地部署落地后，core 切换 era 上下文即可，Phase 0–3 的管道工作零改动复用；历史数据按 endpoint 回溯分类（与 nautilus 已有的 vault 指向回溯机制同构，设计直接复用）。
 
 ### 4.5 运行时选型（**决策点 D1**）
 
@@ -224,7 +224,7 @@ Phase 1 的采集器就是未来 pulse 本体，语言决策必须先于第一�
 
 | 方案 | 优点 | 缺点 | 结论 |
 |---|---|---|---|
-| **A. 全 Node**：`systeminformation`（系统全景）+ `pidusage`（进程级）+ `nvidia-smi` 轮询解析 | 单运行时；聚合包仍是一个 dsh 插件，`dsh plugin add` 安装链不断；Windows 亲和；与 nexus 工程链（TS/CI/测试）统一 | GPU 指标依赖 nvidia-smi 输出解析（脆弱点，需版本化快照测试；OpenLIT 有现成 nvidia-smi→OTel 实现可借鉴） | **推荐** |
+| **A. 全 Node**：`systeminformation`（系统全景）+ `pidusage`（进程级）+ `nvidia-smi` 轮询解析 | 单运行时；聚合包仍是一个 dsh 插件，`dsh plugin add` 安装链不断；Windows 亲和；与 nautilus 工程链（TS/CI/测试）统一 | GPU 指标依赖 nvidia-smi 输出解析（脆弱点，需版本化快照测试；OpenLIT 有现成 nvidia-smi→OTel 实现可借鉴） | **推荐** |
 | **B. Python 采集器**（psutil+pynvml）+ core 经 child_process/文件接力 | 采集生态最成熟，原型最快 | 双运行时：分发碎片化，`dsh plugin add` 体验破坏，Phase 4 集成与跨机复现都要处理 Python 环境 | 备选 |
 | **C. Python 独立 pip 包**，core 只读其 SQLite | 最解耦 | 「聚合包」名存实亡，装机复杂度最高 | 不倾向 |
 
@@ -241,7 +241,7 @@ Phase 1 的采集器就是未来 pulse 本体，语言决策必须先于第一�
 2. **证据归档**：每 Phase 输出《证据归档文档》（执行命令 / 预期输出 / 实际输出 / 观察结论），延续仓库现有惯例。
 3. **注入自检**：Phase 3 用人为注入异常（如 CPU 压力）验证管道连通性——**明确定性为管道自检，不作为归因能力证明**。
 4. **假设驱动归因**：真实排障（Phase 5）必须先立假设、预登记预言（延续预言检验表方法），再查数验证；归因结论人工主导，AI 仅辅助检索与编码。
-5. **主客观交叉验证**：延续 nexus 的双指标互相限制偏差原则——客观曲线有混杂变量，主观自评有报告偏差，跨层归因报告同样要求双源佐证。
+5. **主客观交叉验证**：延续 nautilus 的双指标互相限制偏差原则——客观曲线有混杂变量，主观自评有报告偏差，跨层归因报告同样要求双源佐证。
 
 ---
 
@@ -296,7 +296,7 @@ Phase 1 的采集器就是未来 pulse 本体，语言决策必须先于第一�
 6. 社区 Ollama + NVIDIA GPU 看板（Grafana ID 25193）：https://grafana.com/grafana/dashboards/25193-neurix-ollama-nvidia-gpu/
 7. USE 方法（Brendan Gregg）：https://www.brendangregg.com/usemethod.html
 8. Netdata（端侧一体化 + ML 异常检测）：https://github.com/netdata/netdata
-9. 本仓库 README（dsh-nexus 现状与指标口径）：./README.md
+9. 本仓库 README（dsh-nautilus 现状与指标口径）：./README.md
 10. systeminformation（Node 系统全景 API，3.1k★）：https://github.com/sebhildebrandt/systeminformation
 11. pidusage（跨平台进程级 CPU/RSS，545★）：https://github.com/soyuka/pidusage
 12. nvitop（NVML GPU 监控 + exporter 模式，7.1k★）：https://github.com/XuehaiPan/nvitop
@@ -312,7 +312,7 @@ Phase 1 的采集器就是未来 pulse 本体，语言决策必须先于第一�
 
 | 位置 | 原文 | 修订 | 理由 |
 |---|---|---|---|
-| 数据流 | pulse→infer→nexus→core 串行管道 | 三路并行源汇入 core | 实际依赖关系，避免实现者误做串联 |
+| 数据流 | pulse→infer→nautilus→core 串行管道 | 三路并行源汇入 core | 实际依赖关系，避免实现者误做串联 |
 | 3.2 指标源 | KV Cache 占用 = pynvml | 仅 vLLM `kv_cache_usage_perc`；Ollama 降级为显存增量近似 | pynvml 无 KV cache 语义（§2.3） |
 | 3.2 Phase 2 | 选型 Ollama/vLLM 抓 /metrics | 拆为 2a（API 时代：注册已有逐轮指标）+ 2b（本地时代，挂起） | 当前流量命中云端 API，本地推理指标与应用层数据无因果通路（RQ3） |
 | 3.1 采集方式 | psutil / iostat、/proc/net/dev | 统一 psutil 类接口 | Windows 无 /proc、iostat |
@@ -321,4 +321,4 @@ Phase 1 的采集器就是未来 pulse 本体，语言决策必须先于第一�
 | 开发路线 | Phase 1 为 P0，未处理与主线关系 | 新增 Phase 0（选型+因果链确认）；Phase 0–2b 隔离于主线，迁移排 M4 收尾后 | 与 M4.11 并行不冲突，冲突后移 |
 | 归因表述 | 「自动关联归因」 | 管道自检（注入）与真实归因（假设驱动）分离；api 时代结论只称「对照」 | 防止相关/因果混淆与过度承诺 |
 
-**保留不动的**：四模块架构、最小闭环优先、跑通即归档、每 Phase 验收标准、2–3 方案对比由开发组决策、归因结论人工主导、nexus 功能冻结仅加接口。
+**保留不动的**：四模块架构、最小闭环优先、跑通即归档、每 Phase 验收标准、2–3 方案对比由开发组决策、归因结论人工主导、nautilus 功能冻结仅加接口。

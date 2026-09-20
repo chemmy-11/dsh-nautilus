@@ -1,9 +1,10 @@
 /**
- * @dsh-external/dsh-nexus — pulse 插件入口（OS/GPU 层；Nautilus 三层指标的系统层腿）。
+ * @dsh-external/dsh-nautilus — pulse 插件入口（OS/GPU 层；Nautilus 三层指标的系统层腿）。
  *
  * 相位：Phase 1「pulse 最小闭环」（docs/1-planning/nautilus-opening-report.md 六、Phase 1）。
- * 装配：本插件是**独立 patch 行**（`cordis.patch.yml` 的 `id: pulse`），与 nexus 插件同包不同入口；
- *       两者同库（`~/.dsh/nexus/nexus.db`）不同表——本层不动 nexus 任何代码与表。
+ * 装配：本包带客户端半区，**只允许一个 Loader 条目**——pulse 不是独立 patch 行，而是由父插件
+ *       `ctx.plugin(pulse, config.pulse)` 挂载的子插件（见 cordis.patch.yml 顶部契约）。
+ *       两者同库（`~/.dsh/nautilus/nautilus.db`）不同表——本层不动主插件的任何代码与表。
  *
  * 采集模型：**单条串行循环**（setTimeout 递归，不重叠、不并发）；
  *   · 本地族（CPU/内存/dsh 宿主进程）每次 tick 必采——零依赖、零子进程；
@@ -16,6 +17,7 @@ import type {} from '@deepseek-ai/dsh-host-webserver' // 拉声明合并：ctx.w
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import z from '@deepseek-ai/schemastery'
+import { resolveDataDir } from '../home.js'
 import { LAYER, collectGpu, collectLocal, cpuTimes, type Exec, type ExecResult, type Sample } from './collect.js'
 import { CountersSession, type ChildLike, type ChildSpawner } from './counters.js'
 import { openPulseStore, type PulseStore } from './store.js'
@@ -43,7 +45,7 @@ export interface Config {
   enableGpu: boolean
   pwshPath: string
   nvidiaSmiPath: string
-  /** 空 = `$DSH_HOME/nexus/nexus.db`（与 nexus 同库）。 */
+  /** 空 = `$DSH_HOME/nautilus/nautilus.db`（与 nautilus 同库）。 */
   dbFile: string
 }
 
@@ -139,7 +141,8 @@ export function apply(ctx: Context, config: Config): void {
     console.warn('[pulse] Config.enabled=false —— 不启动采集（只保留路由空态）')
   }
   const dshHome = process.env.DSH_HOME || join(homedir(), '.dsh')
-  const dbFile = config.dbFile !== '' ? config.dbFile : join(dshHome, 'nexus', 'nexus.db')
+  // 默认与主插件同库；走共享助手（父插件已迁移过则为无操作，独立挂载时也能自愈）
+  const dbFile = config.dbFile !== '' ? config.dbFile : resolveDataDir(dshHome).dbFile
   const store: PulseStore = openPulseStore(dbFile)
   ctx.effect(() => () => store.close())
 

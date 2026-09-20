@@ -1,5 +1,5 @@
 /**
- * @dsh-external/dsh-nexus — 导出形态守卫（postmortem 0001 / AGENTS.md §2）。
+ * @dsh-external/dsh-nautilus — 导出形态守卫（postmortem 0001 / AGENTS.md §2）。
  *
  * 规则：**命名空间插件**（同文件里有 `export const inject` 或 `export function apply`
  * 这类命名导出）**不得再写 `export default`**——Cordis Loader 的 `unwrapExports`

@@ -1,12 +1,12 @@
 /**
- * @dsh-external/dsh-nexus — vault full scan (baseline + periodic calibration).
+ * @dsh-external/dsh-nautilus — vault full scan (baseline + periodic calibration).
  * Maintains only vault_meta (edit counting is written solely by the watch channel —
  * semantics: edit = realtime perception, scan = baseline/calibration).
  * Zero writes into the vault; char count: strip whitespace, exclude frontmatter (`---` block).
  */
 import { readdir, readFile, stat } from 'node:fs/promises'
 import { join, relative } from 'node:path'
-import type { NexusStore } from './store.js'
+import type { NautilusStore } from './store.js'
 
 export interface ScanResult {
   scanned: number
@@ -34,7 +34,7 @@ export function countChars(text: string): number {
   return body.replace(/\s+/g, '').length
 }
 
-export async function scanVault(store: NexusStore, root: string, exclude: string[]): Promise<ScanResult> {
+export async function scanVault(store: NautilusStore, root: string, exclude: string[]): Promise<ScanResult> {
   const files: string[] = []
   const walk = async (dir: string): Promise<void> => {
     const entries = await readdir(dir, { withFileTypes: true })

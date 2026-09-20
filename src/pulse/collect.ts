@@ -1,5 +1,5 @@
 /**
- * @dsh-external/dsh-nexus — pulse（OS/GPU 层）采集器：Nautilus 三层指标的系统层腿。
+ * @dsh-external/dsh-nautilus — pulse（OS/GPU 层）采集器：Nautilus 三层指标的系统层腿。
  *
  * 依据：docs/1-planning/nautilus-opening-report.md §4.2（指标口径）/ §4.3（存储）/ D1 决策
  *      + docs/2-dev/nautilus-dev-03-os-layer.md（本层开发文档）。

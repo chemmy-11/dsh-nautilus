@@ -1,5 +1,5 @@
 /**
- * @dsh-external/dsh-nexus — Node 构建入口（build / prepack / prepare 共用）。
+ * @dsh-external/dsh-nautilus — Node 构建入口（build / prepack / prepare 共用）。
  *
  * 三种触发（pnpm 11.24 + npm 12 本机实测，2026-09-13）：
  *   · `npm run build` 与 `prepack`：**始终构建**（本地开发 / npm pack 发布打包 / git 安装的 prepack 阶段）；

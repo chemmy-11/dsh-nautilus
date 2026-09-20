@@ -1,12 +1,12 @@
 /**
- * @dsh-external/dsh-nexus — pulse 路由（host 半区）。
+ * @dsh-external/dsh-nautilus — pulse 路由（host 半区）。
  *
  * 用途：本层自检 + UI 层取数口 + **运行时心跳档位控制**。
- *   GET  /api/nexus/pulse/state                        采集状态 + 每指标最新值
- *   GET  /api/nexus/pulse/series?metric=&windowMs=&maxPoints=   单指标时间序列（桶均值）
- *   POST /api/nexus/pulse/control                      心跳档位：{ intervalMs } 定时档 | { mode:'manual' } 手动档 | { sample:true } 立即采一次
+ *   GET  /api/nautilus/pulse/state                        采集状态 + 每指标最新值
+ *   GET  /api/nautilus/pulse/series?metric=&windowMs=&maxPoints=   单指标时间序列（桶均值）
+ *   POST /api/nautilus/pulse/control                      心跳档位：{ intervalMs } 定时档 | { mode:'manual' } 手动档 | { sample:true } 立即采一次
  *
- * 与 nexus 路由同一守卫口径（同源标记）。**control 只改采集节律，不写业务读数**——
+ * 与 nautilus 路由同一守卫口径（同源标记）。**control 只改采集节律，不写业务读数**——
  * 它决定「多久采一次」，采样本身仍走同一条 tick 路径（同库同表）。
  */
 import type { IncomingMessage, ServerResponse } from 'node:http'
@@ -15,7 +15,7 @@ import type { PulseStore } from './store.js'
 import type { PulseCollectorStatus } from './index.js'
 
 /** 集中常量：pulse 路由前缀（AGENTS.md §1-4）。 */
-export const PULSE_API_PREFIX = '/api/nexus/pulse'
+export const PULSE_API_PREFIX = '/api/nautilus/pulse'
 
 /** 定时档允许的间隔区间（UI 只暴露 1s / 5s 两档；区间校验在此统一，非法即 400）。 */
 export const PULSE_INTERVAL_MIN_MS = 1000
@@ -42,7 +42,7 @@ function json(res: ServerResponse, status: number, body: unknown): void {
   res.end(JSON.stringify(body))
 }
 
-/** 与 nexus 路由同款同源守卫（本地实现，不跨层 import nexus 模块）。 */
+/** 与 nautilus 路由同款同源守卫（本地实现，不跨层 import nautilus 模块）。 */
 function browserSameOriginMarker(req: IncomingMessage): boolean {
   const site = req.headers['sec-fetch-site']
   return site === 'same-origin' || typeof req.headers.origin === 'string'

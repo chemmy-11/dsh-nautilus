@@ -1,5 +1,5 @@
 /**
- * @dsh-external/dsh-nexus — 计数器族的**常驻助手**（Windows 系统计数器的低成本通道）。
+ * @dsh-external/dsh-nautilus — 计数器族的**常驻助手**（Windows 系统计数器的低成本通道）。
  *
  * 为什么需要它（实测，2026-09-13，Windows PowerShell 5.1）：
  *   · **一次性进程**：每次约 `wall 3.0s / CPU 2.9s`——其中 ~2.5s 是解释器启动与 CIM 模块自动加载；
