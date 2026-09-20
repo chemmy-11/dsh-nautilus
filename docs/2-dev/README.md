@@ -16,6 +16,7 @@ Nautilus 各阶段的具体开发文档：模块设计、接口契约、schema�
 | [evidence-phase0-20260912.md](./evidence-phase0-20260912.md) | 证据归档 · Phase 0：命令 / 预期 / 实际输出 / 观察结论，含可复现测量脚本 | 已归档（2026-09-12） |
 | [nautilus-dev-02-ui-workbench.md](./nautilus-dev-02-ui-workbench.md) | 开发文档二 · S4 工作台 UI 定版：五视图 / 三层联动 / era 措辞分级 / `--nt-*` 令牌映射 / `turn_annotation` 契约 | v0.1（UI 支线） |
 | [nautilus-dev-03-os-layer.md](./nautilus-dev-03-os-layer.md) | 开发文档三 · Phase 1：pulse（OS/GPU 层）——15 条序列 / 6 族口径、常驻计数器助手的成本实测、`metric_sample` 与 v3→v4 迁移、只读取数路由 | v0.1，**待开发组评审** |
-| [evidence-phase1-20260913.md](./evidence-phase1-20260913.md) | 证据归档 · Phase 1：通道成本对比（一次性 2.9 s CPU vs 常驻 16–31 ms）、15 族落库、软失败路径、迁移与存储、1 小时 soak | 归档中（soak 回填后定稿） |
+| [evidence-phase1-20260913.md](./evidence-phase1-20260913.md) | 证据归档 · Phase 1 + S 系列：通道成本对比、15 族落库、迁移与 soak（E21 起含 S1.1 自评多源采集） | 归档中（soak 回填后定稿） |
+| [nautilus-dev-04-selfcheck-ingest.md](./nautilus-dev-04-selfcheck-ingest.md) | 开发文档四 · **S1.1 自评多源采集**：`selfcheck_record`（v5 迁移）、共享 ingest、`POST /selfcheck`（token 门默认关）、工具 quote 硬门、MCP 前瞻约束 | v0.1（**S1.1 已交付**，见 E21；S1.2 面板切读待建） |
 
-（待建：**S1「自评多源采集」实现文档**（口径见 [../1-planning/nautilus-selfcheck-multisource.md](../1-planning/nautilus-selfcheck-multisource.md)：v5 迁移 + POST ingest + 工具改造，待开 issue）；Phase 2a「模型层 API 时代」开发文档；Phase 3「core 管道与时间窗对齐」；1 分钟档聚合与 OTLP 导出按 [nautilus-dev-03-os-layer.md](./nautilus-dev-03-os-layer.md) §7 的 OQ 推进）
+（待建：**S1.2「自评读侧统一与覆盖率三态」开发文档**（面板切读 `selfcheck_record`、按 source_kind/agent 分层、缺口三态——决策 D-SC4 落点）；Phase 2a「模型层 API 时代」开发文档；Phase 3「core 管道与时间窗对齐」；1 分钟档聚合与 OTLP 导出按 [nautilus-dev-03-os-layer.md](./nautilus-dev-03-os-layer.md) §7 的 OQ 推进）

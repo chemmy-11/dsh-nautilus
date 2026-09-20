@@ -1,6 +1,6 @@
 # 自评多源采集（S 系列）——规则完善与通道决策记录
 
-> 版本 v0.1（2026-09-27 起草；**D-SC1 / D-SC2 已由守谷人「按建议继续」签核**，其余条目为建议待核）
+> 版本 v0.2（2026-09-27 起草；**D-SC1 / D-SC2 / D-SC3 已签核**——守谷人「按建议继续」+「先按你定的存储模型来，可以直接提需求了」；并记录远期意向：**存储后续可能再经 MCP 接入**，据此定 §1-D-SC3a 前瞻约束。D-SC4 / D-SC5 仍为建议待核）
 > 归属：决策文档（改动即决策）；实现落 `../2-dev/`（开项时建 Phase 文档）。
 > 数据口径：`~/.dsh/nautilus/nautilus.db` **2026-09-20 探测快照**（只读副本，非实时）；裁决日期以守谷人批复轮次标注为准（沿 E18 先例）。
 > 上游：vault `外功/DSH/雪谷观测插件开发文档-M3`（自评三行出处）· 同 `-M5`（declaration 全零触发与 P 腿挂起）· [nautilus-nexus-positioning.md](./nautilus-nexus-positioning.md)（D-N1 迁移主权，未裁不阻塞本项目）。
@@ -34,9 +34,13 @@
 - 0/1 与引文一并落库；P2 检验以**人工复核引文**为准。结构判据（P 腿）随 M5 继续挂起，复活另行立项（届时与 D-N3 粒度一并裁）。
 - **版本槽改判**：pulse 已占 `user_version=4`、M5 曾顺延预留 v5；本条签核后 **v5 划拨给本项目新表**，M5 若复活改占 v6（回写 M5 文档，见 §5）。
 
-### D-SC3 存储模型 —— 建议，待核
+### D-SC3 存储模型 —— ✅ 已签核（定案版）
 
-新表 `selfcheck_record`（append-only）；`turn_read` 三列自评**冻结保留**（观测记录是实证；既有读数面不断裂），面板读侧逐步切统一视图。草案：
+新表 `selfcheck_record`（append-only）；`turn_read` 三列自评**冻结保留**（观测记录是实证；既有读数面不断裂），面板读侧后续切统一视图。定案相对草案的三处收紧：
+
+- **`source_kind` 枚举含 `'mcp'`**（预占槽，防日后加枚举走一次额外迁移）；
+- **`turn_ordinal` 改为 NOT NULL**——去重键不允许 NULL 语义含糊（SQLite UNIQUE 视 NULL 互不相等），来源必须有轮次序号，外部 harness 用自己的对话计数；
+- **去重唯一键定案 `(source_kind, ext_ref, turn_ordinal)`**：同键重投 = 修正覆盖（last-writer-wins，与旧 `turn_read` 自评列同语义），响应 `duplicate: true`。
 
 ```sql
 CREATE TABLE IF NOT EXISTS selfcheck_record (
@@ -44,22 +48,31 @@ CREATE TABLE IF NOT EXISTS selfcheck_record (
   ts_ms          INTEGER NOT NULL,            -- 宿主接收时刻（权威时钟）
   ts_client      INTEGER,                     -- 来源自报时刻（仅对照）
   schema_version INTEGER NOT NULL DEFAULT 1,  -- 口径版本：锚例/字段变更递增，旧值不重标
-  source_kind    TEXT    NOT NULL,            -- dsh_tool | http | backfill
+  source_kind    TEXT    NOT NULL CHECK (source_kind IN ('dsh_tool','http','backfill','mcp')),
   agent          TEXT    NOT NULL,            -- 自评者标识（DSH 侧 = sessionId；外部 = harness/agent 名）
   model          TEXT,                        -- 有则报
   workspace      TEXT,                        -- 归属工作区路径字符串（L 场口径；不读该路径）
   ext_ref        TEXT    NOT NULL,            -- 来源内部会话标识
-  turn_ordinal   INTEGER,                     -- 来源侧轮次（可空）
+  turn_ordinal   INTEGER NOT NULL,            -- 来源侧轮次（必填，去重键成员）
   clarity        REAL    NOT NULL CHECK (clarity BETWEEN 0 AND 1),
   defense        TEXT    NOT NULL CHECK (defense IN ('none','light','heavy')),
   declaration    INTEGER NOT NULL CHECK (declaration IN (0,1)),
   quote          TEXT,
   CHECK (declaration = 0 OR quote IS NOT NULL)
 );
--- 去重唯一索引（source_kind, ext_ref, turn_ordinal 或 ts_client）细节留 Phase 文档
+CREATE UNIQUE INDEX ux_sc_key ON selfcheck_record (source_kind, ext_ref, turn_ordinal);
+CREATE INDEX ix_sc_ts ON selfcheck_record(ts_ms);
 ```
 
 **为什么不把身份列加在 `turn_read`**：非 DSH 轮次在宿主里没有对应 `turn_read` 行（该表来自 DSH `session/event` 直采）——多源自评不该伪造宿主轮次，另立表是唯一干净口径。迁移沿 `store.ts` 现有唯一权威顺序执行（v4→v5）；D-N1 案 B（迁移账本）若日后裁决，本表迁移原样入册。
+
+### D-SC3a MCP 接入前瞻约束（守谷人意向 2026-09-27：「后续可能再通过 MCP 接入数据库」）
+
+本轮不实现 MCP server，但存储模型按它可无痛接入来定，三条硬约束：
+
+1. **ingest 与传输解耦**：校验 + 去重 + 落库收进 `src/selfcheck-ingest.ts` 纯模块（零 HTTP/工具依赖）——DSH 工具、HTTP 路由、未来 MCP server 只是三个薄壳。
+2. **库即接口**：`selfcheck_record` 用标准 SQLite（无 DSH 私有序列化），未来 MCP server 以 **WAL 只读连接**（读面）或复用 ingest 模块（写面，`source_kind='mcp'`）接入，**不改表、不改迁移**。
+3. **身份自足**：表内 `agent/model/workspace/ext_ref` 齐备，MCP 侧消费者无需回查宿主即可分层——对应 D-SC4 的分层强制。
 
 ### D-SC4 规则完善（谷规第 6 条与工具描述同步）—— 待核
 
