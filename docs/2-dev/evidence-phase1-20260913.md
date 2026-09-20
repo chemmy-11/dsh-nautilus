@@ -451,6 +451,38 @@ client-modules: package @dsh-external/dsh-nexus resolves from multiple active Lo
 
 ---
 
+## E19 L 场读数搬进工作台 + 旧 L 场模块删除（2026-09-27）
+
+**触发**：守谷人「确保 Nautilus 工作台能正确渲染，且包含 L 场读数相关内容后，原有的 L 场模块也能删了」。
+
+**先补能力（旧 tab → 工作台，四项）**
+
+| 能力 | 旧 L 场 tab | 工作台落点 |
+|---|---|---|
+| 视图两态（全局 / 指向） | `viewMode` 驱动 `?root=all` 与否 | 根组件 `viewMode` 驱动 `m2/state` 与 `m2/analysis` 两条取数 URL；总览 L 场面板内切换 |
+| L 场指向切换 | 面板内输入 + 二次确认 + POST | 总览「L 场读数（独立指向）」面板：路径输入 + 确认切换 → `POST /api/nautilus/lfield`，成功即 toast + 重取 |
+| 累计输入（cum）+ 轮次轴 | `metric=cum` · `axis=turn` | 曲线视图：指标段加「累计输入」（Σ(命中+未命中) 按轮序，弱代理）+ 轴段加「轮次轴/日期轴」（`CurveChart` 新增 `xTick` 支持非 epoch 轴） |
+| 自评覆盖（视图口径 + 缺口轮号） | `selfcheck.bySession` 徽标 | 曲线视图覆盖行：`自评覆盖 N%（x/y 轮）· 本会话 a/b 轮 · 缺 t9` |
+
+**删除面**：`src/client/index.ts` 的 `NautilusLFieldView`（约 350 行）及其 `conversation.view` 注册、`injectStyle`/`STYLE`/`useHideComposer`/`pct`/`fmtK`/`shortSession`/`useChartWidth`/`fmtTime`/`hashIdx`/`PALETTE`/`colorOf`/`Card`/`Kv`/`Badge`/`LineChart`/`Series*`/`M2*`/`TurnTextResp`/`Annotation*` 等类型与助手——该文件从 **795 行压到 68 行**（只剩 `inject` + `sessionNameOf` 解析 + 工作台双注册）。`dsh.client.inject` 去掉不再使用的 `dsh-client-ui-conversation`。
+
+**新增验证：工作台渲染冒烟（真实 react SSR）**
+- 为什么要它：本仓库此前的客户端验证只到「bundle 里有没有标记」，「能不能渲染」没人证过；而 DOM 我观测不到（OQ-U6）。
+- 做法：`test.mjs` 用 esbuild 把 `src/client/workbench.ts` 打成临时 ESM（**react 必须 external**——内联会出现两份 react 实例，报 `Cannot read properties of null (reading useState)`，实测踩到），再用 `react-dom/server.renderToStaticMarkup` 渲染：总览 / 曲线 / 假设 / 预言 / 报告 **五视图** + 根组件 + `ViewBoundary` 回退，并对每处断言内容（如总览含「L 场读数（独立指向）」「切换指向」「确认切换」；曲线含「累计输入」「轮次轴」「自评覆盖」）。
+- react/react-dom 仅作**测试用 devDep**（构建与产物都不依赖：客户端 bundle 把 react 列为 external，宿主以基线模块提供）。
+- **它当场抓到一个真 bug**：`ReportView` 与工作台头部仍引用上一轮删 vault 时漏掉的 `nautilus` 变量（`ReferenceError: nautilus is not defined`）——浏览器里会表现为「报告视图渲染失败」隔离卡；已修。这条印证了「不改代码就没人发现」的盲区。
+
+**实测**
+- 六件套全绿；`npm test` **22/22**（新增渲染冒烟；`client bundle` 用例期望同步为「只剩工作台双注册」）。
+- **端上（dsh 0.1.6-alpha.2，profile `web`，用户已用 `link:L:/dsh-nautilus` 装配 junction）**：启动日志 `[nautilus] Pulse OS/GPU 层已挂载（子插件）`；启动图行 `@dsh-external/dsh-nautilus`（rev `6ab02e7a7ac4dce2-50`）；下发 bundle 96055B（仓库 96165B）含 `nt-wb-seg`/`nt-wb-picker`/`nt-hb-lab`/`sidebar.panellist`；**`conversation.view` 已不在产物中**；活跃路由 `m2/state`（含 `?root=all` 与指向两态）、`m2/annotations`、`m2/analysis`、`lfield`、`pulse/state` 全 **200**；已删的 `state`/`vault`/`action` 全 **404**；`selfcheck.bySession` 在场（4 会话）。
+- 视图两态核验：`.dsh-next` 里 L 场指向为空、5 个会话全未归属，故「指向」与「全局」两态返回相同 turns=7——**口径正确但当前无差异**（诚实边界：两态差异要在有归属会话的库上才看得出）。
+
+**环境四元组**：dsh `0.1.6-alpha.2` · profile `web`（`DSH_HOME=.dsh-next`）· 装配 = **bundle + junction（link:）** · 结果：**通过**（产物级 + 接口级 + SSR 渲染级；DOM 仍未由我观测）。
+
+**诚实边界**：① DOM/交互仍未由我观测（OQ-U6）——SSR 只能证明「首帧渲染不抛错且内容齐全」，不能证明缩放/拖动/悬停等交互；② 工作台的 cum/轮次轴/覆盖行是**首帧默认态**验证，未验交互切换后的形态；③ 稳定宿主（0.1.5-rc.2 / 3080）尚未重启，仍跑旧代码（vault tab 与 L 场 tab 都还在内存里），重启后才与本归档一致；④ 冒烟测试依赖 devDep react/react-dom（唯一新增依赖，仅测试路径）。
+
+---
+
 ## E8 诚实边界（引用本归档时必须一并引用）
 
 1. **端上读数口径**：§E8 初稿时本层尚未装配（证据全来自离线探针）；**§E9 起已热装配进 profile `web`**，宿主路径已有端上四元组读数（OQ-3 收敛）。但 E5 的 1 小时档仍只有中间读数，且「连续 1 小时无内存增长」尚未给出完整序列。

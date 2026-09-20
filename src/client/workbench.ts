@@ -152,7 +152,7 @@ export type M2State = {
   totals: { turns: number; tokenIn: number; tokenOut: number; cacheRead: number; missToken: number; hitRate: number | null }
   curve: M2Point[]
   recent: M2Point[]
-  selfcheck: { checked: number; total: number }
+  selfcheck: { checked: number; total: number; bySession?: Record<string, { checked: number; total: number; missing: number[] }> }
   sessionMeta: Record<string, { startTs: number; turns: number }>
 }
 export type Annotation = { prophecy: string; status: string; note: string | null; updatedAt: number }
@@ -315,15 +315,15 @@ export function Spark(props: {
     kids.push(createElement('line', { key: 'g' + String(r), x1: padL, x2: w - padR, y1: y, y2: y, stroke: 'var(--nt-border,#d9d9d5)', strokeWidth: 1, opacity: 0.7 }))
     kids.push(createElement('text', { key: 't' + String(r), x: padL - 6, y: y + 3, fontSize: 9, fill: 'var(--nt-faint,#9a9a95)', textAnchor: 'end' }, yf(v)))
   }
-  // x 时间刻度（首/中/末；x 为 epoch ms 时自动生成，跨度 <36h 只显时分）
-  if (n >= 3 && pts[0].x > 1e12) {
+  // x 刻度（首/中/末）：显式 xTick 优先（轮次轴）；否则 x 为 epoch ms 时走时间格式（跨度 <36h 只显时分）
+  if (n >= 3 && (props.xTick !== undefined || pts[0].x > 1e12)) {
     const spanMs = pts[n - 1].x - pts[0].x
     const short = spanMs < 36 * 3600000
-    const xt = (x: number): string => {
+    const xt = props.xTick ?? ((x: number): string => {
       const d = new Date(x)
       const hm = String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0')
       return short ? hm : String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0') + ' ' + hm
-    }
+    })
     for (const k of [0, Math.floor((n - 1) / 2), n - 1]) {
       const x = sx(k)
       kids.push(createElement('line', { key: 'x' + String(k), x1: x, x2: x, y1: h - padB, y2: h - padB + 3, stroke: 'var(--nt-border,#d9d9d5)' }))
@@ -374,6 +374,8 @@ export function CurveChart(props: {
   thresholdLabel?: string
   yFmt?: (v: number) => string
   anno?: { from: number; to: number; txt: string }
+  /** 自定义 x 刻度格式（轮次轴用；缺省走 epoch 时间轴自动格式） */
+  xTick?: (x: number) => string
   h?: number
   fill?: boolean
   resetKey?: string | number
@@ -557,7 +559,7 @@ export function CurveChart(props: {
 
 // ── 视图 1：总览 ──────────────────────────────────────────────────────────────
 
-export function OverviewView(props: { m2: M2State | null; pulse: PulseState | null; lfield: LfieldInfo | null; onOpenTurn: (s: string, t: number) => void }): ReactNode {
+export function OverviewView(props: { m2: M2State | null; pulse: PulseState | null; lfield: LfieldInfo | null; viewMode: 'pointed' | 'all'; onViewMode: (m: 'pointed' | 'all') => void; newRoot: string; onNewRoot: (v: string) => void; switching: boolean; onSwitchLfield: (root: string) => void; onOpenTurn: (s: string, t: number) => void }): ReactNode {
   const { m2, pulse } = props
   const n = m2?.totals
   const hr = n?.hitRate
@@ -625,10 +627,27 @@ export function OverviewView(props: { m2: M2State | null; pulse: PulseState | nu
     }),
     Panel({
       title: 'L 场读数（独立指向）', fig: 'FIG.08',
-      note: 'M4-L：L 场读数按会话发起时的工作区（cwd）归属，每根计数独立（跨根不混算）。此处只呈现计数，读数明细在曲线与抽屉里。',
+      note: 'M4-L：L 场读数按会话发起时的工作区（cwd）归属，每根计数独立（跨根不混算）。「视图」切换决定取数口径（全局 = 全部工作区；指向 = 当前指向工作区）；切换指向只影响**新会话**的归属，既有归属不变。',
       children: props.lfield === null
         ? Empty({ text: 'L 场接口不可用（/api/nautilus/lfield）' })
         : createElement('div', null,
+          createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 10 } },
+            createElement('span', { style: { fontSize: 10, letterSpacing: 2, color: 'var(--nt-faint,#9a9a95)' } }, '视图'),
+            createElement('div', { className: 'nt-wb-seg' },
+              ...([['pointed', '指向'], ['all', '全局']] as Array<['pointed' | 'all', string]>).map(([m, lab]) =>
+                createElement('button', { key: m, className: props.viewMode === m ? 'on' : '', onClick: () => props.onViewMode(m) }, lab)),
+            ),
+            createElement('span', { style: { fontSize: 10, color: 'var(--nt-faint,#9a9a95)' } }, '取数口径随视图切换（曲线/假设/报告同步）'),
+          ),
+          createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 10 } },
+            createElement('span', { style: { fontSize: 10, letterSpacing: 2, color: 'var(--nt-faint,#9a9a95)' } }, '切换指向'),
+            createElement('input', {
+              className: 'nt-input', style: { flex: '1 1 260px', minWidth: 200 },
+              placeholder: '工作区绝对路径（如 L:\\L_workspace\\...）',
+              value: props.newRoot, onChange: (e: { target: { value: string } }) => props.onNewRoot(e.target.value),
+            }),
+            createElement('button', { className: 'nt-btn', disabled: props.switching || props.newRoot.trim() === '', onClick: () => props.onSwitchLfield(props.newRoot) }, props.switching ? '切换中…' : '确认切换'),
+          ),
           createElement('table', { className: 'nt-tbl' },
             createElement('thead', null, createElement('tr', null, ...['归属根', '读数条数'].map((h) => createElement('th', { key: h }, h)))),
             createElement('tbody', null, ...Object.entries(props.lfield.counts).map(([root, n]) => createElement('tr', { key: root === '' ? '(未归属)' : root },
@@ -643,8 +662,10 @@ export function OverviewView(props: { m2: M2State | null; pulse: PulseState | nu
 
 // ── 视图 2：曲线 ──────────────────────────────────────────────────────────────
 
-export type CurveKey = 'miss' | 'ms' | 'tps'
+export type CurveKey = 'miss' | 'ms' | 'tps' | 'cum'
 export function curveValue(p: M2Point, key: CurveKey): number | null {
+  // cum（累计输入）需要沿序列累加，不是逐点函数——在 CurveView 里按序累加（此处显式返回 null）
+  if (key === 'cum') return null
   if (key === 'ms') return p.durationMs
   if (key === 'tps') return p.tps
   const read = p.cacheRead
@@ -652,8 +673,8 @@ export function curveValue(p: M2Point, key: CurveKey): number | null {
   const den = read + miss
   return den <= 0 ? null : miss / den
 }
-export function curveUnit(key: CurveKey): string { return key === 'miss' ? '%' : key === 'ms' ? 'ms' : 'tok/s' }
-export function curveLabel(key: CurveKey): string { return key === 'miss' ? '未命中率' : key === 'ms' ? '每轮时长' : '解码速度' }
+export function curveUnit(key: CurveKey): string { return key === 'miss' ? '%' : key === 'ms' ? 'ms' : key === 'cum' ? 'tok' : 'tok/s' }
+export function curveLabel(key: CurveKey): string { return key === 'miss' ? '未命中率' : key === 'ms' ? '每轮时长' : key === 'cum' ? '累计输入' : '解码速度' }
 
 /** /m2/analysis 的逐会话行（只取注记所需字段）。 */
 export type AnalysisRow = { session: string; shape: string; tauE: number | null; burst: { fromTurn: number; toTurn: number; direction: string } | null }
@@ -680,6 +701,7 @@ const CURVE_YFMT: Record<CurveKey, (v: number) => string> = {
   miss: (v) => String(Math.round(v)) + '%',
   ms: (v) => String(Math.round(v)),
   tps: (v) => v.toFixed(0),
+  cum: (v) => fmtK(v),
 }
 
 export function CurveView(props: {
@@ -697,6 +719,8 @@ export function CurveView(props: {
   // 时间档位（1 周 / 1 月）；全屏：绝对定位占满工作台面板（fixed 会被宿主布局的 transform 基改名空间劫持）、Esc 退出
   const [range, setRange] = useState<7 | 30>(7)
   const [full, setFull] = useState(false)
+  // 轴口径（轮次轴 / 日期轴）与尾窗裁剪——沿旧 L 场 tab 的两态（axis），便于跨会话对齐轮序
+  const [axis, setAxis] = useState<'date' | 'turn'>('date')
   // 数据源：NEXUS 轮次（事件驱动，非等间隔）/ PULSE 采样（等间隔，斜率可读）
   const [source, setSource] = useState<'nautilus' | 'pulse'>('nautilus')
   const metrics = (props.pulse?.latest ?? []).map((l) => l.metric)
@@ -715,9 +739,13 @@ export function CurveView(props: {
   const curve = (props.m2?.curve ?? []).filter((p) => p.ts >= rangeFrom)
   const sessions = Array.from(new Set(curve.map((p) => p.session)))
   const scoped = scope === 'all' ? curve : curve.filter((p) => p.session === scope)
+  // cum = 累计输入（Σ(命中+未命中) 按轮序，弱代理；中段加速平台 = S 形候选，正式判据仍看未命中率曲线）
+  let cumAcc = 0
   const pts = scoped.map((p) => {
+    const x = axis === 'date' ? p.ts : p.turn
+    if (key === 'cum') { cumAcc += p.tokenIn + p.cacheRead; return { x, y: cumAcc, meta: p } }
     const v = curveValue(p, key)
-    return { x: p.ts, y: v === null ? null : (key === 'miss' ? v * 100 : v), meta: p }
+    return { x, y: v === null ? null : (key === 'miss' ? v * 100 : v), meta: p }
   })
   const threshold = key === 'miss' ? 50 : undefined
   // τ_e 注记（定稿元素）：仅单会话聚焦且 analysis 检出时绘制——多点叠加轴上 τ_e 无意义
@@ -764,10 +792,23 @@ export function CurveView(props: {
     }
   }
   const metricSeg = createElement('div', { className: 'nt-wb-seg' },
-    ...(['miss', 'ms', 'tps'] as CurveKey[]).map((k) => createElement('button', { key: k, className: k === key ? 'on' : '', onClick: () => setKey(k) }, curveLabel(k))),
+    ...(['miss', 'cum', 'tps', 'ms'] as CurveKey[]).map((k) => createElement('button', { key: k, className: k === key ? 'on' : '', onClick: () => setKey(k) }, curveLabel(k))),
     createElement('span', { style: { width: 12 } }),
     ...([7, 30] as Array<7 | 30>).map((r) => createElement('button', { key: r, className: range === r ? 'on' : '', onClick: () => setRange(r) }, r === 7 ? '1 周' : '1 月')),
+    createElement('span', { style: { width: 12 } }),
+    ...(['date', 'turn'] as Array<'date' | 'turn'>).map((a) => createElement('button', { key: a, className: axis === a ? 'on' : '', onClick: () => setAxis(a) }, a === 'date' ? '日期轴' : '轮次轴')),
   )
+  // M4-B：自评覆盖（当前视图口径；选中会话时带缺口轮号）——原 L 场 tab 的这条信息搬进工作台
+  const sc = props.m2?.selfcheck
+  const scSel = scope === 'all' ? undefined : sc?.bySession?.[scope]
+  const coverageLine = createElement('span', { className: 'nt-label' },
+    sc === undefined || sc.total === 0
+      ? '自评覆盖：本视图暂无轮次'
+      : '自评覆盖 ' + ((sc.checked / sc.total) * 100).toFixed(0) + '%（' + String(sc.checked) + '/' + String(sc.total) + ' 轮）'
+        + (scSel === undefined
+          ? ''
+          : ' · 本会话 ' + String(scSel.checked) + '/' + String(scSel.total) + ' 轮'
+            + (scSel.missing.length > 0 ? ' · 缺 ' + scSel.missing.map((n) => 't' + String(n)).join(' ') : ' · 无缺口')))
   const pickerBox = createElement('div', { className: 'nt-wb-pickwrap' },
     createElement('button', { className: 'nt-btn' + (scope !== 'all' ? ' on' : ''), onClick: () => setPickOpen((v) => !v) },
       '会话 · ' + (scope === 'all' ? '全部（' + String(sessions.length) + '）' : scopeLabel(scope)) + ' ▾'),
@@ -790,7 +831,7 @@ export function CurveView(props: {
   const chartPanel = (hh: number): ReactNode => Panel({
     title: curveLabel(key) + ' 时序曲线' + (full ? '（全屏）' : ''), fig: 'FIG.02',
     note: '时间轴为记录时间戳（非等间隔）：轮次并非均匀采样，曲线的斜率不代表速率；朱红虚线为阈值参考（' + (threshold === undefined ? '本指标不设阈值' : String(threshold) + curveUnit(key)) + '），朱红实心点＝越过阈值的轮；τ_e 注记取自 /m2/analysis 检出值（单会话聚焦时显示）。时间档位 ' + (range === 7 ? '1 周' : '1 月') + '。',
-    children: CurveChart({ points: pts, threshold, thresholdLabel: 'S 形阈值参考（P1）', yFmt: CURVE_YFMT[key], anno, h: hh, label: curveLabel(key), tipOf, onOpenTurn: props.onOpenTurn, resetKey: String(range) + '/' + String(key) + '/' + String(scope) }),
+    children: CurveChart({ points: pts, threshold, thresholdLabel: 'S 形阈值参考（P1）', yFmt: CURVE_YFMT[key], anno, xTick: axis === 'turn' ? (v: number): string => 't' + String(Math.round(v)) : undefined, h: hh, label: curveLabel(key), tipOf, onOpenTurn: props.onOpenTurn, resetKey: String(range) + '/' + String(key) + '/' + String(scope) }),
   })
   if (full) {
     return createElement('div', { style: { position: 'absolute', inset: 0, zIndex: 55, background: 'var(--nt-bg,#f2f2f0)', display: 'flex', flexDirection: 'column', padding: '12px 18px', overflow: 'hidden' } },
@@ -823,6 +864,7 @@ export function CurveView(props: {
           createElement('span', { className: 'nt-note', style: { marginTop: 0, flex: '1 1 260px' } },
             '会话名 = dsh 工作区目录名（取自宿主会话列表 cwd）。滚轮放缩（指针为锚，双击复位）；右键按住拖动平移；悬停采样点看该轮简略读数，点击下钻完整问答。'),
           createElement('span', { style: { flex: 1 } }),
+          coverageLine,
           createElement('button', { className: 'nt-btn', onClick: () => setFull(true) }, '⛶ 全屏'),
         ),
         chartPanel(340),
@@ -1004,7 +1046,7 @@ export function ReportView(props: { m2: M2State | null; pulse: PulseState | null
     '- era：' + era + '（措辞档位：' + eraWord(era) + '）',
     '- 观测窗口：' + win,
     '- 读数样本：' + String(curve.length) + ' 轮 / ' + String(props.m2 === null ? 0 : Object.keys(props.m2.sessionMeta).length) + ' 会话',
-    '- 层在场：NEXUS ' + (nautilus === null ? '缺席' : '在场') + ' · PULSE ' + (pulse === null ? '缺席' : '在场') + ' · INFER 缺席（Phase 2a）',
+    '- 层在场：NEXUS ' + (m2 === null ? '缺席' : '在场') + ' · PULSE ' + (pulse === null ? '缺席' : '在场') + ' · INFER 缺席（Phase 2a）',
     '',
     '## 一并附带的诚实边界',
     '',
@@ -1131,14 +1173,31 @@ export function Workbench(props: { onExitToConversation?: () => void; sessionNam
   const [toast, setToast] = useState<string | null>(null)
   const [nonce, setNonce] = useState(0)
   const paused = drawer !== null
-  const m2 = useJson<M2State>('/api/nautilus/m2/state?root=all', paused, 120000, nonce)
+  // L 场视图两态（原 L 场 tab 的全局/指向）：默认全局（?root=all），可切到当前 L 场指向
+  const [viewMode, setViewMode] = useState<'pointed' | 'all'>('all')
+  const [newRoot, setNewRoot] = useState('')
+  const [switching, setSwitching] = useState(false)
+  const m2 = useJson<M2State>('/api/nautilus/m2/state' + (viewMode === 'all' ? '?root=all' : ''), paused, 120000, nonce)
   // 实时读数：OS 层每 1s 重取最新值（/pulse/state 只查 15 行 latest，代价可忽略）；
   // 手动档下值不会变，但重取同样廉价，故不额外分支。
   const pulse = useJson<PulseState>('/api/nautilus/pulse/state', paused, 1000, nonce)
   const ann = useJson<AnnotationsState>('/api/nautilus/m2/annotations', paused, 120000, nonce)
   // L 场接入（M4-L / M3-F.3）：每根会话计数 + 白盒分析（vault 观测腿 2026-09-27 下线，不再有 vault 取数）
   const lfield = useJson<LfieldInfo>('/api/nautilus/lfield', paused, 120000, nonce)
-  const analysisRaw = useJson<{ results?: AnalysisRow[] } | AnalysisRow[]>('/api/nautilus/m2/analysis?root=all', paused, 600000, nonce)
+  const analysisRaw = useJson<{ results?: AnalysisRow[] } | AnalysisRow[]>('/api/nautilus/m2/analysis' + (viewMode === 'all' ? '?root=all' : ''), paused, 600000, nonce)
+  // L 场指向切换（原 L 场 tab 的能力）：切换只改「新会话」的归属，既有归属不变
+  const switchLfield = (root: string): void => {
+    if (root.trim() === '' || switching) return
+    setSwitching(true)
+    fetch('/api/nautilus/lfield', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'sec-fetch-site': 'same-origin' },
+      body: JSON.stringify({ root: root.trim() }),
+    })
+      .then((r) => { setToast(r.ok ? 'L 场指向已切换（新会话自此归入）' : '切换失败：HTTP ' + String(r.status)); if (r.ok) { setNewRoot(''); setNonce((v) => v + 1) } })
+      .catch((e) => setToast('切换失败：' + String(e)))
+      .finally(() => setSwitching(false))
+  }
   // /m2/analysis 返回 { revision, results }（routes.ts）——归一化为数组，兼容直接数组形态；
   // 未归一化时 rows.reduce 对对象调用会抛错（假设/报告视图渲染失败的根因）
   const analysis = Array.isArray(analysisRaw) ? analysisRaw : (analysisRaw?.results ?? null)
@@ -1151,7 +1210,7 @@ export function Workbench(props: { onExitToConversation?: () => void; sessionNam
   const ok = (v: unknown): string => (v === null ? '缺席' : '在场')
   // 用 createElement 渲染视图组件（**不可**写成 OverviewView({...}) 直接调用）：
   // 直接调用会把子组件的 hooks 算进父组件，切换视图时 hooks 数量变化 → React 抛错、整页渲染失败。
-  const body = view === 'overview' ? createElement(OverviewView, { m2, pulse, lfield, onOpenTurn: (s: string, t: number) => setDrawer({ session: s, turn: t }) })
+  const body = view === 'overview' ? createElement(OverviewView, { m2, pulse, lfield, viewMode, onViewMode: setViewMode, newRoot, onNewRoot: setNewRoot, switching, onSwitchLfield: switchLfield, onOpenTurn: (s: string, t: number) => setDrawer({ session: s, turn: t }) })
     : view === 'curve' ? createElement(CurveView, { m2, era, pulse, paused, analysis, sessionNameOf: props.sessionNameOf, onOpenTurn: (s: string, t: number) => setDrawer({ session: s, turn: t }) })
     : view === 'hypotheses' ? createElement(HypothesesView, { m2, ann, analysis, onProphecy: (id: string) => { setView('prophecy'); setToast('已跳到预言标注：' + id) } })
     : view === 'prophecy' ? createElement(ProphecyView, { ann, m2, toast: setToast, reload: () => setNonce((v) => v + 1) })
@@ -1164,7 +1223,7 @@ export function Workbench(props: { onExitToConversation?: () => void; sessionNam
       createElement('div', { className: 'nt-wb-brand' }, 'NAUTILUS', createElement('small', null, 'Observation Workbench')),
       createElement('div', { className: 'nt-wb-seg' }, ...(['overview', 'curve', 'hypotheses', 'prophecy', 'report'] as ViewKey[]).map((k) => createElement('button', { key: k, className: k === view ? 'on' : '', onClick: () => setView(k) }, VIEW_LABEL[k]))),
       createElement('div', { className: 'nt-wb-right' },
-        createElement('span', null, 'NEXUS ' + ok(nautilus) + ' · PULSE ' + ok(pulse)),
+        createElement('span', null, 'NEXUS ' + ok(m2) + ' · PULSE ' + ok(pulse)),
         createElement('span', null, '刷新 ' + (pulse === null ? '—' : fmtTime(pulse.collector.lastTickTs))),
         createElement(PulseHeartbeat, {
           mode: pulse === null ? 'auto' : pulse.collector.mode,

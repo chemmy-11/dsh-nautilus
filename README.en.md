@@ -17,7 +17,7 @@ Turning "how far a conversation moved the knowledge base" into numbers — **ses
 
 - **Metric definitions**: tokens (input/output/cache-hit), cache hit & miss rates (miss rate = the A projection), TPS & decode time, and a per-turn subjective clarity self-rating (0–1) — **objective and subjective tracks cross-validate each other, bounding each side's bias** (the objective curve is confounded by cache warm-up and novel topics; self-reports by reporting bias);
 - **Direct official-event capture**: subscribes to the host's `session/event` (**zero host-source modifications, no third-party plugin dependencies**), with data isolated in a private directory (`~/.dsh/nautilus/`, SQLite);
-- **Two-tab dashboard**: SVG curves with **zoom, filtering (time window / session) and per-turn Q&A replay** (full transcript of any turn);
+- **Five-view workbench** (global panel: overview / curves / hypotheses / prophecies / report) plus a per-turn drawer; curves support **time tiers (1 week / 1 month), metric switching (miss rate / cumulative input / TPS / duration), a turn axis, proportional zoom, panning, fullscreen, hover summaries and click-through to the full transcript**;
 - **Repeatable analysis pipeline**: shape classification (sigmoid / rising / falling / inverse-sigmoid) · characteristic-time (τ_e) detection · bucketed comparison — first run: **sessions in the pointed workspace showed a 13.7% miss rate vs 5.6% elsewhere** (grouped by vault pointing at the time), consistent with knowledge work's higher exploration density;
 - **Self-review coverage**: per-session coverage badge (assessed / total turns + missing turn numbers), warning below 80%;
 - **Hypothesis board**: P1–P9 annotations (pending / investigating / verified) with analysis conclusions written back.
@@ -26,7 +26,8 @@ Turning "how far a conversation moved the knowledge base" into numbers — **ses
 
 ## Pointing & views
 
-- The plugin keeps a single pointing: the **L-field pointing** (the workspace root a session belongs to), confirmable/switchable in the panel (double confirmation, history never deleted); the vault pointing was retired with the vault-observation leg;
+- The plugin keeps a single pointing: the **L-field pointing** (the workspace root a session belongs to), switched inside the workbench's **"L-field readings (independent pointing)"** panel (history never deleted); the vault pointing was retired with the vault-observation leg;
+- **Two view modes** live in the same panel: `global` (all workspaces) / `pointed` (the pointed workspace) — switching it changes the data scope for curves, hypotheses and the report;
 - Session attribution rule: **the workspace a session was initiated in** — sessions started inside the pointed workspace form the pointed view; everything else appears only in the global view; historical sessions are back-filled by the same rule;
 - Two dashboard views: **global** (all workspaces) / **〈pointed short name〉** (sessions initiated in the pointed workspace) — comparative analysis is a view switch.
 

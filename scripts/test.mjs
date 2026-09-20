@@ -10,6 +10,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync, utimesSync, readFileSync
 import vm from 'node:vm'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 
 import { missRateOf, smoothedMissRate, detectBurst, estimateTauE, analyzeSession, analyze } from '../lib/analysis.js'
 import { processSelfCheck, buildSelfCheckTool } from '../lib/selfcheck.js'
@@ -299,11 +300,8 @@ test('client bundle：ModuleLoader 往返 + 命名导出面 + 面板注册契约
     },
   }
   exportsObj.apply(ctx)
-  // vault 观测 tab 随 vault 观测腿下线（2026-09-27）——只剩 L 场读数 tab + 工作台双注册
+  // 2026-09-27：vault 观测 tab 与 L 场读数 tab 均已下线（能力已搬进工作台）——客户端只剩工作台双注册
   assert.deepEqual(calls, [
-    'effect:@dsh-external/dsh-nautilus: lfield panel',
-    'inject:conversation.view',
-    'register:conversation.view|@dsh-external/dsh-nautilus-lfield-panel',
     'effect:@dsh-external/dsh-nautilus: workbench icon',
     'inject:sidebar.panellist',
     'register:sidebar.panellist|nautilus-workbench',
@@ -314,6 +312,87 @@ test('client bundle：ModuleLoader 往返 + 命名导出面 + 面板注册契约
   // 工作台契约（§3.0 实测）：panellist 的 list id 与 main 的 key 必须同值——否则图标行点不到主区
   const panelIds = calls.filter((c) => c.startsWith('register:sidebar.panellist|') || c.startsWith('register:main|')).map((c) => c.split('|')[1])
   assert.deepEqual(panelIds, ['nautilus-workbench', 'nautilus-workbench'])
+})
+
+// ── 工作台渲染冒烟（真实 react SSR；删旧 L 场 tab 的前置证据）──────────────────
+
+test('workbench 渲染冒烟：真实 react SSR 渲染五视图 + L 场面板并断言内容', async () => {
+  const esbuild = await import('esbuild')
+  const rds = await import('react-dom/server')
+  const react = await import('react')
+  const renderToStaticMarkup = rds.renderToStaticMarkup ?? rds.default?.renderToStaticMarkup
+  assert.equal(typeof renderToStaticMarkup, 'function', 'react-dom/server 必须可用（devDep）')
+  // 临时产物放仓库内（便于 Node 解析 node_modules/react），且 react 必须 external：
+  // 若把 react 打进 bundle 就出现**两份 react 实例** → 渲染时报 `Cannot read properties of null (reading 'useState')`
+  const repo = fileURLToPath(new URL('..', import.meta.url))
+  const dir = mkdtempSync(join(repo, '.render-smoke-'))
+  const out = join(dir, 'wb.mjs')
+  try {
+    esbuild.buildSync({
+      entryPoints: [fileURLToPath(new URL('../src/client/workbench.ts', import.meta.url))],
+      bundle: true, format: 'esm', platform: 'node', outfile: out, logLevel: 'silent',
+      external: ['react', 'react/jsx-runtime', 'react-dom', 'react-dom/server'],
+    })
+    const wb = await import(pathToFileURL(out).href)
+    const el = (Type, props, ...kids) => react.createElement(Type, props, ...kids)
+    const h = (node) => renderToStaticMarkup(node)
+    const noop = () => {}
+
+    const now = Date.now()
+    const pt = (turn, session, miss, cache) => ({ session, turn, ts: now - (40 - turn) * 60000, tokenIn: miss, tokenOut: 100, cacheRead: cache, durationMs: 1200, tps: 42.5, clarity: 0.7, defense: 'none', declaration: 0 })
+    const curve = [pt(1, 'session-aaaa1111', 500, 100), pt(2, 'session-aaaa1111', 400, 300), pt(3, 'session-bbbb2222', 100, 900), pt(4, 'session-bbbb2222', 50, 950)]
+    const m2 = {
+      pointing: 'L:\\ws\\demo',
+      totals: { turns: 4, tokenIn: 1050, tokenOut: 400, cacheRead: 2250, missToken: 1050, hitRate: 0.68 },
+      curve, recent: curve.slice().reverse(),
+      selfcheck: { checked: 3, total: 4, bySession: { 'session-aaaa1111': { checked: 2, total: 2, missing: [] }, 'session-bbbb2222': { checked: 1, total: 2, missing: [9] } } },
+      sessionMeta: { 'session-aaaa1111': { startTs: now - 3600000, turns: 2 }, 'session-bbbb2222': { startTs: now - 1800000, turns: 2 } },
+    }
+    const pulse = {
+      collector: { ticks: 120, lastTickTs: now - 2000, countersOk: true, gpuOk: true, shellPath: 'powershell', execAvailable: true, lastError: null, mode: 'auto', intervalMs: 5000 },
+      db: { rows: 12345, oldestTs: now - 86400000, newestTs: now, schemaVersion: 4 },
+      latest: [
+        { metric: 'pulse.cpu.utilization', value: 0.18, ts: now, tags: {} },
+        { metric: 'pulse.mem.used', value: 1.2e10, ts: now, tags: {} },
+        { metric: 'pulse.gpu.util', value: 8, ts: now, tags: {} },
+        { metric: 'pulse.proc.dsh.rss', value: 5.5e8, ts: now, tags: {} },
+      ],
+    }
+    const lfield = { revision: 1, active: 'L:\\ws\\demo', counts: { '': 91, 'L:\\ws\\demo': 10 }, known: [{ root: 'L:\\ws\\demo', displayName: null, active: 1, confirmedAt: null }] }
+    const ann = { revision: 1, annotations: [{ prophecy: 'P1', status: 'checked', note: 'n', updatedAt: now }] }
+    const analysis = [{ session: 'session-aaaa1111', shape: 'sigmoid', tauE: 2, burst: { fromTurn: 2, toTurn: 3, direction: 'up' } }]
+
+    // ① 总览：OS 读数 + **L 场面板与其控件（视图两态 / 切换指向）**
+    const ov = h(el(wb.OverviewView, { m2, pulse, lfield, viewMode: 'all', onViewMode: noop, newRoot: '', onNewRoot: noop, switching: false, onSwitchLfield: noop, onOpenTurn: noop }))
+    for (const s of ['系统层读数', 'L 场读数（独立指向）', '切换指向', '确认切换', '全局', '指向', 'CPU 利用率', '读数规模']) {
+      assert.ok(ov.includes(s), '总览缺内容: ' + s)
+    }
+    // ② 曲线：旧 L 场 tab 的三件套（累计输入 / 轮次轴 / 自评覆盖）
+    const cv = h(el(wb.CurveView, { m2, era: 'api', pulse, analysis, sessionNameOf: () => ({ name: 'ws', title: 'demo' }) }))
+    for (const s of ['未命中率', '累计输入', '轮次轴', '日期轴', '自评覆盖', 'NEXUS 轮次', 'PULSE 采样']) {
+      assert.ok(cv.includes(s), '曲线缺内容: ' + s)
+    }
+    // ③ 假设 / 预言 / 报告
+    const hy = h(el(wb.HypothesesView, { m2, ann, analysis, onProphecy: noop }))
+    for (const s of ['白盒分析', '证据位', 'S 形']) assert.ok(hy.includes(s), '假设缺内容: ' + s)
+    const pr = h(el(wb.ProphecyView, { ann, m2, toast: noop, reload: noop }))
+    for (const s of ['预言标注', 'P1']) assert.ok(pr.includes(s), '预言缺内容: ' + s)
+    const rp = h(el(wb.ReportView, { m2, pulse, era: 'api', ann, analysis }))
+    for (const s of ['导出 JSON 快照', '四、白盒分析', '人工标注']) assert.ok(rp.includes(s), '报告缺内容: ' + s)
+    // ④ 根组件：数据全缺席也不得抛错（首帧渲染路径）
+    const root = h(el(wb.Workbench, { onExitToConversation: noop }))
+    for (const s of ['NAUTILUS', '总览', '曲线', '假设', '预言', '报告', '心跳', '返回会话']) {
+      assert.ok(root.includes(s), '根组件缺内容: ' + s)
+    }
+    // ⑤ 错误隔离：SSR 不执行错误边界（React 限制），故按「静态派生 + 状态级」校验回退 UI
+    const boundary = new wb.ViewBoundary({ label: 'X' })
+    assert.deepEqual(wb.ViewBoundary.getDerivedStateFromError(new Error('boom')), { error: 'Error: boom' })
+    boundary.state = { error: 'Error: boom' }
+    const fallback = h(boundary.render())
+    assert.ok(fallback.includes('视图渲染失败') && fallback.includes('重试渲染'), '错误隔离回退 UI 未生效')
+  } finally {
+    rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
+  }
 })
 
 // ── 客户端半区：视图组件禁止直调（源码级守卫）──────────────────────────────────
