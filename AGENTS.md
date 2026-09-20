@@ -10,13 +10,13 @@
 
 ## 0. 项目是什么
 
-- **观测插件**（`@dsh-external/dsh-nautilus`，bundle 形态）：vault 元数据快照 + 编辑统计 + 逐轮会话遥测 + L 场读数面板。扩展方向见 `docs/1-planning/`（三层指标 pulse / infer / nexus + era 因果上下文 + Agentic Ops 工作台）。
+- **观测插件**（`@dsh-external/dsh-nautilus`，bundle 形态）：逐轮会话遥测（token/缓存/耗时/tps + 自评）+ L 场读数（按会话工作区归属）+ OS/GPU 采集（pulse 子插件）+ 工作台面板。**vault 观测腿已于 2026-09-27 下线**（不再读 vault；vault 侧操作走会话侧 /obsidian 技能）。扩展方向见 `docs/1-planning/`（三层指标 pulse / infer / nexus + era 因果上下文 + Agentic Ops 工作台）。
 - 定位红线：**观测，不干预**。不改宿主源码、不改宿主行为、不写用户数据；归因结论人工主导，AI 只辅助检索与编码。
 
 ## 1. 五条不可违（违反即回滚，不看进度）
 
 1. **单实例合约**：in-box 包（`@deepseek-ai/*`）只进 `peerDependencies`，严禁 `dependencies`；peer 范围必须带**显式 prerelease 分支**且**覆盖 devDep 的 pin**；非 scoped 的 `cordis`/`schemastery` 不在 dsh 安装闭包内，一律用 `@deepseek-ai/cordis` / `@deepseek-ai/schemastery`。`npm run check:deps` 自动校验（R1/R2/R3）。
-2. **vault 只读**：对 `vaultRoot` 零写入（不创建、不修改任何 vault 内文件）；观测数据与配置只在 `~/.dsh/nautilus/`。
+2. **不碰 vault**：本插件**不读也不写**任何 vault（vault 观测腿 2026-09-27 下线，原「vault 只读」红线由更强约束取代）；观测数据与配置只在 `~/.dsh/nautilus/`。笔记检索/移动/重命名走会话侧 /obsidian 技能（§9）。
 3. **迁移幂等**：SQLite schema 变更走 v{N+1} 顺序迁移，可重复执行；改名/搬迁类迁移仅在新缺失时执行，**绝不覆盖既有数据**。
 4. **集中常量**：事件名 / 路由前缀 / API 路径集中定义（范例：`src/index.ts` 的 `SESSION_EVENT`、`src/routes.ts` 的 `API_PREFIX`），禁止裸字符串散落——拼写漂移没有编译期保护。
 5. **profile 卫生**：装配只走 `dsh plugin add/remove` + `dsh --profile <name> --dump-config` 验证；禁手改 profile 的 `package.json`、禁在 profile 内手动 install。热装配只在重启会中断会话时允许，且必须**重启前收敛**（patch 层与 bundle 层同 `id` 会双挂载，`webServer.register` 对重复 `(kind,path)` 直接抛错）。
@@ -83,6 +83,7 @@
 ## 9. 会话工作约定
 
 - **动手前**：读 `CONTRIBUTING.md` + 当前里程碑开发文档（vault `外功/DSH/雪谷观测插件开发文档-M*.md`）+ `docs/2-dev/` 当前 Phase 文档；不确定归属就问，不猜。
+- **agent 侧 vault 定位**：走 /obsidian 技能方法——读 Obsidian 的 `obsidian.json`（Windows `%APPDATA%\obsidian\`，macOS `~/Library/Application Support/obsidian/`）解析活动 vault，**不硬编码 vault 路径**；笔记检索/移动/重命名优先 obsidian-cli（若已安装），否则文件工具直读写。仅限会话侧（守谷人裁决 2026-09-27）——**Nautilus 插件运行时不读 vault**（vault 观测腿已下线），与插件零耦合。
 - **一次只推进一个 Phase / 一个里程碑子项**；选型与口径变更出 2–3 方案对比，由守谷人裁决，**不自行拍板**。
 - 归因与因果措辞分级：`api` 时代只用「对照」（弱因果），`local` 时代才谈「归因」；不把相关当因果。
 - 每轮回答结束前调用 `record_turn_selfcheck`（承雪谷 vault `AGENTS.md` 工作约定第 6 条）。

@@ -5,7 +5,7 @@
  * 入口：sidebar.panellist 图标（root）+ main keyed 面板（root），两者 id 同值 = MainPanelId（§3.0 实测契约）。
  *
  * 数据口径（只读；唯一写操作是预言标注 POST /m2/annotations）：
- *   · NEXUS 层：/api/nautilus/state（vault 总量/今日/本周）、/api/nautilus/m2/state（逐轮读数/曲线/自评覆盖）
+ *   · NEXUS 层：/api/nautilus/m2/state（逐轮读数/曲线/自评覆盖）· /api/nautilus/m2/analysis（白盒）
  *   · PULSE 层：/api/nautilus/pulse/state（每指标最新值 + 采集器健康度）
  *   · INFER 层：Phase 2a 才落库（TTFT/provider）——当前所有视图显示缺席态，不编造、不写 0 假读数
  * 空数据是正常态（本阶段允许）。
@@ -146,8 +146,6 @@ export type PulseState = {
   db: { rows: number; oldestTs: number | null; newestTs: number | null; schemaVersion: number }
   latest: PulsePoint[]
 }
-export type DaySummary = { edits: number; created: number; modified: number; deleted: number }
-export type NautilusState = { activeRoot: string; totals: { totalFiles: number; totalChars: number }; today: DaySummary; week: DaySummary; recent: Array<{ ts: number; path: string; kind: string }> }
 export type M2Point = { session: string; turn: number; ts: number; tokenIn: number; tokenOut: number; cacheRead: number; durationMs: number | null; tps: number | null; question?: string | null; clarity?: number | null; defense?: string | null; declaration?: number | null }
 export type M2State = {
   pointing: string
@@ -166,7 +164,7 @@ export const PROPHECY_SEED: Array<[string, string]> = [
   ['P3', '防御强度与未命中率同向变化'],
   ['P4', 'τ_e 在知识型会话中显著大于闲聊会话'],
   ['P5', 'TPS 与未命中率负相关（上下文越长解码越慢）'],
-  ['P6', 'vault 会话未命中率高于非指向工作区'],
+  ['P6', '指向工作区的会话未命中率高于非指向工作区'],
   ['P7', '同窗 CPU 尖峰与未命中率上升共存'],
   ['P8', 'GPU 显存占用与本地推理无关（api 时代）'],
   ['P9', '自评覆盖率提升不改变读数分布'],
@@ -559,8 +557,8 @@ export function CurveChart(props: {
 
 // ── 视图 1：总览 ──────────────────────────────────────────────────────────────
 
-export function OverviewView(props: { nautilus: NautilusState | null; m2: M2State | null; pulse: PulseState | null; vault: VaultInfo | null; lfield: LfieldInfo | null; rescanning: boolean; onRescan: () => void; onOpenTurn: (s: string, t: number) => void }): ReactNode {
-  const { nautilus, m2, pulse } = props
+export function OverviewView(props: { m2: M2State | null; pulse: PulseState | null; lfield: LfieldInfo | null; onOpenTurn: (s: string, t: number) => void }): ReactNode {
+  const { m2, pulse } = props
   const n = m2?.totals
   const hr = n?.hitRate
   const last = pulse?.collector.lastTickTs ?? null
@@ -568,8 +566,7 @@ export function OverviewView(props: { nautilus: NautilusState | null; m2: M2Stat
   const stale = lagMs !== null && lagMs > 180000
   const rows: Array<{ layer: string; label: string; value: string; note?: string; warn?: boolean }> = [
     { layer: 'PULSE', label: '采集器心跳', value: last === null ? '未采样' : fmtTime(last), note: pulse === null ? 'pulse 未装配' : 'tick ' + String(pulse.collector.ticks) + ' · 库内 ' + String(pulse.db.rows) + ' 行 · shell=' + String(pulse.collector.shellPath === null ? '无' : pulse.collector.shellPath), warn: stale },
-    { layer: 'NEXUS', label: 'vault 总量', value: nautilus === null ? '—' : fmtBytes(nautilus.totals.totalChars) + ' / ' + String(nautilus.totals.totalFiles) + ' 文件', note: nautilus === null ? '读取中或接口缺席' : 'root=' + nautilus.activeRoot },
-    { layer: 'NEXUS', label: '今日写入', value: nautilus === null ? '—' : String(nautilus.today.edits) + ' 次', note: nautilus === null ? '—' : '新建 ' + String(nautilus.today.created) + ' · 修改 ' + String(nautilus.today.modified) + ' · 删除 ' + String(nautilus.today.deleted) },
+    { layer: 'NEXUS', label: '读数规模', value: n === undefined ? '—' : String(n.turns) + ' 轮', note: '窗口内落库读数 · 归属由 L 场指向决定（vault 观测腿已下线）' },
     { layer: 'NEXUS', label: '窗口缓存命中率', value: hr === null || hr === undefined ? '—' : (hr * 100).toFixed(1) + '%', note: n === undefined ? '—' : '读 ' + String(n.cacheRead) + ' / 未命中 ' + String(n.missToken) + ' 令牌 · ' + String(n.turns) + ' 轮', warn: hr !== null && hr !== undefined && hr < 0.5 },
     { layer: 'INFER', label: '推理时延 TTFT', value: '—', note: 'Phase 2a 采集（provider 侧未接入）', warn: false },
     { layer: 'INFER', label: '层间对齐度', value: '—', note: '需 INFER 落地后方可计算 τ_e', warn: false },
@@ -627,31 +624,8 @@ export function OverviewView(props: { nautilus: NautilusState | null; m2: M2Stat
           )))),
     }),
     Panel({
-      title: 'vault 指向与扫描', fig: 'FIG.07',
-      note: '指向由 vault_config 表驱动：切换指向只改「看哪个库」，既有读数按 root 归属保留（观测记录不可逆，不删除）。重新扫描是全量核对 vault 文件，**不写入 vault**。',
-      children: createElement('div', null,
-        createElement('table', { className: 'nt-tbl' },
-          createElement('tbody', null,
-            ...[
-              ['当前指向', props.vault === null ? (nautilus === null ? '—' : shortRoot(nautilus.activeRoot)) : (props.vault.known.find((k) => k.root === (props.vault === null ? '' : props.vault.active))?.displayName ?? shortRoot(props.vault.active)), 'NEXUS'],
-              ['完整路径', props.vault === null ? (nautilus?.activeRoot ?? '—') : props.vault.active, ''],
-              ['可达性', props.vault === null ? '—' : (props.vault.exists ? '存在' : '不存在') + ' · ' + (props.vault.readable ? '可读' : '不可读'), ''],
-              ['已知根', props.vault === null ? '—' : String(props.vault.known.length) + ' 个（含历史指向）', ''],
-            ].map(([k, v, tag]) => createElement('tr', { key: k },
-              createElement('td', { style: { width: '22%', color: 'var(--nt-faint,#9a9a95)' } }, k),
-              createElement('td', null, v),
-              createElement('td', { style: { width: '14%' } }, tag === '' ? null : createElement('span', { className: 'nt-tag' }, tag)),
-            ))),
-        ),
-        createElement('div', { style: { marginTop: 10, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' } },
-          createElement('button', { className: 'nt-btn', disabled: props.rescanning, onClick: props.onRescan }, props.rescanning ? '扫描中…' : '重新扫描 vault'),
-          createElement('span', { style: { fontSize: 10, color: 'var(--nt-faint,#9a9a95)' } }, '只读核对：新增/修改/删除的文件数会更新到「今日写入」'),
-        ),
-      ),
-    }),
-    Panel({
       title: 'L 场读数（独立指向）', fig: 'FIG.08',
-      note: 'M4-L：L 场读数的归属根与 vault 编辑统计**相互独立**（同一会话在不同根下读数分开计）。此处只呈现计数，读数明细在曲线与抽屉里。',
+      note: 'M4-L：L 场读数按会话发起时的工作区（cwd）归属，每根计数独立（跨根不混算）。此处只呈现计数，读数明细在曲线与抽屉里。',
       children: props.lfield === null
         ? Empty({ text: 'L 场接口不可用（/api/nautilus/lfield）' })
         : createElement('div', null,
@@ -685,14 +659,6 @@ export function curveLabel(key: CurveKey): string { return key === 'miss' ? '未
 export type AnalysisRow = { session: string; shape: string; tauE: number | null; burst: { fromTurn: number; toTurn: number; direction: string } | null }
 export const SHAPE_LABEL: Record<string, string> = { sigmoid: 'S 形', 'inverse-sigmoid': '反 S 形', rising: '上升', falling: '下降', unknown: '形态未定' }
 
-/** M4.3 vault 指向（GET /api/nautilus/vault）。 */
-export type VaultInfo = {
-  revision: number
-  active: string
-  exists: boolean
-  readable: boolean
-  known: Array<{ root: string; displayName: string | null; active: number; confirmedAt: number | null }>
-}
 /** M4-L L 场读数指向与计数（GET /api/nautilus/lfield）。 */
 export type LfieldInfo = {
   revision: number
@@ -890,7 +856,7 @@ export function CurveView(props: {
 
 // ── 视图 3：假设 ──────────────────────────────────────────────────────────────
 
-export function HypothesesView(props: { m2: M2State | null; ann: AnnotationsState | null; analysis: AnalysisRow[] | null; vault: VaultInfo | null; onProphecy: (id: string) => void }): ReactNode {
+export function HypothesesView(props: { m2: M2State | null; ann: AnnotationsState | null; analysis: AnalysisRow[] | null; onProphecy: (id: string) => void }): ReactNode {
   const status = (id: string): string => {
     const hit = props.ann?.annotations.find((a) => a.prophecy === id)
     return hit === undefined ? 'pending' : hit.status
@@ -902,14 +868,13 @@ export function HypothesesView(props: { m2: M2State | null; ann: AnnotationsStat
   const shapeText = Object.entries(shapeCount).sort((a, b) => b[1] - a[1]).map(([k, v]) => (SHAPE_LABEL[k] ?? k) + ' ' + String(v)).join(' · ')
   const taus = rows.map((r) => r.tauE).filter((v): v is number => v !== null && Number.isFinite(v)).sort((a, b) => a - b)
   const tauMedian = taus.length === 0 ? null : taus[Math.floor(taus.length / 2)]
-  const roots = props.vault === null ? 0 : props.vault.known.length
   const evidence: Record<string, string> = {
     P1: n === undefined ? '待窗口读数' : '窗口命中率 ' + (n.hitRate === null ? '—' : (n.hitRate * 100).toFixed(1) + '%') + '（' + String(n.turns) + ' 轮）· 白盒形态 ' + (shapeText === '' ? '未检出' : shapeText),
     P2: props.m2 === null ? '待自评落盘' : '自评 ' + String(props.m2.selfcheck.checked) + '/' + String(props.m2.selfcheck.total),
     P3: '需逐轮自评与未命中率同轮对齐（自评覆盖 ' + String(props.m2 === null ? 0 : props.m2.selfcheck.checked) + ' 轮）',
     P4: tauMedian === null ? 'τ_e 暂不可算（需 ≥4 轮且检出形态）' : 'τ_e 可算 ' + String(taus.length) + '/' + String(rows.length) + ' 会话 · 中位 ' + String(tauMedian) + ' turn',
     P5: n === undefined || n.turns === 0 ? '待读数' : 'TPS 与未命中率的相关性待逐轮配对（当前 ' + String(n.turns) + ' 轮）',
-    P6: roots <= 1 ? '需多 root 对照（已知根 ' + String(roots) + ' 个；读数按根归属，可跨根对照）' : '已知根 ' + String(roots) + ' 个，可做跨根对照',
+    P6: '需跨工作区对照（L 场指向可切换；会话按启动工作区归属，两边读数不混算）',
     P7: '需 PULSE 同窗采样（间隔不同步，只能邻近对照）',
     P8: 'era=api 下显存与推理无因果通路',
     P9: '需自评覆盖率提升前后两窗口',
@@ -1005,8 +970,8 @@ export function ProphecyView(props: { ann: AnnotationsState | null; m2: M2State 
 }
 // ── 视图 5：报告 ──────────────────────────────────────────────────────────────
 
-export function ReportView(props: { nautilus: NautilusState | null; m2: M2State | null; pulse: PulseState | null; era: Era; ann: AnnotationsState | null; analysis: AnalysisRow[] | null; vault: VaultInfo | null }): ReactNode {
-  const { nautilus, m2, pulse, era } = props
+export function ReportView(props: { m2: M2State | null; pulse: PulseState | null; era: Era; ann: AnnotationsState | null; analysis: AnalysisRow[] | null }): ReactNode {
+  const { m2, pulse, era } = props
   const n = m2?.totals
   const curve = m2?.curve ?? []
   const from = curve.length === 0 ? null : curve[0].ts
@@ -1018,7 +983,6 @@ export function ReportView(props: { nautilus: NautilusState | null; m2: M2State 
   const shapeText = Object.entries(shapeCount).sort((a, b) => b[1] - a[1]).map(([k, v]) => (SHAPE_LABEL[k] ?? k) + ' ' + String(v)).join(' · ')
   const taus = rows.map((r) => r.tauE).filter((v): v is number => v !== null && Number.isFinite(v)).sort((a, b) => a - b)
   const tauMedian = taus.length === 0 ? null : taus[Math.floor(taus.length / 2)]
-  const pointing = props.vault === null ? (nautilus?.activeRoot ?? '—') : (props.vault.known.find((k) => k.root === (props.vault === null ? '' : props.vault.active))?.displayName ?? shortRoot(props.vault.active))
   const save = (name: string, text: string, mime: string): void => {
     if (typeof document === 'undefined') return
     const url = URL.createObjectURL(new Blob([text], { type: mime }))
@@ -1032,7 +996,7 @@ export function ReportView(props: { nautilus: NautilusState | null; m2: M2State 
     a.remove()
     setTimeout(() => URL.revokeObjectURL(url), 0)
   }
-  const snapshot = { generatedAt: new Date().toISOString(), era, claiming: eraWord(era), nautilus, m2, pulse, annotations: props.ann, analysis: props.analysis, vault: props.vault }
+  const snapshot = { generatedAt: new Date().toISOString(), era, claiming: eraWord(era), m2, pulse, annotations: props.ann, analysis: props.analysis }
   const md = [
     '# Nautilus 观测报告（中间报告）',
     '',
@@ -1050,7 +1014,7 @@ export function ReportView(props: { nautilus: NautilusState | null; m2: M2State 
     '4. 人工标注 ' + String(marked) + ' 条已检验；未标注项一律视为未检验，不并入结论。',
     '',
   ].join(String.fromCharCode(10))
-  const gateOk = nautilus !== null && pulse !== null
+  const gateOk = m2 !== null && pulse !== null
   return createElement('div', { className: 'nt-report' },
     createElement('div', { className: 'meta' },
       ...([
@@ -1058,9 +1022,8 @@ export function ReportView(props: { nautilus: NautilusState | null; m2: M2State 
         ['era', era + ' · ' + eraWord(era)],
         ['观测窗口', win],
         ['读数样本', String(curve.length) + ' 轮 / ' + String(props.m2 === null ? 0 : Object.keys(props.m2.sessionMeta).length) + ' 会话'],
-        ['层在场', 'NEXUS ' + (nautilus === null ? '缺席' : '在场') + ' · PULSE ' + (pulse === null ? '缺席' : '在场') + ' · INFER 缺席'],
+        ['层在场', 'NEXUS ' + (m2 === null ? '缺席' : '在场') + ' · PULSE ' + (pulse === null ? '缺席' : '在场') + ' · INFER 缺席'],
         ['人工标注', String(marked) + ' 条已检验'],
-        ['vault 指向', pointing],
         ['白盒分析', rows.length === 0 ? '无检出' : String(rows.length) + ' 会话 · ' + (shapeText === '' ? '形态未定' : shapeText) + ' · τ_e 中位 ' + (tauMedian === null ? '—' : String(tauMedian) + ' turn')],
       ] as Array<[string, string]>).flatMap(([k, v]) => [createElement('b', { key: k }, k), createElement('span', { key: k + ':v' }, v)])),
     createElement('div', { className: 'prose' },
@@ -1068,7 +1031,7 @@ export function ReportView(props: { nautilus: NautilusState | null; m2: M2State 
       createElement('p', null, '二、缓存结构。窗口内缓存命中率 ' + (n === undefined || n.hitRate === null ? '暂无读数' : (n.hitRate * 100).toFixed(1) + '%') + '（读 ' + String(n?.cacheRead ?? 0) + ' / 未命中 ' + String(n?.missToken ?? 0) + ' 令牌）。这一列最能说明「上下文是否被复用」，但它同时受长上下文与话题切换混杂；把它当作探索率的投影，而不是结论。'),
       createElement('p', null, '三、本机侧。PULSE 采集器 tick ' + String(pulse?.collector.ticks ?? 0) + ' 次，库内 ' + String(pulse?.db.rows ?? 0) + ' 行 ' + String(pulse === null ? 0 : pulse.latest.length) + ' 指标；shell=' + String(pulse?.collector.shellPath ?? '无') + '，GPU 通道 ' + (pulse?.collector.gpuOk === true ? '可用' : '不可用') + '。本机读数与云端缓存之间在 era=' + era + ' 下' + (era === 'api' ? '没有因果通路' : '存在因果通路') + '，故报告中二者只作对照。'),
       createElement('p', null, '四、白盒分析。M3-F.3 在本窗口检出 ' + String(rows.length) + ' 个会话的形态（' + (shapeText === '' ? '无' : shapeText) + '）；探索段长度 τ_e 可算 ' + String(taus.length) + ' 个，中位 ' + (tauMedian === null ? '—' : String(tauMedian) + ' turn') + '。形态与 τ_e 是**检出**，不是判定：它们只说明「曲线长这样」，是否支持某条假设仍由人工标注决定。'),
-      createElement('p', null, '五、缺席与上限。报告观测的 vault 指向为 ' + pointing + '（读数按根归属，跨根不混算）。INFER 层（TTFT/provider）尚未接入，**端到端时延与探索率的耦合**无法计算；本报告的 τ_e 是白盒的轮次级探索段长度，与 INFER 条件下的时延耦合不是同一个量。据此最高结论强度为「' + eraWord(era) + '」，且限于单层内部。'),
+      createElement('p', null, '五、缺席与上限。读数按会话启动工作区归属，跨根不混算；vault 观测腿已于 2026-09-27 下线，报告不含 vault 维度。INFER 层（TTFT/provider）尚未接入，**端到端时延与探索率的耦合**无法计算；本报告的 τ_e 是白盒的轮次级探索段长度，与 INFER 条件下的时延耦合不是同一个量。据此最高结论强度为「' + eraWord(era) + '」，且限于单层内部。'),
     ),
     createElement('div', { className: 'gate' },
       createElement('span', { className: 'nt-tag' + (gateOk ? '' : ' red') }, gateOk ? '读数层齐备' : '读数层缺口'),
@@ -1168,31 +1131,17 @@ export function Workbench(props: { onExitToConversation?: () => void; sessionNam
   const [toast, setToast] = useState<string | null>(null)
   const [nonce, setNonce] = useState(0)
   const paused = drawer !== null
-  const nautilus = useJson<NautilusState>('/api/nautilus/state', paused, 120000, nonce)
   const m2 = useJson<M2State>('/api/nautilus/m2/state?root=all', paused, 120000, nonce)
   // 实时读数：OS 层每 1s 重取最新值（/pulse/state 只查 15 行 latest，代价可忽略）；
   // 手动档下值不会变，但重取同样廉价，故不额外分支。
   const pulse = useJson<PulseState>('/api/nautilus/pulse/state', paused, 1000, nonce)
   const ann = useJson<AnnotationsState>('/api/nautilus/m2/annotations', paused, 120000, nonce)
-  // nexus 层接入（M4.3 / M4-L / M3-F.3）：指向、L 场计数、白盒分析——原先只有旧 tab 能看到
-  const vault = useJson<VaultInfo>('/api/nautilus/vault', paused, 120000, nonce)
+  // L 场接入（M4-L / M3-F.3）：每根会话计数 + 白盒分析（vault 观测腿 2026-09-27 下线，不再有 vault 取数）
   const lfield = useJson<LfieldInfo>('/api/nautilus/lfield', paused, 120000, nonce)
   const analysisRaw = useJson<{ results?: AnalysisRow[] } | AnalysisRow[]>('/api/nautilus/m2/analysis?root=all', paused, 600000, nonce)
   // /m2/analysis 返回 { revision, results }（routes.ts）——归一化为数组，兼容直接数组形态；
   // 未归一化时 rows.reduce 对对象调用会抛错（假设/报告视图渲染失败的根因）
   const analysis = Array.isArray(analysisRaw) ? analysisRaw : (analysisRaw?.results ?? null)
-  const [rescanning, setRescanning] = useState(false)
-  const onRescan = (): void => {
-    setRescanning(true)
-    fetch('/api/nautilus/action', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', 'sec-fetch-site': 'same-origin' },
-      body: JSON.stringify({ kind: 'rescan' }),
-    })
-      .then((r) => { setToast(r.ok ? '已触发全量扫描（只读核对 vault）' : '扫描触发失败：HTTP ' + String(r.status)); if (r.ok) setNonce((v) => v + 1) })
-      .catch((e) => setToast('扫描触发失败：' + String(e)))
-      .finally(() => setRescanning(false))
-  }
   useEffect(() => {
     if (toast === null) return
     const t = setTimeout(() => setToast(null), 2600)
@@ -1202,11 +1151,11 @@ export function Workbench(props: { onExitToConversation?: () => void; sessionNam
   const ok = (v: unknown): string => (v === null ? '缺席' : '在场')
   // 用 createElement 渲染视图组件（**不可**写成 OverviewView({...}) 直接调用）：
   // 直接调用会把子组件的 hooks 算进父组件，切换视图时 hooks 数量变化 → React 抛错、整页渲染失败。
-  const body = view === 'overview' ? createElement(OverviewView, { nautilus, m2, pulse, vault, lfield, rescanning, onRescan, onOpenTurn: (s: string, t: number) => setDrawer({ session: s, turn: t }) })
+  const body = view === 'overview' ? createElement(OverviewView, { m2, pulse, lfield, onOpenTurn: (s: string, t: number) => setDrawer({ session: s, turn: t }) })
     : view === 'curve' ? createElement(CurveView, { m2, era, pulse, paused, analysis, sessionNameOf: props.sessionNameOf, onOpenTurn: (s: string, t: number) => setDrawer({ session: s, turn: t }) })
-    : view === 'hypotheses' ? createElement(HypothesesView, { m2, ann, analysis, vault, onProphecy: (id: string) => { setView('prophecy'); setToast('已跳到预言标注：' + id) } })
+    : view === 'hypotheses' ? createElement(HypothesesView, { m2, ann, analysis, onProphecy: (id: string) => { setView('prophecy'); setToast('已跳到预言标注：' + id) } })
     : view === 'prophecy' ? createElement(ProphecyView, { ann, m2, toast: setToast, reload: () => setNonce((v) => v + 1) })
-    : createElement(ReportView, { nautilus, m2, pulse, era, ann, analysis, vault })
+    : createElement(ReportView, { m2, pulse, era, ann, analysis })
   return createElement('div', { className: 'nt-wb' },
     createElement('div', { className: 'nt-wb-top' },
       props.onExitToConversation !== undefined

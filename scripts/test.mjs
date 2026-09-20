@@ -14,7 +14,6 @@ import { join } from 'node:path'
 import { missRateOf, smoothedMissRate, detectBurst, estimateTauE, analyzeSession, analyze } from '../lib/analysis.js'
 import { processSelfCheck, buildSelfCheckTool } from '../lib/selfcheck.js'
 import { openStore } from '../lib/store.js'
-import { scanVault } from '../lib/scan.js'
 import { DatabaseSync } from 'node:sqlite'
 import { cpuTimes, cpuUtilization, parseCounters, parseNvidiaSmi, collectLocal } from '../lib/pulse/collect.js'
 import { openPulseStore } from '../lib/pulse/store.js'
@@ -147,52 +146,6 @@ test('buildSelfCheckTool: schema 契约（additionalProperties/required/canonica
   assert.equal(tool.output.schema.type, 'string')
   const rendered = tool.output.render({}, 'ok')
   assert.equal(rendered[0].text, 'ok')
-})
-
-// ── scan.ts（R4 分支：mtime/size 未变跳过 readFile；复活/更新路径） ──────────
-
-test('scanVault: 基线创建 → 未变跳过（R4）→ 改动更新', async () => {
-  const tmp = mkdtempSync(join(tmpdir(), 'xg-scan-'))
-  const vault = join(tmp, 'vault')
-  mkdirSync(vault)
-  try {
-    writeFileSync(join(vault, 'a.md'), '---\ntitle: x\n---\n正文 abc', 'utf8')
-    writeFileSync(join(vault, 'b.md'), 'hello world', 'utf8')
-    const store = openStore(join(tmp, 'nautilus.db'))
-    try {
-      const r1 = await scanVault(store, vault, [])
-      assert.deepEqual({ created: r1.created, updated: r1.updated, removed: r1.removed }, { created: 2, updated: 0, removed: 0 })
-      assert.equal(store.getMeta('a.md', vault).chars, 5) // 正文abc（去空白）
-      assert.equal(store.getMeta('b.md', vault).chars, 10) // helloworld
-
-      // M4：root 口径——root 列 = 被扫描 vault；totals 按 activeRoot 过滤
-      assert.equal(store.getMeta('a.md', vault).root, vault)
-      assert.equal(store.totals(vault).totalFiles, 2)
-      assert.equal(store.totals('').totalFiles, 0)
-
-      const r2 = await scanVault(store, vault, []) // 未变 → R4 跳过分支
-      assert.equal(r2.created, 0)
-      assert.equal(r2.updated, 0)
-
-      // 改动 a.md（显式设置未来 mtime，避免同 ms 竞态）
-      writeFileSync(join(vault, 'a.md'), '---\n---\n正文 abc def', 'utf8')
-      const t = new Date(Date.now() + 5000)
-      utimesSync(join(vault, 'a.md'), t, t)
-      const r3 = await scanVault(store, vault, [])
-      assert.equal(r3.updated, 1)
-      assert.equal(store.getMeta('a.md', vault).chars, 8) // 正文abcdef
-
-      // 删除 b.md → removed 校准
-      rmSync(join(vault, 'b.md'))
-      const r4 = await scanVault(store, vault, [])
-      assert.equal(r4.removed, 1)
-      assert.equal(store.getMeta('b.md', vault).deleted, 1)
-    } finally {
-      store.close()
-    }
-  } finally {
-    rmSync(tmp, { recursive: true, force: true })
-  }
 })
 
 // ── pulse（OS 层）：采集纯函数 ────────────────────────────────────────────────
@@ -346,10 +299,8 @@ test('client bundle：ModuleLoader 往返 + 命名导出面 + 面板注册契约
     },
   }
   exportsObj.apply(ctx)
+  // vault 观测 tab 随 vault 观测腿下线（2026-09-27）——只剩 L 场读数 tab + 工作台双注册
   assert.deepEqual(calls, [
-    'effect:@dsh-external/dsh-nautilus: panel',
-    'inject:conversation.view',
-    'register:conversation.view|@dsh-external/dsh-nautilus-panel',
     'effect:@dsh-external/dsh-nautilus: lfield panel',
     'inject:conversation.view',
     'register:conversation.view|@dsh-external/dsh-nautilus-lfield-panel',
@@ -402,13 +353,12 @@ test('host bundle 单入口：pulse 作为子插件挂载并注册自身路由',
     ctx.provide('webServer', { register(route) { routes.push(route.path); handlers.set(route.path, route.handler); return () => {} } })
     ctx.provide('tools', { register(def) { tools.push(def.name) } })
     const fiber = ctx.plugin(mod, {
-      vaultRoot: '',
       pulse: { enabled: true, enableCounters: false, enableGpu: false, intervalMs: 60000, dbFile: ':memory:' },
     })
     const deadline = Date.now() + 5000
     while (Date.now() < deadline && !routes.includes('/api/nautilus/pulse/state')) await new Promise((r) => setTimeout(r, 25))
+    // vault 观测腿下线（2026-09-27）后：无 /state · /vault · /action 三条
     assert.deepEqual([...routes].sort(), [
-      '/api/nautilus/action',
       '/api/nautilus/lfield',
       '/api/nautilus/m2/analysis',
       '/api/nautilus/m2/annotations',
@@ -417,8 +367,6 @@ test('host bundle 单入口：pulse 作为子插件挂载并注册自身路由',
       '/api/nautilus/pulse/control',
       '/api/nautilus/pulse/series',
       '/api/nautilus/pulse/state',
-      '/api/nautilus/state',
-      '/api/nautilus/vault',
     ])
     assert.deepEqual([...tools], ['record_turn_selfcheck'])
     await fiber.dispose()
@@ -443,7 +391,6 @@ test('pulse 心跳控制：档位切换 / 立即采样 / 非法入参 400', asyn
     ctx.provide('webServer', { register(route) { handlers.set(route.path, route.handler); return () => {} } })
     ctx.provide('tools', { register() {} })
     const fiber = ctx.plugin(mod, {
-      vaultRoot: '',
       pulse: { enabled: true, enableCounters: false, enableGpu: false, intervalMs: 60000, dbFile: ':memory:' },
     })
     const deadline = Date.now() + 5000

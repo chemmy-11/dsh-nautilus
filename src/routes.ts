@@ -1,11 +1,15 @@
 /**
  * @dsh-external/dsh-nautilus — observation REST routes (host half).
- * GET  /api/nautilus/state          → panel snapshot (totals / today / week / recent edit stream)
- * POST /api/nautilus/action         → { kind: 'rescan' } triggers a full scan
+ *
+ * ⚠️ vault 观测腿（2026-09-27 下线）：原 `/state`（vault 统计）、`/vault`（指向切换）、`/action`（重扫）
+ *    三条路由已删除——vault 侧操作改由会话侧 /obsidian 技能承担，本插件不再读写 vault。
+ *
  * GET  /api/nautilus/m2/state       → L 场读数（latest / totals / curve points / recent；?root=all → 全局视图）
  * GET  /api/nautilus/m2/annotations → 预言检验表标注
  * POST /api/nautilus/m2/annotations → upsert 标注（prophecy 唯一）
- * GET  /api/nautilus/lfield         → L 场读数独立指向（M4-L；known 桶/会话计数）
+ * GET  /api/nautilus/m2/turn-text   → 单轮完整问答原文（?session=&turn=）
+ * GET  /api/nautilus/m2/analysis    → 白盒分析（形态 / 爆发段 / τ_e）
+ * GET  /api/nautilus/lfield         → L 场读数独立指向（M4-L；每根会话计数）
  * POST /api/nautilus/lfield         → 切换 L 场读数指向（采集归属；既有会话归属不变）
  * Same-origin marker guard; registered as effect.
  */
@@ -16,13 +20,11 @@ import { statSync, accessSync, constants } from 'node:fs'
 import { isAbsolute, resolve } from 'node:path'
 import { analyze } from './analysis.js'
 
+/** 集中常量：路由前缀（AGENTS.md §1-4）。 */
 const API_PREFIX = '/api/nautilus'
 
 export interface RouteDeps {
   store: NautilusStore
-  onRescan: () => void
-  /** M4.3：指向切换后发射（index.ts 监听后重挂 scan/watch）。 */
-  onVaultChanged?: () => void
   /** L 场读数曲线窗口（天），默认 30。 */
   m2HistoryDays?: number
 }
@@ -37,114 +39,17 @@ function browserSameOriginMarker(req: IncomingMessage): boolean {
   return site === 'same-origin' || typeof req.headers.origin === 'string'
 }
 
-function dayWindow(offsetDays: number): { start: number; end: number } {
-  const start = new Date()
-  start.setHours(0, 0, 0, 0)
-  start.setDate(start.getDate() - offsetDays)
-  return { start: start.getTime(), end: start.getTime() + 86400000 }
+/** 读取并解析 JSON 请求体（上限 1 MiB；解析失败 → null）。 */
+async function readJson(req: IncomingMessage): Promise<unknown | null> {
+  const chunks: Buffer[] = []
+  for await (const c of req) chunks.push(c as Buffer)
+  try { return JSON.parse(Buffer.concat(chunks).toString('utf8')) } catch { return null }
 }
 
 export function registerNautilusRoutes(ctx: { webServer: { register(route: WebRoute): () => void } }, deps: RouteDeps): () => void {
   const disposers: Array<() => void> = []
 
-  const state: WebRoute = {
-    kind: 'exact',
-    path: `${API_PREFIX}/state`,
-    handler: (req, res): void => {
-      if (req.method !== 'GET') return json(res, 405, { ok: false, error: 'method-not-allowed' })
-      if (!browserSameOriginMarker(req)) return json(res, 403, { ok: false, error: 'forbidden' })
-      // M4.3：观测数据只取自指向 vault（root 过滤；未指向 → 空数据）
-      const root = deps.store.activeRoot()
-      const today = dayWindow(0)
-      const week = dayWindow(6)
-      json(res, 200, {
-        revision: Date.now(),
-        activeRoot: root,
-        totals: deps.store.totals(root),
-        today: deps.store.summary(root, today.start, today.end),
-        week: deps.store.summary(root, week.start, Date.now()),
-        recent: deps.store.recentEvents(root, 20),
-      })
-    },
-  }
-
-  // M4.3：vault 指向（GET 状态 / POST 切换并触发重扫）
-  const vault: WebRoute = {
-    kind: 'exact',
-    path: `${API_PREFIX}/vault`,
-    handler: (req, res): void => {
-      if (!browserSameOriginMarker(req)) return json(res, 403, { ok: false, error: 'forbidden' })
-      if (req.method === 'GET') {
-        const active = deps.store.activeRoot()
-        let exists = false
-        let readable = false
-        if (active !== '') {
-          try {
-            exists = statSync(active).isDirectory()
-            accessSync(active, constants.R_OK)
-            readable = true
-          } catch { /* 不可读/不存在 —— readable 保持 false */ }
-        }
-        json(res, 200, {
-          revision: Date.now(), active, exists, readable,
-          known: deps.store.listVaults(),
-        })
-        return
-      }
-      if (req.method !== 'POST') return json(res, 405, { ok: false, error: 'method-not-allowed' })
-      void (async () => {
-        try {
-          const chunks: Buffer[] = []
-          for await (const c of req) chunks.push(c as Buffer)
-          const body = JSON.parse(Buffer.concat(chunks).toString('utf8')) as { root?: unknown; displayName?: unknown }
-          if (typeof body.root !== 'string' || body.root.trim() === '') {
-            return json(res, 400, { ok: false, error: 'invalid-root' })
-          }
-          if (!isAbsolute(body.root)) return json(res, 400, { ok: false, error: 'must-be-absolute' })
-          const norm = resolve(body.root)
-          let st
-          try { st = statSync(norm) } catch { return json(res, 400, { ok: false, error: 'not-found' }) }
-          if (!st.isDirectory()) return json(res, 400, { ok: false, error: 'not-a-directory' })
-          try { accessSync(norm, constants.R_OK) } catch { return json(res, 400, { ok: false, error: 'not-readable' }) }
-          // OQ-M4-2：存在即可指（.md 缺失仅扫描后 0 文件提示，不阻断）
-          const firstBind = deps.store.listVaults().length === 0
-          deps.store.setActiveVault(norm, typeof body.displayName === 'string' && body.displayName.trim() !== '' ? body.displayName.trim() : null)
-          // 首次确认：迁移期未归属数据（root=''）归入新指向——旧历史不丢、统计无缝
-          if (firstBind) {
-            const n = deps.store.reclaimUnowned(norm)
-            if (n > 0) console.log(`[nautilus] 首次绑定接管未归属观测数据 ${n} 行 → ${norm}`)
-          }
-          if (deps.onVaultChanged) deps.onVaultChanged()
-          json(res, 200, { ok: true, active: norm })
-        } catch {
-          json(res, 400, { ok: false, error: 'bad-json' })
-        }
-      })()
-    },
-  }
-
-  const action: WebRoute = {
-    kind: 'exact',
-    path: `${API_PREFIX}/action`,
-    handler: async (req, res): Promise<void> => {
-      if (req.method !== 'POST') return json(res, 405, { ok: false, error: 'method-not-allowed' })
-      if (!browserSameOriginMarker(req)) return json(res, 403, { ok: false, error: 'forbidden' })
-      try {
-        const chunks: Buffer[] = []
-        for await (const c of req) chunks.push(c as Buffer)
-        const body = JSON.parse(Buffer.concat(chunks).toString('utf8')) as { kind?: string }
-        if (body.kind !== 'rescan') return json(res, 400, { ok: false, error: 'invalid-action' })
-        deps.onRescan()
-        json(res, 200, { ok: true })
-      } catch {
-        json(res, 400, { ok: false, error: 'bad-json' })
-      }
-    },
-  }
-
-  for (const route of [state, vault, action]) disposers.push(ctx.webServer.register(route))
-
-  // ── M2：L 场读数 ────────────────────────────────────────────────────────────
+  // ── L 场读数（M2；官方 session/event 直采的读数面） ───────────────────────────
 
   const m2State: WebRoute = {
     kind: 'exact',
@@ -154,7 +59,7 @@ export function registerNautilusRoutes(ctx: { webServer: { register(route: WebRo
       if (!browserSameOriginMarker(req)) return json(res, 403, { ok: false, error: 'forbidden' })
       const historyDays = deps.m2HistoryDays ?? 30
       const fromTs = Date.now() - historyDays * 86400000
-      // M4.11：视图两态——?root=all → 全局（不过滤归属）；默认 = 当前 L 场指向（vault 会话）
+      // M4.11：视图两态——?root=all → 全局（不过滤归属）；默认 = 当前 L 场指向（归属于该工作区的会话）
       const url = new URL(String(req.url ?? ''), 'http://localhost')
       const rv = url.searchParams.get('root')
       const root: string | undefined = rv === 'all' ? undefined : deps.store.lfieldRoot()
@@ -198,27 +103,22 @@ export function registerNautilusRoutes(ctx: { webServer: { register(route: WebRo
         return
       }
       if (req.method !== 'POST') return json(res, 405, { ok: false, error: 'method-not-allowed' })
-      try {
-        const chunks: Buffer[] = []
-        for await (const c of req) chunks.push(c as Buffer)
-        const body = JSON.parse(Buffer.concat(chunks).toString('utf8')) as {
-          prophecy?: unknown; status?: unknown; note?: unknown; session?: unknown; turn?: unknown
-        }
-        const prophecy = typeof body.prophecy === 'string' && body.prophecy !== '' ? body.prophecy : null
-        const status = typeof body.status === 'string' && body.status !== '' ? body.status : 'pending'
-        if (prophecy === null || !/^P\d+$/.test(prophecy)) return json(res, 400, { ok: false, error: 'invalid-prophecy' })
-        if (!['pending', 'investigating', 'observed'].includes(status)) return json(res, 400, { ok: false, error: 'invalid-status' })
-        deps.store.upsertAnnotation({
-          prophecy,
-          status,
-          note: body.note === null || body.note === undefined ? null : String(body.note),
-          session: body.session === null || body.session === undefined ? null : String(body.session),
-          turn: typeof body.turn === 'number' ? body.turn : null,
-        })
-        json(res, 200, { ok: true })
-      } catch {
-        json(res, 400, { ok: false, error: 'bad-json' })
-      }
+      const body = await readJson(req) as {
+        prophecy?: unknown; status?: unknown; note?: unknown; session?: unknown; turn?: unknown
+      } | null
+      if (body === null) return json(res, 400, { ok: false, error: 'bad-json' })
+      const prophecy = typeof body.prophecy === 'string' && body.prophecy !== '' ? body.prophecy : null
+      const status = typeof body.status === 'string' && body.status !== '' ? body.status : 'pending'
+      if (prophecy === null || !/^P\d+$/.test(prophecy)) return json(res, 400, { ok: false, error: 'invalid-prophecy' })
+      if (!['pending', 'investigating', 'observed'].includes(status)) return json(res, 400, { ok: false, error: 'invalid-status' })
+      deps.store.upsertAnnotation({
+        prophecy,
+        status,
+        note: body.note === null || body.note === undefined ? null : String(body.note),
+        session: body.session === null || body.session === undefined ? null : String(body.session),
+        turn: typeof body.turn === 'number' ? body.turn : null,
+      })
+      json(res, 200, { ok: true })
     },
   }
 
@@ -260,45 +160,43 @@ export function registerNautilusRoutes(ctx: { webServer: { register(route: WebRo
   }
 
   // M4-L：L 场读数独立指向（GET 状态 / POST 切换采集归属）
+  // known 现在由「会话归属计数」派生（vault 观测腿下线后不再有 vault_config 的 known 列表）
   const lfield: WebRoute = {
     kind: 'exact',
     path: `${API_PREFIX}/lfield`,
-    handler: (req, res): void => {
+    handler: async (req, res): Promise<void> => {
       if (!browserSameOriginMarker(req)) return json(res, 403, { ok: false, error: 'forbidden' })
+      const active = deps.store.lfieldRoot()
+      const counts = deps.store.sessionRootCounts()
       if (req.method === 'GET') {
         json(res, 200, {
           revision: Date.now(),
-          active: deps.store.lfieldRoot(),
-          counts: deps.store.sessionRootCounts(),
-          known: deps.store.listVaults(),
+          active,
+          counts,
+          known: Object.keys(counts).filter((r) => r !== '').map((root) => ({
+            root, displayName: null, active: root === active ? 1 : 0, confirmedAt: null,
+          })),
         })
         return
       }
       if (req.method !== 'POST') return json(res, 405, { ok: false, error: 'method-not-allowed' })
-      void (async () => {
-        try {
-          const chunks: Buffer[] = []
-          for await (const c of req) chunks.push(c as Buffer)
-          const body = JSON.parse(Buffer.concat(chunks).toString('utf8')) as { root?: unknown }
-          if (typeof body.root !== 'string' || body.root.trim() === '') {
-            return json(res, 400, { ok: false, error: 'invalid-root' })
-          }
-          if (!isAbsolute(body.root)) return json(res, 400, { ok: false, error: 'must-be-absolute' })
-          const norm = resolve(body.root)
-          let st
-          try { st = statSync(norm) } catch { return json(res, 400, { ok: false, error: 'not-found' }) }
-          if (!st.isDirectory()) return json(res, 400, { ok: false, error: 'not-a-directory' })
-          try { accessSync(norm, constants.R_OK) } catch { return json(res, 400, { ok: false, error: 'not-readable' }) }
-          deps.store.setLfieldRoot(norm)
-          console.log(`[nautilus] L 场读数指向切换 → ${norm}（新会话自此归入；既有归属不变）`)
-          json(res, 200, { ok: true, active: norm })
-        } catch {
-          json(res, 400, { ok: false, error: 'bad-json' })
-        }
-      })()
+      const body = await readJson(req) as { root?: unknown } | null
+      if (body === null) return json(res, 400, { ok: false, error: 'bad-json' })
+      if (typeof body.root !== 'string' || body.root.trim() === '') {
+        return json(res, 400, { ok: false, error: 'invalid-root' })
+      }
+      if (!isAbsolute(body.root)) return json(res, 400, { ok: false, error: 'must-be-absolute' })
+      const norm = resolve(body.root)
+      let st
+      try { st = statSync(norm) } catch { return json(res, 400, { ok: false, error: 'not-found' }) }
+      if (!st.isDirectory()) return json(res, 400, { ok: false, error: 'not-a-directory' })
+      try { accessSync(norm, constants.R_OK) } catch { return json(res, 400, { ok: false, error: 'not-readable' }) }
+      deps.store.setLfieldRoot(norm)
+      console.log(`[nautilus] L 场读数指向切换 → ${norm}（新会话自此归入；既有归属不变）`)
+      json(res, 200, { ok: true, active: norm })
     },
   }
 
   for (const route of [m2State, annotations, turnText, analysis, lfield]) disposers.push(ctx.webServer.register(route))
-  return () => { for (const d of disposers) d() }
+  return () => { for (const d of disposers.reverse()) { try { d() } catch { /* 幂等清理 */ } } }
 }

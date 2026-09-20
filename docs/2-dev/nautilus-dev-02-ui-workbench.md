@@ -79,12 +79,12 @@
 ### 3.1 工作台挂载（OQ-U2 据此收敛）
 
 - **五视图进「全局面板」**：`sidebar.panellist` 注册「Nautilus」图标 + `main` keyed 面板——原型中的左侧竖导航在宿主里**就是宿主自有 sidebar**（图标 = 入口），面板内部 = 原型的顶栏 + 视图内容；五视图用面板内 segmented 二级切换，无会话也可用（root 作用域，天然满足工作台的全局/vault 两态）。
-- **现有双 tab 保持不动**：`conversation.view` 的「Vault 观测 / L 场读数」是逐会话快捷视图，与全局面板服务不同场景；是否迁入工作台为后续独立决策（本文件不扩 scope）。
+- ~~现有双 tab 保持不动~~ **2026-09-27 更新**：vault 观测腿下线，「Vault 观测」tab 与其面板已删除；`conversation.view` 只剩「L 场读数」一个逐会话快捷视图，与工作台（全局面板）并存。
 - 面板内栅格须响应中栏压缩（右栏打开时中栏可到 ~400px）：沿用原型 <1080px 单列回退，另验窄栏形态。
 
 ```
 ┌─┬────────────────────────────────────────────┬───────┐
-│左│ 顶栏：NAUTILUS · 视图切换(全局/vault) · 时间 │ 抽屉  │
+│左│ 顶栏：NAUTILUS · 视图切换(全局/指向) · 时间 │ 抽屉  │
 │侧│ 范围 · era 条 · 主题切换                     │ (下钻)│
 │导│────────────────────────────────────────────│       │
 │航│  视图内容（五选一）                          │       │
@@ -151,7 +151,7 @@
 
 ## 6. 数据契约与 API（对齐 §5 + 现有面）
 
-**现有**（`src/routes.ts`，实现时逐条核对，不凭本文档）：`GET state` · `POST action` · `GET/POST m2/annotations`（预言）· `GET m2/state` · `GET m2/analysis` · `GET m2/turn-text` · `GET/POST lfield` · `GET/POST vault`。
+**现有**（`src/routes.ts`，实现时逐条核对，不凭本文档）：`GET m2/state` · `GET m2/analysis` · `GET m2/turn-text` · `GET/POST m2/annotations`（预言）· `GET/POST lfield` · pulse 三条（`state`/`series`/`control`）。**vault 观测腿 2026-09-27 下线后** `GET state` / `POST action` / `GET+POST vault` 已删除；原文保留如下：`GET state` · `POST action` · `GET/POST m2/annotations`（预言）· `GET m2/state` · `GET m2/analysis` · `GET m2/turn-text` · `GET/POST lfield` · `GET/POST vault`。
 
 **新增提案**（轮次人工标注；命名沿用 `m2` 前缀，路由进 `API_PREFIX` 集中常量）：
 

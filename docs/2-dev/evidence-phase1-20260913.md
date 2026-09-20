@@ -424,6 +424,33 @@ client-modules: package @dsh-external/dsh-nexus resolves from multiple active Lo
 
 ---
 
+## E18 vault 观测腿下线（2026-09-27，守谷人裁决）
+
+**触发**：守谷人「我认为 vault 观测没什么实际作用，而端侧 agent 我可以用 obsidian 技能就行」。裁决前的四项影响分析见本归档 §E17 之后的对话记录；采纳方案 = 删代码、**留数据**、保留 L 场。
+
+**删除面（代码）**
+
+| 位置 | 内容 |
+|---|---|
+| `src/scan.ts` · `src/watch.ts` | 整文件删除（vault 全量扫描 + fs.watch 编辑监听） |
+| `src/store.ts` | `vault_meta`/`edit_event`/`vault_config` 三张表的 DDL、`migrateV1`（v0→v1 加 root 列）、12 个方法（`activeRoot` `listVaults` `setActiveVault` `reclaimUnowned` `getMeta` `upsertMeta` `markDeleted` `totals` `allPaths` `insertEdit` `summary` `recentEvents`）、`VaultMetaRow`/`DaySummary` 类型、`initialRoot` 种子参数 |
+| `src/routes.ts` | `GET /state` · `GET/POST /vault` · `POST /action` 三条路由与其依赖（`onRescan` / `onVaultChanged`）；`/lfield` 的 `known` 改为由**会话归属计数**派生 |
+| `src/index.ts` | 扫描/周期校准/watch 挂载/`VAULT_ROOT_CHANGED` 事件/`emitVaultChanged`；Config 去掉 `vaultRoot` `exclude` `pollIntervalMs` `debounceMs` `watchEnabled`（`lField.refreshMs` 一并去掉——从未被读取） |
+| 客户端 | `client/index.ts` 的「Vault 观测」tab（157 行）与其类型、注册项；`client/workbench.ts` 的 FIG.07「vault 指向与扫描」面板、两张 NEXUS vault 统计卡、报告页 `vault 指向` 元行与正文表述、`VaultInfo` 类型与重扫副作用；L 场 tab 内部值 `vault` → `pointed`、文案改「指向视图」 |
+| 测试 | `test.mjs` 的 `scanVault` 用例（随模块删除）；路由期望表 10 → 8 条；挂载配置去掉 `vaultRoot` |
+
+**保留面**：pulse（OS/GPU 三族 15 指标 + 心跳档位）· 逐轮遥测（`turn_read`/`turn_text`/`step_seen`）· 白盒分析（形态/爆发段/τ_e）· 人工标注 · **L 场读数及其独立指向**（`classifySessionRoot` 本就按 `lfieldRoot()` 归属，与 vault 无关——这是本次能干净切割的关键）。
+
+**数据处置（保守口径）**：三张 vault 表**保留不删**（红线 3：绝不销毁既有数据）；新库不再创建它们（`migrateV1` 已移除，新库 user_version 走 v2→v3→pulse v4）。现有库实测留存：`vault_meta 117` · `edit_event 230` · `vault_config 1` 行。
+
+**实际**：`src/` 全量无残留引用（仅注释说明沿革）；六件套全绿；`npm test` **21/21**（原 22，scanVault 用例随模块删除）；客户端产物重建成功。
+
+**环境四元组**：dsh `0.1.5-rc.2`（稳定宿主，本轮**未重启**）· profile `web` · 装配 = `link:` junction · 结果：**代码与门禁通过；端上生效待重启**。
+
+**诚实边界**：① DOM 未由我观测（OQ-U6）；② 宿主需重启才切到新代码——重启前刷新页面会看到「Vault 观测」tab 消失但 `/api/nautilus/state` 仍由旧进程提供（旧 bundle 已被新 bundle 替换，故面板数据键位对不上，属预期过渡态）；③ 老库三张残表是**刻意保留**，日后若要清空需单独迁移（且属不可逆操作）；④ `session_root` 中 10 条 L-theory 归属**保持不变**（不因 vault 下线而回退为未归属）。
+
+---
+
 ## E8 诚实边界（引用本归档时必须一并引用）
 
 1. **端上读数口径**：§E8 初稿时本层尚未装配（证据全来自离线探针）；**§E9 起已热装配进 profile `web`**，宿主路径已有端上四元组读数（OQ-3 收敛）。但 E5 的 1 小时档仍只有中间读数，且「连续 1 小时无内存增长」尚未给出完整序列。

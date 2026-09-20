@@ -1,7 +1,12 @@
 /**
- * @dsh-external/dsh-nautilus — plugin entry (M1: vault metadata + edit stats + observation panel).
- * apply: open store → full scan (startup + periodic calibration) → fs.watch (effect) → REST (effect).
- * All tunables live in Config; zero writes into the vault (data lives in ~/.dsh/nautilus/).
+ * @dsh-external/dsh-nautilus — plugin entry（L 场读数 + 自评工具 + pulse 子插件）。
+ *
+ * **vault 观测腿已于 2026-09-27 下线**：不再扫描/监听 vault、不再持有 vault 指向；vault 侧操作
+ * 交给会话侧 /obsidian 技能（AGENTS §9 裁决）。本文件只做三件事：
+ *   1) 打开库（`~/.dsh/nautilus/nautilus.db`，含 xuegulin → nexus → nautilus 的改名迁移）；
+ *   2) 采官方 `session/event` → 逐轮读数（TurnsCollector）；
+ *   3) 挂 REST（m2 / lfield）+ 自评工具 + pulse 子插件。
+ * 零写入 vault；观测数据只在 `~/.dsh/nautilus/`。
  */
 import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-host-webserver' // 拉声明合并获得 ctx.webServer 类型
@@ -10,8 +15,6 @@ import { join } from 'node:path'
 import z from '@deepseek-ai/schemastery'
 import { resolveDataDir } from './home.js'
 import { openStore } from './store.js'
-import { scanVault } from './scan.js'
-import { startVaultWatch } from './watch.js'
 import { registerNautilusRoutes } from './routes.js'
 import { TurnsCollector, type TurnEventLike } from './turns.js'
 import { registerSelfCheckTool } from './selfcheck.js'
@@ -19,28 +22,20 @@ import { registerSelfCheckTool } from './selfcheck.js'
 // （双条目 → client-modules: resolves from multiple active Loader sources → dsh web 起不来）。
 import * as pulse from './pulse/index.js'
 
-// 官方会话事件名（R2：集中常量，避免裸字符串与拼写漂移无编译期保护）。
+// 官方会话事件名（集中常量，避免裸字符串与拼写漂移无编译期保护）。
 const SESSION_EVENT = 'session/event'
-// M4.3：本插件自有事件——指向切换后由 routes 发射，index.ts 重挂 scan/watch（不跨插件，仅内部通道）。
-const VAULT_ROOT_CHANGED = 'nautilus/vault-root-changed'
 
 // ctx.on 的事件名 key 不在 cordis 声明里（session/event 为官方事件 duck-type 通道）；
 // 此处仅做监听器形状的窄化声明，事件体仍由 TurnsCollector 按官方契约 duck-type 校验。
 type SessionEventOn = (event: string, listener: (session: unknown, event: unknown) => void) => () => boolean
-type CtxOnAny = (event: string, listener: (...args: unknown[]) => void) => () => boolean
 
 export const name = 'nautilus'
 export const inject = ['webServer', 'tools']
 
 export interface Config {
-  vaultRoot: string
-  exclude: string[]
-  pollIntervalMs: number
-  debounceMs: number
-  watchEnabled: boolean
   lField: {
     enabled: boolean
-    refreshMs: number
+    /** L 场读数曲线窗口（天）。 */
     historyDays: number
   }
   /** Phase 1：OS/GPU 采集层配置（子插件 pulse；enabled=false 时整层不挂载）。 */
@@ -48,81 +43,24 @@ export interface Config {
 }
 
 export const Config = z.object({
-  vaultRoot: z.string().default(''),
-  exclude: z.array(z.string()).default(['dsh-docs']),
-  pollIntervalMs: z.number().min(300000).default(21600000),
-  debounceMs: z.number().min(100).default(500),
-  watchEnabled: z.boolean().default(true),
   lField: z.object({
     enabled: z.boolean().default(true),
-    refreshMs: z.number().min(30000).default(120000),
     historyDays: z.number().min(1).default(30),
-  }).default({ enabled: true, refreshMs: 120000, historyDays: 30 }),
+  }).default({ enabled: true, historyDays: 30 }),
   // 复用 pulse 自己的 schema（含全部默认值）：同一条目内组态，非法配置照旧在加载时响亮失败
   pulse: pulse.Config,
 })
 
 export function apply(ctx: Context, config: Config): void {
-  const vaultRoot = config.vaultRoot
-  if (vaultRoot === '') {
-    console.warn('[nautilus] Config.vaultRoot 未配置——只启动 REST，不扫描/监听（面板显示空数据）')
-  }
-
   const dshHome = process.env.DSH_HOME || join(homedir(), '.dsh')
   // 数据目录 + 改名迁移（xuegulin → nexus → nautilus）：只在新目录缺失时搬，旧实例占用则回落旧路径，绝不覆盖数据
   const data = resolveDataDir(dshHome)
-  // M4.3：initialRoot = config.vaultRoot（仅种子/升级兜底；此后指向由 vault_config 表驱动）
-  const store = openStore(data.dbFile, vaultRoot)
+  const store = openStore(data.dbFile)
   ctx.effect(() => () => store.close())
-  const activeRoot = (): string => store.activeRoot()
 
-  let scanning = false
-  const runScan = async (): Promise<void> => {
-    const root = activeRoot()
-    if (root === '' || scanning) return
-    scanning = true
-    try {
-      const result = await scanVault(store, root, config.exclude)
-      if (result.scanned > 0 || result.created > 0) {
-        console.log(`[nautilus] 扫描完成（${root}）：${result.scanned} 文件（+${result.created} 新 / 更新 ${result.updated} / 删除 ${result.removed}）`)
-      }
-    } catch (e) {
-      console.error('[nautilus] 扫描失败：', String(e))
-    } finally {
-      scanning = false
-    }
-  }
-  void runScan()
-
-  // 周期校准（兜底 watcher 漏事件）；effect 卸载清理
-  ctx.effect(() => {
-    const timer = setInterval(() => { void runScan() }, config.pollIntervalMs)
-    return () => clearInterval(timer)
-  })
-
-  // 编辑监听（主事件源；M4.3 起跟随当前指向——root 变更事件触发重挂）
-  ctx.effect(() => {
-    let disposeWatch: (() => void) | null = null
-    const mount = (): void => {
-      disposeWatch?.()
-      disposeWatch = null
-      if (!config.watchEnabled) return
-      const root = activeRoot()
-      if (root === '') return
-      disposeWatch = startVaultWatch(store, { root, exclude: config.exclude, debounceMs: config.debounceMs })
-    }
-    mount()
-    const on = (ctx.on as unknown as CtxOnAny).bind(ctx)
-    const off = on(VAULT_ROOT_CHANGED, () => { mount(); void runScan() })
-    return () => { off(); disposeWatch?.() }
-  }, 'nautilus: vault watch (root-aware)')
-
-  // REST（面板数据 + rescan 触发；M2 读数/标注；M4.3 vault 指向）
-  const emitVaultChanged = (ctx.emit as unknown as (event: string, ...args: unknown[]) => void).bind(ctx)
+  // REST：L 场读数（m2/*）+ L 场指向（lfield）。vault 三条路由已随观测腿下线。
   ctx.effect(() => registerNautilusRoutes(ctx, {
     store,
-    onRescan: () => { void runScan() },
-    onVaultChanged: () => { emitVaultChanged(VAULT_ROOT_CHANGED) },
     m2HistoryDays: config.lField.historyDays,
   }), 'nautilus: routes')
 
@@ -137,7 +75,7 @@ export function apply(ctx: Context, config: Config): void {
         const s = session as { id?: unknown; header?: { cwd?: unknown } }
         const sid = String(s?.id ?? '')
         if (sid !== '') {
-          // M4-L：会话发起时的 workspace（cwd）——知识库会话判定依据
+          // M4-L：会话发起时的 workspace（cwd）——L 场归属判定依据（与 vault 无关）
           const cwd = typeof s?.header?.cwd === 'string' ? s.header.cwd : undefined
           collector.handle(sid, event as TurnEventLike, cwd)
         }
@@ -164,7 +102,6 @@ export function apply(ctx: Context, config: Config): void {
   }, 'nautilus: pulse sub-plugin (Phase 1)')
   console.log('[nautilus] Pulse OS/GPU 层' + (config.pulse.enabled ? '已挂载（子插件）' : '已禁用（config.pulse.enabled=false）'))
 
-  console.log('[nautilus] M1 观测启动（vault=' + (vaultRoot || '<未配置>') + '）')
-  console.log('[nautilus] M2 turn 采集启动（官方 session/event 直采' + (config.lField.enabled ? '' : ' · lField 已禁用') + '）')
+  console.log('[nautilus] L 场读数采集启动（官方 session/event 直采' + (config.lField.enabled ? '' : ' · lField 已禁用') + '）')
   console.log('[nautilus] M3-F 就绪（自评工具 / B 方案原文 / 白盒分析）')
 }

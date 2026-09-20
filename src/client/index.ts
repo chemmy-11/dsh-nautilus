@@ -1,5 +1,6 @@
 /**
- * @dsh-external/dsh-nautilus — client panels (conversation.view tabs, official contract).
+ * @dsh-external/dsh-nautilus — client panels（工作台全局面板 + conversation.view 的「L 场读数」tab）。
+ * vault 观测 tab 已于 2026-09-27 随 vault 观测腿一起下线。
  * M3-UI: 主题令牌化（--nt-* 层，默认映射 --dsw-alias-*，U1 起——映射表见 docs/2-dev/nautilus-dev-02-ui-workbench.md §2）+ 卡片化布局 + 图表升级（网格/渐变/分色/图例）+ 交互增补。
  * 零新依赖：样式经组件内 <style> 注入（一次性，class 前缀 nt-）；SVG 自绘。
  *
@@ -59,32 +60,6 @@ type M2State = {
 type Annotation = { prophecy: string; status: string; note: string | null; updatedAt: number }
 type AnnotationsState = { revision: number; annotations: Annotation[] }
 
-// M4.3：vault 指向（GET /api/nautilus/vault）
-type VaultInfo = {
-  revision: number
-  active: string
-  exists: boolean
-  readable: boolean
-  known: Array<{ root: string; displayName: string | null; active: number; confirmedAt: number | null }>
-}
-
-// M4-L：L 场读数独立指向（GET /api/nautilus/lfield）
-type LfieldInfo = {
-  revision: number
-  active: string
-  counts: Record<string, number>
-  known: Array<{ root: string; displayName: string | null; active: number; confirmedAt: number | null }>
-}
-
-type NautilusState = {
-  revision: number
-  activeRoot: string
-  totals: { totalFiles: number; totalChars: number }
-  today: DaySummary
-  week: DaySummary
-  recent: Array<{ ts: number; path: string; kind: string }>
-}
-type DaySummary = { edits: number; modifiedFiles: number; createdFiles: number; topActive: Array<{ path: string; edits: number }> }
 
 const PROPHECIES: Record<string, string> = {
   P1: '对齐离散性（S 形阈值）',
@@ -393,170 +368,13 @@ function LineChart(props: { series: Series[]; w: number; h: number; onOpenDetail
   )
 }
 
-// ── Tab① Vault 观测 ──────────────────────────────────────────────────────────
-
-function NautilusView(): ReactNode {
-  const [state, setState] = useState<NautilusState | null>(null)
-  const [vault, setVault] = useState<VaultInfo | null>(null)
-  const [failed, setFailed] = useState(false)
-  const [range, setRange] = useState<'today' | 'week'>('today')
-  const [kindFilter, setKindFilter] = useState<'all' | 'created' | 'modified' | 'deleted'>('all')
-  const [editMode, setEditMode] = useState(false)
-  const [newRoot, setNewRoot] = useState('')
-  const [busy, setBusy] = useState(false)
-  injectStyle()
-  useHideComposer()
-
-  const load = (): void => {
-    fetch('/api/nautilus/state', { headers: { 'sec-fetch-site': 'same-origin' } })
-      .then((r) => (r.ok ? (r.json() as Promise<NautilusState>) : Promise.resolve(null)))
-      .then((s) => { setState(s); setFailed(s === null) })
-      .catch(() => { setState(null); setFailed(true) })
-    fetch('/api/nautilus/vault', { headers: { 'sec-fetch-site': 'same-origin' } })
-      .then((r) => (r.ok ? (r.json() as Promise<VaultInfo>) : Promise.resolve(null)))
-      .then((v) => { if (v) setVault(v) })
-      .catch(() => undefined)
-  }
-
-  useEffect(() => {
-    load()
-    const timer = setInterval(load, 30000)
-    return () => clearInterval(timer)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
-
-  const applyVault = (): void => {
-    // 二次确认（切换后仅显示新库数据；旧数据保留可回切——观测记录不可逆，不删除）
-    if (!window.confirm('切换后仅显示新 vault 数据；旧数据保留，可回切查看。确认切换？')) return
-    setBusy(true)
-    fetch('/api/nautilus/vault', {
-      method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ root: newRoot }),
-    }).then((r) => (r.ok ? r.json() : Promise.resolve(null)))
-      .then((v) => { if (v) { setEditMode(false); setNewRoot(''); load() } })
-      .catch(() => undefined)
-      .finally(() => setBusy(false))
-  }
-
-  if (failed && state === null) return createElement('div', { className: 'nt-empty' }, 'Vault 观测数据不可用（/api/nautilus/state）')
-  if (state === null) return createElement('div', { className: 'nt-empty' }, 'Vault 观测加载中...')
-
-  const summary = range === 'today' ? state.today : state.week
-  const recent = state.recent.filter((e) => kindFilter === 'all' || e.kind === kindFilter)
-  // OQ-M4-1：总览卡标题 = 指向短名（displayName ?? 路径末段）+ 工作区（root 路径）
-  const shortName = state.activeRoot === '' ? '未指向'
-    : (vault?.known.find((k) => k.root === state.activeRoot)?.displayName ?? baseName(state.activeRoot))
-  return createElement('div', { className: 'nt-cards' },
-    Card({
-      title: '指向确认（Vault 观测）',
-      extra: !editMode && state.activeRoot !== ''
-        ? createElement('button', { className: 'nt-btn', onClick: () => { setNewRoot(state.activeRoot); setEditMode(true) } }, '修改指向')
-        : null,
-      children: vault === null
-        ? createElement('div', { className: 'nt-empty' }, '指向加载中...')
-        : createElement('div', null,
-            createElement('div', { className: 'nt-row' },
-              createElement('div', { className: 'nt-list' },
-                createElement('span', { className: 'nt-label' }, '当前指向'),
-                createElement('span', { className: 'nt-path' }, vault.active === '' ? '（未指向）' : vault.active),
-              ),
-              vault.active === ''
-                ? createElement('span', { className: 'nt-warn' }, '请先确认 vault 指向——观测数据将从指向后开始')
-                : createElement('div', { className: 'nt-list' },
-                    createElement('span', { className: 'nt-label' },
-                      `${vault.exists ? '目录在' : '目录缺失'} · ${vault.readable ? '可读' : '不可读'}`,
-                    ),
-                    vault.known.find((k) => k.root === vault.active)?.confirmedAt
-                      ? createElement('span', { className: 'nt-label' },
-                          `确认于 ${fmtTime(vault.known.find((k) => k.root === vault.active)!.confirmedAt ?? 0)}`,
-                        )
-                      : null,
-                  ),
-            ),
-            createElement('div', { className: 'nt-note' },
-              '数据口径：本页统计（文件/字数/编辑事件）仅来自指向 vault；L 场读数有独立指向（历史读数归属指向语境，基线见 L 场读数页）。',
-            ),
-            editMode
-              ? createElement('div', { style: { marginTop: 8, display: 'flex', flexWrap: 'wrap', gap: 6 } },
-                  createElement('input', {
-                    className: 'nt-input', value: newRoot, placeholder: '绝对路径（如 L:\\...\\L-theory）',
-                    onChange: (e: { target: { value: string } }) => setNewRoot(e.target.value),
-                  }),
-                  createElement('select', {
-                    className: 'nt-select', value: '',
-                    onChange: (e: { target: { value: string } }) => { if (e.target.value !== '') { setNewRoot(e.target.value) } },
-                  },
-                    createElement('option', { value: '' }, '最近指向…'),
-                    vault.known.filter((k) => k.root !== vault.active).map((k) =>
-                      createElement('option', { key: k.root, value: k.root }, k.displayName ?? baseName(k.root))),
-                  ),
-                  createElement('button', {
-                    className: 'nt-btn', disabled: busy || newRoot.trim() === '', onClick: () => applyVault(),
-                  }, busy ? '切换中…' : '确认并重扫'),
-                  createElement('button', { className: 'nt-btn', onClick: () => { setEditMode(false); setNewRoot('') } }, '取消'),
-                )
-              : null,
-          ),
-    }),
-    Card({ title: `Vault 总览 · ${shortName}${state.activeRoot !== '' ? `（${state.activeRoot}）` : ''}`, children: createElement('div', { className: 'nt-row' },
-      Kv({ label: '文件总数', value: String(state.totals.totalFiles) }),
-      Kv({ label: '总字数', value: fmtK(state.totals.totalChars) }),
-    ) }),
-    Card({
-      title: '编辑统计',
-      extra: createElement('div', null,
-        createElement('button', { className: `nt-btn${range === 'today' ? ' nt-btn-active' : ''}`, onClick: () => setRange('today'), style: { marginRight: 6 } }, '今日'),
-        createElement('button', { className: `nt-btn${range === 'week' ? ' nt-btn-active' : ''}`, onClick: () => setRange('week') }, '本周'),
-      ),
-      children: createElement('div', { className: 'nt-row' },
-        Kv({ label: '编辑次数', value: String(summary.edits) }),
-        Kv({ label: '修改文件', value: String(summary.modifiedFiles) }),
-        Kv({ label: '新增文件', value: `+${summary.createdFiles}` }),
-      ),
-    }),
-    Card({
-      title: '活跃文件 Top 5',
-      children: summary.topActive.length === 0
-        ? createElement('div', { className: 'nt-empty' }, '暂无')
-        : createElement('div', { className: 'nt-list' },
-            summary.topActive.map((t) => createElement('div', { key: t.path },
-              createElement('span', { className: 'nt-label' }, `${t.edits} 次 · `),
-              createElement('span', { className: 'nt-path' }, t.path),
-            )),
-          ),
-    }),
-    Card({
-      title: '最近编辑流',
-      extra: createElement('select', {
-        className: 'nt-select',
-        value: kindFilter,
-        onChange: (e: { target: { value: string } }) => setKindFilter(e.target.value as 'all' | 'created' | 'modified' | 'deleted'),
-      },
-        createElement('option', { value: 'all' }, '全部'),
-        createElement('option', { value: 'created' }, '新建'),
-        createElement('option', { value: 'modified' }, '修改'),
-        createElement('option', { value: 'deleted' }, '删除'),
-      ),
-      children: recent.length === 0
-        ? createElement('div', { className: 'nt-empty' }, '暂无')
-        : createElement('div', { className: 'nt-list' },
-            recent.slice(0, 12).map((e) => createElement('div', { key: `${e.ts}-${e.path}` },
-              createElement('span', { className: 'nt-label' }, `[${fmtTime(e.ts)}] `),
-              createElement(Badge, { kind: e.kind }),
-              createElement('span', { style: { marginLeft: 6 } }),
-              createElement('span', { className: 'nt-path' }, e.path),
-            )),
-          ),
-    }),
-  )
-}
 
 // ── Tab② L 场读数 ────────────────────────────────────────────────────────────
 
 function NautilusLFieldView(): ReactNode {
   const [state, setState] = useState<M2State | null>(null)
   const [lfield, setLfield] = useState<LfieldInfo | null>(null)
-  const [viewMode, setViewMode] = useState<'vault' | 'all'>('vault')
+  const [viewMode, setViewMode] = useState<'pointed' | 'all'>('pointed')
   const [ann, setAnn] = useState<AnnotationsState | null>(null)
   const [failed, setFailed] = useState(false)
   const [axis, setAxis] = useState<'date' | 'turn'>('date')
@@ -691,13 +509,13 @@ function NautilusLFieldView(): ReactNode {
   // M4.11：独立指向——切换仅改变「新会话」的归属；既有会话归属不变
   const lfieldLabel = lfield === null ? '…'
     : (lfield.known.find((k) => k.root === lfield.active)?.displayName ?? baseName(lfield.active))
-  const vaultSessions = lfield === null || lfield.active === '' ? 0 : (lfield.counts[lfield.active] ?? 0)
+  const pointedSessions = lfield === null || lfield.active === '' ? 0 : (lfield.counts[lfield.active] ?? 0)
   const switchLfield = (root: string): void => {
     if (!window.confirm('切换后新会话读数归入新指向；既有会话归属不变。确认切换 L 场指向？')) return
     fetch('/api/nautilus/lfield', {
       method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ root }),
-    }).then((r) => { if (r.ok) { setViewMode('vault'); load() } }).catch(() => undefined)
+    }).then((r) => { if (r.ok) { setViewMode('pointed'); load() } }).catch(() => undefined)
   }
 
   return createElement('div', { className: 'nt-cards nt-grid' },
@@ -717,14 +535,14 @@ function NautilusLFieldView(): ReactNode {
       createElement('span', { style: { marginLeft: 8 } }, '视图'),
       createElement('select', {
         className: 'nt-select', value: viewMode,
-        onChange: (e: { target: { value: string } }) => setViewMode(e.target.value as 'vault' | 'all'),
+        onChange: (e: { target: { value: string } }) => setViewMode(e.target.value as 'pointed' | 'all'),
       },
-        createElement('option', { value: 'vault' }, `${lfieldLabel}（${vaultSessions} 会话）`),
+        createElement('option', { value: 'pointed' }, `${lfieldLabel}（${pointedSessions} 会话）`),
         createElement('option', { value: 'all' }, '全局'),
       ),
       viewMode === 'all'
-        ? createElement('span', { className: 'nt-label' }, '全局视图——全部工作区会话（含 vault 会话）。')
-        : createElement('span', { className: 'nt-label' }, `vault 视图——在 ${lfieldLabel} 工作区发起的会话。`),
+        ? createElement('span', { className: 'nt-label' }, '全局视图——全部工作区的会话。')
+        : createElement('span', { className: 'nt-label' }, `指向视图——在 ${lfieldLabel} 工作区发起的会话。`),
     ),
     createElement('div', { className: 'nt-span3' },
     Card({
@@ -933,17 +751,6 @@ export function apply(ctx: {
     const ws = cwd === '' ? '' : baseName(cwd)
     return { name: ws === '' ? (title === '' ? id.slice(0, 8) : title) : ws, title }
   }
-  ctx.effect(
-    () => ctx.slots.inject('conversation.view', () =>
-      ctx.slots.register({
-        name: 'conversation.view',
-        id: '@dsh-external/dsh-nautilus-panel',
-        order: 30,
-        label: () => 'Vault 观测',
-      }, NautilusView),
-    ),
-    '@dsh-external/dsh-nautilus: panel',
-  )
   ctx.effect(
     () => ctx.slots.inject('conversation.view', () =>
       ctx.slots.register({

@@ -1,34 +1,15 @@
 /**
  * @dsh-external/dsh-nautilus — nautilus.db (SQLite, node:sqlite, zero deps).
- * vault_meta: file metadata baseline; edit_event: edit operations (only fs.watch channel writes).
- * turn_read/turn_text/annotation: M2/M3 L-field readings (session/event feed).
+ * turn_read/turn_text/step_seen/annotation: M2/M3 L 场读数与人工标注（官方 session/event 直采）。
  * session_root: M4-L per-session L-field ownership ('' = owned by no pointing — global view only);
  * lfield_config: M4-L independent L-field pointing (single row; baseline_ts kept as legacy, no longer read).
- * Idempotency: edit_event.session_key unique (debounce window key) — no double counting on reload/restart.
+ *
+ * ⚠️ 历史残留表：`vault_meta` / `edit_event` / `vault_config`（vault 观测腿）已于 2026-09-27 下线。
+ *    **代码不再读写、也不 drop**（红线 3：绝不销毁既有数据）——老库里它们仍在，新库不再创建。
  */
 import { DatabaseSync } from 'node:sqlite'
 import { mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
-import { randomUUID } from 'node:crypto'
-
-export interface VaultMetaRow {
-  root: string
-  path: string
-  mtime: number
-  size: number
-  chars: number
-  first_seen_ts: number
-  last_seen_ts: number
-  deleted: number
-}
-
-export interface DaySummary {
-  edits: number
-  modifiedFiles: number
-  createdFiles: number
-  topActive: Array<{ path: string; edits: number }>
-}
-
 /** M2/M3 turn 读数行（官方会话事件聚合；与团队底座零耦合）。 */
 export interface TurnReadRow {
   session: string
@@ -52,39 +33,17 @@ export interface SelfCheck {
   declaration: 0 | 1
 }
 
-export function openStore(dbFile: string, initialRoot = ''): NautilusStore {
+export function openStore(dbFile: string): NautilusStore {
   mkdirSync(dirname(dbFile), { recursive: true })
-  return new NautilusStore(dbFile, initialRoot)
+  return new NautilusStore(dbFile)
 }
 
 export class NautilusStore {
   private readonly db: DatabaseSync
-  /** 迁移/首启前的种子 root（config.vaultRoot）——仅作初始指向与升级兜底。 */
-  private readonly initialRoot: string
 
-  constructor(dbFile: string, initialRoot = '') {
+  constructor(dbFile: string) {
     this.db = new DatabaseSync(dbFile)
-    this.initialRoot = initialRoot
     this.db.exec(`
-      CREATE TABLE IF NOT EXISTS vault_meta (
-        path TEXT PRIMARY KEY,
-        mtime INTEGER NOT NULL,
-        size INTEGER NOT NULL,
-        chars INTEGER NOT NULL,
-        first_seen_ts INTEGER NOT NULL,
-        last_seen_ts INTEGER NOT NULL,
-        deleted INTEGER NOT NULL DEFAULT 0
-      );
-      CREATE INDEX IF NOT EXISTS idx_meta_mtime ON vault_meta(mtime);
-      CREATE TABLE IF NOT EXISTS edit_event (
-        id TEXT PRIMARY KEY,
-        ts INTEGER NOT NULL,
-        path TEXT NOT NULL,
-        kind TEXT NOT NULL,
-        session_key TEXT NOT NULL UNIQUE
-      );
-      CREATE INDEX IF NOT EXISTS idx_edit_ts ON edit_event(ts);
-      CREATE INDEX IF NOT EXISTS idx_edit_path_ts ON edit_event(path, ts);
       -- M2：L 场读数（官方 session/event 直采；幂等键 step_seen）
       CREATE TABLE IF NOT EXISTS turn_read (
         session TEXT NOT NULL,
@@ -145,87 +104,21 @@ export class NautilusStore {
     this.migrate()
   }
 
+  /**
+   * 迁移入口。**历史沿革**：v0→v1 曾是「vault_meta/edit_event 加 root 列」——vault 观测腿 2026-09-27 下线后
+   * 该步已删除（新库不再建这三张表；老库停在 v4，既有表保留为残留，不 drop）。
+   */
   private migrate(): void {
     const v = (this.db.prepare('PRAGMA user_version').get() as { user_version: number })?.user_version ?? 0
-    if (v < 1) this.migrateV1()
     if (v < 2) this.migrateV2()
     if (v < 3) this.migrateV3()
   }
 
-  /**
-   * M4 迁移（user_version 0→1）：观察只取自指向 vault——
-   * vault_meta 重建为 (root, path) 主键（两库同相对路径互不污染，原 path 主键改不了）；
-   * edit_event 重建加 root 列；vault_config 建表；既有行 backfill 到迁移时生效的 root（种子）。
-   */
-  private migrateV1(): void {
-    const seed = this.initialRoot
-    this.db.exec('BEGIN')
-    try {
-      // 旧索引随表改名附着（同名）；先显式删，避免新建同名索引被 IF NOT EXISTS 跳过
-      this.db.exec('DROP INDEX IF EXISTS idx_meta_mtime; DROP INDEX IF EXISTS idx_edit_ts; DROP INDEX IF EXISTS idx_edit_path_ts;')
-      this.db.exec(`
-        ALTER TABLE vault_meta RENAME TO vault_meta_old;
-        CREATE TABLE vault_meta (
-          root TEXT NOT NULL DEFAULT '',
-          path TEXT NOT NULL,
-          mtime INTEGER NOT NULL,
-          size INTEGER NOT NULL,
-          chars INTEGER NOT NULL,
-          first_seen_ts INTEGER NOT NULL,
-          last_seen_ts INTEGER NOT NULL,
-          deleted INTEGER NOT NULL DEFAULT 0,
-          PRIMARY KEY (root, path)
-        );
-        CREATE INDEX IF NOT EXISTS idx_meta_mtime ON vault_meta(mtime);
-        ALTER TABLE edit_event RENAME TO edit_event_old;
-        CREATE TABLE edit_event (
-          id TEXT PRIMARY KEY,
-          ts INTEGER NOT NULL,
-          root TEXT NOT NULL DEFAULT '',
-          path TEXT NOT NULL,
-          kind TEXT NOT NULL,
-          session_key TEXT NOT NULL UNIQUE
-        );
-        CREATE INDEX IF NOT EXISTS idx_edit_ts ON edit_event(ts);
-        CREATE INDEX IF NOT EXISTS idx_edit_path_ts ON edit_event(path, ts);
-        CREATE TABLE IF NOT EXISTS vault_config (
-          root TEXT PRIMARY KEY,
-          display_name TEXT,
-          active INTEGER NOT NULL DEFAULT 0,
-          confirmed_at INTEGER,
-          last_scan_ts INTEGER
-        );
-      `)
-      this.db.prepare(`
-        INSERT INTO vault_meta (root, path, mtime, size, chars, first_seen_ts, last_seen_ts, deleted)
-        SELECT ?, path, mtime, size, chars, first_seen_ts, last_seen_ts, deleted FROM vault_meta_old
-      `).run(seed)
-      this.db.prepare(`
-        INSERT INTO edit_event (id, ts, root, path, kind, session_key)
-        SELECT id, ts, ?, path, kind, session_key FROM edit_event_old
-      `).run(seed)
-      this.db.exec(`
-        DROP TABLE vault_meta_old;
-        DROP TABLE edit_event_old;
-      `)
-      if (seed !== '') {
-        this.db.prepare(`
-          INSERT INTO vault_config (root, display_name, active, confirmed_at, last_scan_ts)
-          VALUES (?, NULL, 1, strftime('%s','now') * 1000, NULL)
-        `).run(seed)
-      }
-      this.db.exec('PRAGMA user_version = 1')
-      this.db.exec('COMMIT')
-    } catch (e) {
-      this.db.exec('ROLLBACK')
-      throw e
-    }
-  }
 
   /**
    * M4-L 迁移（user_version 1→2，2026-08-31 定稿）：L 场读数独立指向 + 归档——
    * 既有会话（指向制前）整体归入 '' 桶（守谷人定稿：= 目前全部数据；M4.11 起该桶语义为「不属于任何指向」，不再是视图，
-   * 与指向后的知识库会话两类分开处理）；lfield_config 种子 = 迁移时 vault 指向。
+   * 与指向后的知识库会话两类分开处理）；lfield_config 种子 = ''（vault 观测腿下线后无「迁移时 vault 指向」可继承）。
    */
   private migrateV2(): void {
     this.db.exec('BEGIN')
@@ -236,7 +129,7 @@ export class NautilusStore {
       `).run()
       this.db.prepare(`
         INSERT OR IGNORE INTO lfield_config (id, root, updated_at, baseline_ts) VALUES (1, ?, ?, ?)
-      `).run(this.activeRoot(), Date.now(), Date.now())
+      `).run('', Date.now(), Date.now())
       this.db.exec('PRAGMA user_version = 2')
       this.db.exec('COMMIT')
     } catch (e) {
@@ -269,47 +162,6 @@ export class NautilusStore {
     this.db.close()
   }
 
-  // ── 指向（vault_config） ────────────────────────────────────────────────────
-
-  /** 当前指向：config 表 active 行；无则回退种子 root（config.vaultRoot）。 */
-  activeRoot(): string {
-    const row = this.db.prepare('SELECT root FROM vault_config WHERE active = 1 LIMIT 1').get() as { root: string } | undefined
-    return row?.root ?? this.initialRoot
-  }
-
-  listVaults(): Array<{ root: string; displayName: string | null; active: number; confirmedAt: number | null }> {
-    const rows = this.db.prepare('SELECT root, display_name, active, confirmed_at FROM vault_config ORDER BY confirmed_at DESC').all() as Array<Record<string, unknown>>
-    return rows.map((r) => ({
-      root: String(r.root),
-      displayName: r.display_name === null || r.display_name === undefined ? null : String(r.display_name),
-      active: Number(r.active ?? 0),
-      confirmedAt: r.confirmed_at === null || r.confirmed_at === undefined ? null : Number(r.confirmed_at),
-    }))
-  }
-
-  /** 切换指向（唯一 active）；旧数据按 root 保留。 */
-  setActiveVault(root: string, displayName: string | null = null): void {
-    this.db.prepare('UPDATE vault_config SET active = 0').run()
-    this.db.prepare(`
-      INSERT INTO vault_config (root, display_name, active, confirmed_at, last_scan_ts)
-      VALUES (?, ?, 1, ?, NULL)
-      ON CONFLICT(root) DO UPDATE SET
-        active = 1,
-        confirmed_at = COALESCE(confirmed_at, excluded.confirmed_at),
-        display_name = COALESCE(display_name, excluded.display_name)
-    `).run(root, displayName, Date.now())
-  }
-
-  /**
-   * 首次绑定接管：迁移期未归属（root=''）的观测数据归入新指向——
-   * 本机迁移前始终只观测这一个库（nautilus 现状），旧行不丢、统计无缝；仅 vault_config
-   * 此前为空（首次确认）时由调用方触发；已有多库记录后不再接管（'' 行保持悬置）。
-   */
-  reclaimUnowned(root: string): number {
-    const m = this.db.prepare('UPDATE vault_meta SET root = ? WHERE root = ?').run(root, '')
-    const e = this.db.prepare('UPDATE edit_event SET root = ? WHERE root = ?').run(root, '')
-    return Number(m.changes) + Number(e.changes)
-  }
 
   // ── M4-L：L 场读数独立指向（lfield_config / session_root） ──────────────────
 
@@ -402,76 +254,6 @@ export class NautilusStore {
     return { sql: ' AND session IN (SELECT session FROM session_root WHERE root = ?)', params: [root] }
   }
 
-  // ── vault_meta ──────────────────────────────────────────────────────────────
-
-  getMeta(path: string, root: string): VaultMetaRow | undefined {
-    return this.db.prepare('SELECT * FROM vault_meta WHERE path = ? AND root = ?').get(path, root) as VaultMetaRow | undefined
-  }
-
-  /** upsert；@returns 'created' | 'updated' | 'unchanged'（path+root 为业务主键） */
-  upsertMeta(row: { path: string; root: string; mtime: number; size: number; chars: number; ts: number }): 'created' | 'updated' | 'unchanged' {
-    const existing = this.getMeta(row.path, row.root)
-    if (existing === undefined) {
-      this.db.prepare(`
-        INSERT INTO vault_meta (root, path, mtime, size, chars, first_seen_ts, last_seen_ts, deleted)
-        VALUES (?, ?, ?, ?, ?, ?, ?, 0)
-      `).run(row.root, row.path, row.mtime, row.size, row.chars, row.ts, row.ts)
-      return 'created'
-    }
-    if (existing.deleted === 1 || existing.mtime !== row.mtime || existing.size !== row.size) {
-      this.db.prepare(`
-        UPDATE vault_meta SET mtime = ?, size = ?, chars = ?, last_seen_ts = ?, deleted = 0 WHERE path = ? AND root = ?
-      `).run(row.mtime, row.size, row.chars, row.ts, row.path, row.root)
-      return 'updated'
-    }
-    return 'unchanged'
-  }
-
-  markDeleted(path: string, root: string, nowTs: number): void {
-    this.db.prepare('UPDATE vault_meta SET deleted = 1, last_seen_ts = ? WHERE path = ? AND root = ?').run(nowTs, path, root)
-  }
-
-  totals(root: string): { totalFiles: number; totalChars: number } {
-    const r = this.db.prepare('SELECT COUNT(*) AS n, COALESCE(SUM(chars), 0) AS c FROM vault_meta WHERE root = ? AND deleted = 0').get(root) as
-      | { n: number; c: number }
-      | undefined
-    return { totalFiles: r?.n ?? 0, totalChars: r?.c ?? 0 }
-  }
-
-  allPaths(root: string): string[] {
-    return (this.db.prepare('SELECT path FROM vault_meta WHERE root = ?').all(root) as Array<{ path: string }>).map((r) => r.path)
-  }
-
-  // ── edit_event ──────────────────────────────────────────────────────────────
-
-  /** 幂等写入；@returns true = 新记，false = 重复忽略。 */
-  insertEdit(ev: { ts: number; root: string; path: string; kind: string; sessionKey: string }): boolean {
-    const r = this.db.prepare(`
-      INSERT OR IGNORE INTO edit_event (id, ts, root, path, kind, session_key) VALUES (?, ?, ?, ?, ?, ?)
-    `).run(randomUUID(), ev.ts, ev.root, ev.path, ev.kind, ev.sessionKey)
-    return Number(r.changes) > 0
-  }
-
-  // ── 统计（§3 口径；全部按 root 过滤——观察只取自指向 vault） ────────────────
-
-  summary(root: string, dayStart: number, dayEnd: number): DaySummary {
-    const edits = this.db.prepare('SELECT COUNT(*) AS n FROM edit_event WHERE root = ? AND ts >= ? AND ts < ?').get(root, dayStart, dayEnd) as { n: number }
-    const created = this.db.prepare("SELECT COUNT(DISTINCT path) AS n FROM edit_event WHERE root = ? AND ts >= ? AND ts < ? AND kind = 'created'")
-      .get(root, dayStart, dayEnd) as { n: number }
-    const modified = this.db.prepare("SELECT COUNT(DISTINCT path) AS n FROM edit_event WHERE root = ? AND ts >= ? AND ts < ? AND kind = 'modified'")
-      .get(root, dayStart, dayEnd) as { n: number }
-    const top = this.db.prepare(`
-      SELECT path, COUNT(*) AS edits FROM edit_event WHERE root = ? AND ts >= ? AND ts < ?
-      GROUP BY path ORDER BY edits DESC LIMIT 5
-    `).all(root, dayStart, dayEnd) as Array<{ path: string; edits: number }>
-    return { edits: edits.n, modifiedFiles: modified.n, createdFiles: created.n, topActive: top }
-  }
-
-  recentEvents(root: string, limit: number): Array<{ ts: number; path: string; kind: string }> {
-    return this.db.prepare('SELECT ts, path, kind FROM edit_event WHERE root = ? ORDER BY ts DESC LIMIT ?').all(root, limit) as Array<
-      { ts: number; path: string; kind: string }
-    >
-  }
 
   // ── M2 turn_read（官方事件 → 每轮读数） ──────────────────────────────────────
 
