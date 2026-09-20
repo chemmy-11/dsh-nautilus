@@ -235,7 +235,7 @@ export function TurnFitBar(props: TurnFitBarProps): ReactNode {
     createElement('span', { className: 'lb' }, '契合'),
     ...chips,
     status,
-    snap.error !== null ? createElement('span', { className: 'err' }, '清单加载失败：' + snap.error) : null,
+    snap.error !== null ? createElement('span', { className: 'err' }, snap.error === 'HTTP 404' ? '标注服务未上线（宿主重启后生效）' : '清单加载失败：' + snap.error) : null,
     err !== null ? createElement('span', { className: 'err' }, err) : null,
     ext,
   )
@@ -243,6 +243,7 @@ export function TurnFitBar(props: TurnFitBarProps): ReactNode {
 
 /** 服务端错误码 → 人话（口径见 dev-05 §3；不掩盖 400 语义）。 */
 function errText(code: string): string {
+  if (code === 'HTTP 404') return '标注服务未上线（宿主重启后生效）'
   if (code === 'quote-required') return 'fit=4 必附引文'
   if (code === 'quote-too-long') return '引文超过 200 字'
   if (code === 'no-turn-text') return '该轮原文不在场，不可标（不让人对着摘要打五分制）'
