@@ -1,7 +1,7 @@
 # 开发文档五 · T 系列 逐轮人工标注（契合 · 混合入口）
 
 > 版本 v0.1（2026-09-27 开项）。上游决策：[../1-planning/nautilus-turn-annotation.md](../1-planning/nautilus-turn-annotation.md) v0.2（D-T1 签核；量表锁版 `schema_version=1`；D-T2/T3/T4 本文定案）。
-> **两线并行纪律**：本专项 UI 半区（抽屉控件 + 曲线人工层标记）**挂起待 UI 图表线收敛**——`src/client/workbench.ts` 与其同文件并写会互相覆盖。宿主半区先交付，写路径以 HTTP API 可用；UI 落地后补 E23。
+> **两线并行纪律**：本专项 UI 半区（**流内打分件**[D-T5：`conversation.chat.turnTail` 链槽，守谷人 2026-09-27 裁决] + 曲线人工层标记）**挂起待 UI 图表线收敛**——`src/client/workbench.ts` 与其同文件并写会互相覆盖，且 `npm run build` 会连带打包未完成的 workbench 半成品。宿主半区先交付，写路径以 HTTP API 可用；UI 落地后补 E23。
 
 ## 1. 锁版量表（schema_version=1，2026-09-27 守谷人「锁板」）
 
@@ -49,6 +49,7 @@ CREATE TABLE IF NOT EXISTS annotation_sample (        -- 抽样队列（一行�
   - recheck 语义：覆盖已有标注时旧值挪入 `fit_prev/quote_prev`（复标批次靠它成对）。
   - 200 → `{ok, origin, overwritten, fit_prev_available}`。
 - `GET /api/nautilus/m2/turn-annotations` → `{annotations:[...], coverage:{spot:{n}, sample:{marked, pending}, exempted, byFit:{0..4}, rechecked}}`——**spot 与 sample 计数分开呈现，永不合并成单一"覆盖率"**。
+- **流内打分件（D-T5，UI 半区主入口）**：客户端注册 `conversation.chat.turnTail`（kind `chain` / scope `session`；owner `TurnLocation{ turn: number, seq, status }`——dsh 0.1.5-rc.2 `dsh-client-ui-chat` `contract/slots.d.ts` 源码核实）。渲染：已完成轮动作行上方一条紧凑契合条——5 档 + N/A chips、fit=4 引文框就地展开、note 单行；已标态回显（GET 清单缓存或按轮查询）。`TurnLocation.turn` 与库键同源，端上核对一次（标注后 GET 回读核对 turn 序号一致）再记证据。零新依赖、`nt-` 前缀 + `--nt-*` 令牌、SVG 自绘。
 
 ## 4. 抽样生成器 `scripts/annotation-sample.mjs`（会话侧，直连自家库）
 
@@ -67,5 +68,5 @@ CREATE TABLE IF NOT EXISTS annotation_sample (        -- 抽样队列（一行�
 ## 6. 验收与边界
 
 - 六件套全绿 + E22 归档（宿主半区离线证据；端上四元组仍等守谷人重启窗口——S1.1 同批生效）。
-- UI 半区挂账（§序言纪律）：抽屉控件与曲线人工层标记待 UI 线收敛后落，届时补 dev-02 §5 表格行与 E23。
+- UI 半区挂账（§序言纪律）：**流内契合条**（turnTail 链槽注册 + chips/引文框/已标回显）与曲线人工层标记待 UI 线收敛后落，届时补 dev-02 §5 表格行与 E23。
 - 诚实边界照抄决策文档 §7（人标也是自报，噪声地板等 D-T4 复标量化；spot 不进分布结论；era=api 只作对照）。

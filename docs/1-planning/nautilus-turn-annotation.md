@@ -1,6 +1,6 @@
 # 逐轮人工标注（T 系列）——「契合」维度与混合入口决策记录
 
-> 版本 v0.2（2026-09-27 起草；**入口 C / 量表 5 档 / 单维守谷人选项框签核，量表锚文同日「锁板」——即 §1 草案原文为锁版文本，`schema_version=1` 定死**，改锚即递增不混算；D-T2/T3/T4 按签核流程进 dev-05 实现）
+> 版本 v0.3（2026-09-27 起草；**入口 C / 量表 5 档 / 单维守谷人选项框签核，量表锚文同日「锁板」——即 §1 草案原文为锁版文本，`schema_version=1` 定死**，改锚即递增不混算；D-T2/T3/T4 按签核流程进 dev-05 实现；**同日守谷人再裁决 D-T5：流内打分件挂宿主 `conversation.chat.turnTail` 链槽**，见 §4）
 > 归属：决策文档（改动即决策）；实现落 `../2-dev/`（开项时建 Phase 文档）。
 > 上游：vault `外功/DSH/DSH_Nexus —— 神经系统插件规范.md` §一 命名纪律 · 同 `-M5` OQ-M5-1（真值从哪来）· `dev-02` §5 人工标注纪律（解读不写回读数）· [nautilus-selfcheck-multisource.md](./nautilus-selfcheck-multisource.md)（S 系列，同源不同物）。
 
@@ -36,7 +36,7 @@
 - **两套统计永不合并**：spot 只作积累与线索；一切分布结论（覆盖率、契合分布、与读数的关联）只认 sample 口径。选择偏差被口径隔离，这是选 C 不选 A 的全部理由。
 - 队列元数据落 `annotation_sample`（batch_id + 分层维度 + 抽样时刻）；生成器为会话侧脚本（`scripts/` 直连自家库，先例：`p-measure.mjs`），插件运行时对其只读。
 
-## 3. 存储模型（D-T2，建议，待核）
+## 3. 存储模型（D-T2，✅ T.1 已实现：v6 迁移，`a2093c1`）
 
 新表 `turn_annotation`（**一行一轮、最新覆盖**，与 `annotation`（预言 P1–P9 一行一预言）互不侵占——两码标注语义，同库不同表）：
 
@@ -63,14 +63,16 @@ CREATE TABLE IF NOT EXISTS turn_annotation (
 - 标注只写 `turn_annotation` + `annotation_sample.annotated_at`；**读数表零触碰**（dev-02 §5 分层纪律）。
 - 被标轮次必须有 `turn_text` 原文在场（无原文 → 400，不让人对着 80 字摘要打 5 档分）。
 
-## 4. 通道与界面（D-T3，建议，待核）
+## 4. 通道与界面（D-T3 ✅ T.1 已实现宿主半区；流内件 = D-T5 ✅ 已裁决）
 
-- `POST /api/nautilus/m2/turn-annotation`：校验（量表范围/豁免/fit=4 引文/原文在场）→ origin 判定 → upsert。同源浏览器门（工作台内部动作，**不走 S1.1 的 token 通道**——那是给外部 harness 的，本通道守谷人专用）。
-- `GET /api/nautilus/m2/turn-annotations`：清单 + 双口径覆盖率（spot/sample 分开）。
-- 抽屉下半区加控件：5 档按钮 + N/A + 引文框（选 4 时显形必填）+ 一句话理由。
-- 曲线视图：已标采样点加人工层标记（改点描边/徽标，**不改读数线**——解读与观测分层可视化）。
+- `POST /api/nautilus/m2/turn-annotations`：校验（量表范围/豁免/fit=4 引文/原文在场）→ origin 判定 → upsert。同源浏览器门（工作台内部动作，**不走 S1.1 的 token 通道**——那是给外部 harness 的，本通道守谷人专用）。【已上线，`a2093c1`】
+- `GET /api/nautilus/m2/turn-annotations`：清单 + 双口径覆盖率（spot/sample 分开）。【已上线】
+- **流内打分件（D-T5，✅ 守谷人选项框裁决：`conversation.chat.turnTail` 链槽）**：宿主公开槽位（dsh 0.1.5-rc.2 源码核实：`dsh-client-ui-chat` `contract/slots.d.ts`——kind `chain` / scope `session` / owner `TurnLocation{ turn: number, seq, status, steps }`），渲染于已完成轮次动作行上方，**判断在热的现场直接标**。形态：5 档 + N/A 平铺、fit=4 引文框就地展开、POST 同源直写。`TurnLocation.turn` 与本库 `(session, turn)` 键同源（同一 session/event 流的轮序）——实现时做一次端上核对并记入证据。
+  - 落选备选记档：`conversation.chat.assistant-actions`（列表槽，owner 仅 `messageId`，需 messageId→轮序映射，5 档塞不进图标行须挂 `conversation.input.overlay` 弹层）——工程摩擦高一截，视觉优势不足以抵。
+  - 并存不混用：宿主自带 `dsh-message-feedback`（赞/踩）是通用反馈、存宿主侧；契合标注是带量表的观测口径、落本插件库。
+- 抽屉控件**降级为补充视图**（主入口 = 流内件）；曲线已标点人工层标记照旧（改点描边/徽标，**不改读数线**——解读与观测分层可视化）。
 
-## 5. 自一致复标（D-T4，建议，待核）
+## 5. 自一致复标（D-T4，✅ 机制已随 T.1 落地；量化待首批 ≥50 条后触发）
 
 攒够 ≥50 条后跑一次 recheck 批次：从已标轮次随机抽 10%，重标入影子列（实现细节进 Phase 文档：`fit_recheck`/`recheck_at` 还是入队式覆盖留实现裁）。两次打分一致率 = **本真值源自身的噪声地板**——之后一切「人工锚 vs 机器读数」的关联强度上限都受它约束，诚实边界必须带这个数。
 
