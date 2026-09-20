@@ -13,6 +13,8 @@
 import { Component, createElement, useEffect, useRef, useState, type ReactNode } from 'react'
 // OS 层心跳档位控件（1s / 5s / 手动）——独立文件，避免与并行 UI 改动冲突
 import { PulseHeartbeat } from './pulse-controls'
+// 图表原语（Grafana/Netdata/Datadog 语法借鉴，零依赖自绘；全部无 hooks，可直调）
+import { BarGauge, MiniChart, Sparkline, StackedBars, StateBand, TopList } from './charts'
 
 export const WORKBENCH_ID = 'nautilus-workbench'
 
@@ -89,6 +91,52 @@ const CSS_LINES = [
   '.nt-chart{position:relative;cursor:crosshair}',
   '.nt-tip{position:absolute;z-index:35;background:var(--nt-panel,#fff);border:1px solid var(--nt-border2,#c8c8c3);box-shadow:0 4px 16px rgba(0,0,0,.16);padding:7px 9px;font-size:10.5px;color:var(--nt-text,#101010);pointer-events:none;white-space:nowrap;font-variant-numeric:tabular-nums;line-height:1.6}',
   '.nt-tip .dim{color:var(--nt-faint,#9a9a95)}',
+  // ── 图表语法升级（2026-09-20 方案 A）：gauge / 小图网格 / 状态带 / 排行 / 图例 ──
+  '.nt-gauges{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin:10px 0 2px}',
+  '@media (max-width:1080px){.nt-gauges{grid-template-columns:repeat(2,minmax(0,1fr))}}',
+  '.nt-gauge .lr{display:flex;justify-content:space-between;align-items:baseline;font-size:9.5px;letter-spacing:1.2px;color:var(--nt-dim,#5f5f5c);margin-bottom:3px;text-transform:uppercase}',
+  '.nt-gauge .vl{font-variant-numeric:tabular-nums;letter-spacing:0;color:var(--nt-text,#101010);font-size:10.5px}',
+  '.nt-gauge .vl.warn{color:var(--nt-accent,#e6321e)}',
+  '.nt-gauge .tr{position:relative;height:10px;border:1px solid var(--nt-border,#d9d9d5);background:var(--nt-panel2,#f7f7f5)}',
+  '.nt-gauge .fl{position:absolute;top:0;bottom:0;left:0;background:var(--nt-ink,#101010)}',
+  '.nt-gauge .fl.warn{background:var(--nt-accent,#e6321e)}',
+  '.nt-gauge .th{position:absolute;top:-3px;bottom:-3px;width:1px;background:var(--nt-accent,#e6321e);opacity:.75}',
+  '.nt-famhd{display:flex;align-items:center;gap:8px;font-size:9px;letter-spacing:2px;color:var(--nt-faint,#9a9a95);text-transform:uppercase;margin:12px 0 6px}',
+  '.nt-famhd::after{content:"";flex:1;height:1px;background:var(--nt-border,#d9d9d5)}',
+  '.nt-mini{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}',
+  '@media (max-width:1080px){.nt-mini{grid-template-columns:repeat(2,minmax(0,1fr))}}',
+  '.nt-mini .cell{border:1px solid var(--nt-border,#d9d9d5);background:var(--nt-panel,#fff);padding:6px 8px 4px}',
+  '.nt-mini .cl{display:flex;justify-content:space-between;align-items:baseline;font-size:9px;letter-spacing:1.2px;color:var(--nt-dim,#5f5f5c);text-transform:uppercase;margin-bottom:3px}',
+  '.nt-mini .cl .cv{font-size:11px;letter-spacing:0;font-variant-numeric:tabular-nums;color:var(--nt-text,#101010);text-transform:none}',
+  '.nt-mini-empty{text-align:center;color:var(--nt-faint,#9a9a95);font-size:10px;padding:10px 4px;border:1px dashed var(--nt-border,#d9d9d5)}',
+  '.nt-readout{font-size:10.5px;color:var(--nt-dim,#5f5f5c);font-variant-numeric:tabular-nums;min-height:15px}',
+  '.nt-band .ln{display:flex;align-items:center;gap:8px;margin:3px 0}',
+  '.nt-band .lb{flex:0 0 160px;font-size:10px;color:var(--nt-dim,#5f5f5c);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}',
+  '.nt-band .tk{position:relative;flex:1;height:12px;background:var(--nt-panel2,#f7f7f5);border:1px solid var(--nt-border,#d9d9d5)}',
+  '.nt-band .tk i{position:absolute;top:0;bottom:0;background:var(--nt-ink,#101010);opacity:.5}',
+  '.nt-band .ax{display:flex;justify-content:space-between;font-size:9px;color:var(--nt-faint,#9a9a95);margin-top:4px;font-variant-numeric:tabular-nums}',
+  '.nt-top .rw{display:flex;align-items:center;gap:8px;margin:4px 0;font-size:11px}',
+  '.nt-top .ix{flex:0 0 18px;font-size:9px;color:var(--nt-faint,#9a9a95);font-variant-numeric:tabular-nums}',
+  '.nt-top .lb{flex:0 0 220px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}',
+  '.nt-top .tk{position:relative;flex:1;height:12px;background:var(--nt-panel2,#f7f7f5);border:1px solid var(--nt-border,#d9d9d5)}',
+  '.nt-top .tk i{position:absolute;top:0;bottom:0;left:0;background:var(--nt-ink,#101010);opacity:.8}',
+  '.nt-top .vl{flex:0 0 110px;text-align:right;font-variant-numeric:tabular-nums;font-size:10.5px;color:var(--nt-dim,#5f5f5c)}',
+  '.nt-legend{display:flex;align-items:center;gap:12px;font-size:10px;color:var(--nt-dim,#5f5f5c);margin:2px 0 6px;flex-wrap:wrap}',
+  '.nt-legend span{display:inline-flex;align-items:center;gap:4px}',
+  '.nt-legend i{width:9px;height:9px;display:inline-block}',
+  // ── 布局二次修订（2026-09-20 反馈）：主图 2×2 + 原生折叠面板 ──
+  '.nt-maingrid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}',
+  '@media (max-width:1080px){.nt-maingrid{grid-template-columns:repeat(1,minmax(0,1fr))}}',
+  '.nt-maincell{border:1px solid var(--nt-border,#d9d9d5);background:var(--nt-panel,#fff);padding:8px 10px;border-radius:2px}',
+  '.nt-maincell .mh{display:flex;justify-content:space-between;align-items:baseline;gap:8px;font-size:10px;letter-spacing:1.5px;color:var(--nt-dim,#5f5f5c);text-transform:uppercase;margin-bottom:4px}',
+  '.nt-maincell .mh .mv{font-size:13px;letter-spacing:0;color:var(--nt-text,#101010);font-variant-numeric:tabular-nums;text-transform:none;white-space:nowrap}',
+  '.nt-maincell .mh .hint{font-size:9px;letter-spacing:.5px;color:var(--nt-faint,#9a9a95);text-transform:none;white-space:nowrap}',
+  '.nt-collapse > summary{display:flex;gap:8px;align-items:center;margin:0;padding:8px 11px;border-bottom:1px solid var(--nt-border,#d9d9d5);font-size:10px;letter-spacing:2px;text-transform:uppercase;cursor:pointer;list-style:none;user-select:none}',
+  '.nt-collapse > summary::-webkit-details-marker{display:none}',
+  '.nt-collapse > summary em{font-style:normal;color:var(--nt-faint,#9a9a95);letter-spacing:1.5px}',
+  '.nt-collapse > summary::after{content:"▾";margin-left:auto;color:var(--nt-faint,#9a9a95);transition:transform .12s ease}',
+  '.nt-collapse[open] > summary::after{transform:rotate(180deg)}',
+  '.nt-collapse:not([open]) > summary{border-bottom-color:transparent}',
 ]
 
 function injectWorkbenchStyle(): void {
@@ -128,10 +176,52 @@ export function useJson<T>(url: string, paused: boolean, intervalMs = 120000, no
       } catch { /* 缺席：保留上一份 */ }
     }
     void load()
-    const t = setInterval(() => { void load() }, intervalMs)
-    return () => { alive = false; clearInterval(t) }
+    const t = intervalMs > 0 ? setInterval(() => { void load() }, intervalMs) : null
+    return () => { alive = false; if (t !== null) clearInterval(t) }
   }, [url, paused, intervalMs, nonce])
   return data
+}
+
+/**
+ * PULSE 多指标序列（总览主图/小图用）：逐指标并行取 /pulse/series。
+ * 刷新与心跳对齐：intervalMs = 心跳间隔（下限 1s）；手动档传 0 → 不轮询，靠 nonce（采样完成）触发重取。
+ * 缺席指标 → null；metrics 为空（PULSE 层缺席）时不发请求。抽屉打开（paused）时暂停。
+ */
+export function usePulseSeriesMap(metrics: string[], paused: boolean, windowMs = 3600000, maxPoints = 240, intervalMs = 60000, nonce = 0): Record<string, PulseSeries | null> {
+  const [map, setMap] = useState<Record<string, PulseSeries | null>>({})
+  const key = metrics.join(',')
+  useEffect(() => {
+    if (key === '' || paused) return undefined
+    let alive = true
+    const names = key.split(',')
+    const load = async (): Promise<void> => {
+      try {
+        const rs = await Promise.all(names.map(async (m) => {
+          const r = await fetch('/api/nautilus/pulse/series?metric=' + encodeURIComponent(m) + '&windowMs=' + String(windowMs) + '&maxPoints=' + String(maxPoints), { headers: { accept: 'application/json' } })
+          return r.ok ? ((await r.json()) as PulseSeries) : null
+        }))
+        if (alive) setMap(Object.fromEntries(names.map((m, i) => [m, rs[i] ?? null])))
+      } catch { if (alive) setMap({}) }
+    }
+    void load()
+    const t = intervalMs > 0 ? setInterval(() => { void load() }, intervalMs) : null
+    return () => { alive = false; if (t !== null) clearInterval(t) }
+  }, [key, paused, windowMs, maxPoints, intervalMs, nonce])
+  return map
+}
+
+/**
+ * 曲线刷新间隔与心跳对齐（守谷人 2026-09-20）：auto 档 = max(1s, 心跳间隔)；
+ * 手动档 = 0（不轮询，采样完成经 nonce 触发重取）；PULSE 缺席 = 60s 兜底。
+ */
+export function heartbeatSeriesMs(collector: PulseState['collector'] | null | undefined): number {
+  if (collector === null || collector === undefined) return 60000
+  return collector.mode === 'manual' ? 0 : Math.max(1000, collector.intervalMs)
+}
+/** 心跳对齐的刷新说明文案（图注用）。 */
+export function heartbeatRefreshLabel(collector: PulseState['collector'] | null | undefined): string {
+  if (collector === null || collector === undefined) return 'PULSE 缺席，60 s 兜底'
+  return collector.mode === 'manual' ? '手动档：采样完成后刷新' : String(Math.round(collector.intervalMs / 1000)) + ' s/次（随心跳档位）'
 }
 
 // ── 数据面类型（只取用到的字段）─────────────────────────────────────────────────
@@ -146,7 +236,7 @@ export type PulseState = {
   db: { rows: number; oldestTs: number | null; newestTs: number | null; schemaVersion: number }
   latest: PulsePoint[]
 }
-export type M2Point = { session: string; turn: number; ts: number; tokenIn: number; tokenOut: number; cacheRead: number; durationMs: number | null; tps: number | null; question?: string | null; clarity?: number | null; defense?: string | null; declaration?: number | null }
+export type M2Point = { session: string; turn: number; ts: number; tokenIn: number; tokenOut: number; cacheRead: number; durationMs: number | null; tps: number | null; missToken?: number | null; question?: string | null; clarity?: number | null; defense?: string | null; declaration?: number | null }
 export type M2State = {
   pointing: string
   totals: { turns: number; tokenIn: number; tokenOut: number; cacheRead: number; missToken: number; hitRate: number | null }
@@ -187,6 +277,13 @@ export const fmtDayTime = (ts: number | null | undefined): string => {
   return String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0') + ' ' + String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0')
 }
 export const fmtNum = (n: number | null | undefined, d = 2): string => n === null || n === undefined || !Number.isFinite(n) ? '—' : n.toFixed(d)
+/** 令牌数 → k/M 缩写（累计输入/排行条的紧凑刻度）。 */
+export const fmtK = (n: number): string => {
+  if (!Number.isFinite(n)) return '—'
+  if (n >= 1e6) return (n / 1e6).toFixed(1) + 'M'
+  if (n >= 1e3) return (n / 1e3).toFixed(1) + 'k'
+  return String(Math.round(n))
+}
 
 /** 指标名 → 中文标签（未知指标原样返回，不猜语义）。 */
 export function metricLabel(metric: string): string {
@@ -237,18 +334,32 @@ export function fmtMetricValue(metric: string, v: number | null | undefined): st
 
 // ── 公共组件（§4）──────────────────────────────────────────────────────────
 
-export function Stat(props: { layer: string; label: string; value: string; note?: string; warn?: boolean }): ReactNode {
+export function Stat(props: { layer: string; label: string; value: string; note?: string; warn?: boolean; spark?: Array<number | null> }): ReactNode {
+  const sparkOk = props.spark !== undefined && props.spark.filter((v) => v !== null && Number.isFinite(v)).length >= 2
   return createElement('div', { className: 'nt-stat' },
     createElement('span', { className: 'layer' }, props.layer),
     createElement('div', { className: 'lab' }, props.label),
     createElement('div', { className: 'val' + (props.warn === true ? ' warn' : '') }, props.value),
     props.note !== undefined ? createElement('div', { className: 'note' }, props.note) : null,
+    sparkOk ? createElement('div', { style: { marginTop: 6 } }, Sparkline({ values: props.spark, label: props.label })) : null,
   )
 }
 
-export function Panel(props: { title: string; fig?: string; note?: string; children?: ReactNode }): ReactNode {
+export function Panel(props: { title: string; fig?: string; note?: string; children?: ReactNode; collapsible?: boolean; defaultCollapsed?: boolean }): ReactNode {
+  const head = [
+    props.fig !== undefined ? createElement('em', { key: 'f' }, props.fig) : null,
+    props.title,
+  ]
+  // 折叠用原生 <details>（无 hooks、SSR 友好）：次要看板默认收起，标题行仍可见
+  if (props.collapsible === true) {
+    return createElement('details', { className: 'nt-panel nt-collapse', open: props.defaultCollapsed !== true },
+      createElement('summary', null, ...head),
+      createElement('div', { className: 'body' }, props.children),
+      props.note !== undefined ? createElement('p', { className: 'nt-note' }, props.note) : null,
+    )
+  }
   return createElement('div', { className: 'nt-panel' },
-    createElement('h4', null, props.fig !== undefined ? createElement('em', null, props.fig) : null, props.title),
+    createElement('h4', null, ...head),
     createElement('div', { className: 'body' }, props.children),
     props.note !== undefined ? createElement('p', { className: 'nt-note' }, props.note) : null,
   )
@@ -361,7 +472,7 @@ export function Spark(props: {
  * 交互曲线（NEXUS 轮次专用；OS 层不用此组件——PULSE 是等间隔连续采样，无采样点语义）。
  * S4 定稿视觉 + 原 dsh-nautilus 交互回归：
  *   · 滚轮放缩（以指针为锚点，min 4 点，双击复位）——wheel 需非 passive 监听才能 preventDefault；
- *   · 右键按住拖动 = 平移时间窗（contextmenu 已抑制）；
+ *   · 左键按住拖动 = 平移时间窗（位移 <4px 松开＝点击下钻；2026-09-20 自右键改来——右键与浏览器手势冲突）；
  *   · 悬停采样点 → 竖参考线 + 简略看板（该轮读数摘要；上缘/右缘自动翻面）；
  *   · 点击采样点 → onOpenTurn 下钻完整问答（抽屉由根组件持有）。
  * 数据精准：y 域随窗口重算；看板数值取原始读数（不取插值）。
@@ -396,7 +507,8 @@ export function CurveChart(props: {
   const [win, setWin] = useState<[number, number]>([0, Math.max(0, n - 1)])
   const [hover, setHover] = useState<number | null>(null)
   const [drag, setDrag] = useState(false)
-  const dragRef = useRef<{ x: number; a: number; b: number; scale: number } | null>(null)
+  const dragRef = useRef<{ x: number; a: number; b: number; scale: number; moved: boolean } | null>(null)
+  const hoverRef = useRef<number | null>(null)
   const svgRef = useRef<SVGSVGElement | null>(null)
   const viewRef = useRef<{ scale: number; offX: number; offY: number; rectW: number; rectH: number } | null>(null)
   /** 屏幕 → 设计坐标（含 meet 等比缩放与居中留白修正）。 */
@@ -407,7 +519,7 @@ export function CurveChart(props: {
     const offY = (rect.height - DH * scale) / 2
     return { vx: (e.clientX - rect.left - offX) / scale, scale, offX, offY, rectW: rect.width, rectH: rect.height }
   }
-  useEffect(() => { setWin([0, Math.max(0, n - 1)]); setHover(null) }, [n, props.resetKey])
+  useEffect(() => { setWin([0, Math.max(0, n - 1)]); hoverRef.current = null; setHover(null) }, [n, props.resetKey])
   // 滚轮放缩：以指针为锚点缩放窗口（min 4 点）；svg 就绪后再挂非 passive 监听
   const ready = n >= 2
   useEffect(() => {
@@ -430,19 +542,34 @@ export function CurveChart(props: {
     el.addEventListener('wheel', onWheel, { passive: false })
     return () => { el.removeEventListener('wheel', onWheel) }
   }, [n, ready])
-  // 右键拖动 = 平移时间窗（按下记录起点，window 级 move/up 保证拖出画布也持续）
+  // 左键按住拖动 = 平移时间窗（按下记录起点，window 级 move/up 保证拖出画布也持续；位移 <4px 松开＝点击）
   useEffect(() => {
     if (!drag) return undefined
     const move = (e: MouseEvent): void => {
       const d = dragRef.current
       if (d === null) return
-      const di = Math.round((e.clientX - d.x) / d.scale)
+      if (!d.moved && Math.abs(e.clientX - d.x) < 4) return
+      d.moved = true
+      hoverRef.current = null
+      setHover(null)
+      // 抓点跟随（灵敏度同鼠标）：像素位移 ÷ 缩放 × (窗口跨度 / 绘图区宽) = 索引位移——
+      // 按下时指针下的数据点在整个拖动过程中保持在指针下（取整误差 ≤0.5 索引）
+      const di = ((e.clientX - d.x) / d.scale) * ((d.b - d.a) / (DW - padL - padR))
       const span = d.b - d.a
-      let na = d.a - di
+      let na = Math.round(d.a - di)
       na = Math.max(0, Math.min(n - 1 - span, na))
       setWin([na, na + span])
     }
-    const up = (): void => { dragRef.current = null; setDrag(false) }
+    const up = (): void => {
+      const d = dragRef.current
+      dragRef.current = null
+      setDrag(false)
+      // 未拖动（<4px）＝点击：命中采样点则下钻（自 svg onClick 迁移至此，避免与拖动冲突）
+      if (d !== null && !d.moved && hoverRef.current !== null && props.onOpenTurn !== undefined) {
+        const pt = base[hoverRef.current]
+        if (pt !== undefined) { const m = pt.meta; props.onOpenTurn(m.session, m.turn) }
+      }
+    }
     window.addEventListener('mousemove', move)
     window.addEventListener('mouseup', up)
     return () => { window.removeEventListener('mousemove', move); window.removeEventListener('mouseup', up) }
@@ -512,14 +639,16 @@ export function CurveChart(props: {
     kids.push(createElement('line', { key: 'xh', x1: sx(hv), x2: sx(hv), y1: padT - 4, y2: h - padB, stroke: 'var(--nt-faint,#9a9a95)', strokeWidth: 1, strokeDasharray: '3 3', opacity: 0.6 }))
   }
   const onMove = (e: { clientX: number; clientY: number; currentTarget: SVGSVGElement }): void => {
-    if (dragRef.current !== null) { setHover(null); return }
+    if (dragRef.current !== null) { hoverRef.current = null; setHover(null); return }
     const v = viewOf(e, e.currentTarget)
     viewRef.current = v
     const vx = v.vx
-    if (vx < padL - 8 || vx > DW - padR + 8) { setHover(null); return }
+    if (vx < padL - 8 || vx > DW - padR + 8) { hoverRef.current = null; setHover(null); return }
     let gi = a + Math.round(((vx - padL) / plotW) * (b - a))
     gi = Math.max(a, Math.min(b, gi))
-    setHover(Math.abs(sx(gi) - vx) <= 18 ? gi : null)
+    const next = Math.abs(sx(gi) - vx) <= 18 ? gi : null
+    hoverRef.current = next
+    setHover(next)
   }
   const tip = hv !== null && props.tipOf !== undefined ? props.tipOf(base[hv].meta) : null
   // 看板定位（px，含 meet 留白修正）：由最近一次 onMove 写入的实测视图参数推导
@@ -532,82 +661,311 @@ export function CurveChart(props: {
     const flipY = top < vr.rectH * 0.3
     tipStyle = { left: String(left) + 'px', top: String(top) + 'px', transform: (flipX ? 'translateX(calc(-100% - 12px))' : 'translateX(12px)') + ' ' + (flipY ? 'translateY(12px)' : 'translateY(calc(-100% - 10px))') }
   }
-  return createElement('div', { className: 'nt-chart', style: { height: fill ? '100%' : String(h) + 'px', cursor: drag ? 'grabbing' : undefined }, onContextMenu: (e: { preventDefault(): void }) => e.preventDefault() },
+  return createElement('div', { className: 'nt-chart', style: { height: fill ? '100%' : String(h) + 'px', cursor: drag ? 'grabbing' : undefined, userSelect: drag ? 'none' : undefined } },
     createElement('svg', {
       ref: svgRef,
       viewBox: '0 0 ' + String(W) + ' ' + String(h), width: '100%', height: '100%', preserveAspectRatio: 'xMidYMid meet', style: { display: 'block' }, role: 'img', 'aria-label': props.label ?? 'curve',
       onMouseMove: onMove,
-      onMouseLeave: () => { if (dragRef.current === null) setHover(null) },
-      onMouseDown: (e: { button: number; preventDefault(): void }) => {
-        if (e.button !== 2) return
+      onMouseLeave: () => { if (dragRef.current === null) { hoverRef.current = null; setHover(null) } },
+      onMouseDown: (e: { button: number; preventDefault(): void; clientX: number; currentTarget: SVGSVGElement }) => {
+        if (e.button !== 0) return
         e.preventDefault()
-        dragRef.current = { x: e.clientX, a, b, scale: viewOf(e, e.currentTarget).scale }
-        setDrag(true); setHover(null)
+        dragRef.current = { x: e.clientX, a, b, scale: viewOf(e, e.currentTarget).scale, moved: false }
+        setDrag(true)
       },
-      onClick: () => { if (hv !== null && props.onOpenTurn !== undefined) { const m = base[hv].meta; props.onOpenTurn(m.session, m.turn) } },
       onDoubleClick: () => setWin([0, n - 1]),
     }, ...kids),
     tip !== null && hv !== null && tipStyle !== null
       ? createElement('div', { className: 'nt-tip', style: tipStyle },
         createElement('div', null, createElement('b', null, tip.head)),
         ...tip.lines.map((ln, i) => createElement('div', { key: String(i) }, ln)),
-        createElement('div', { className: 'dim' }, '点击采样点 → 完整问答 · 右键拖动平移 · 双击复位缩放'),
+        createElement('div', { className: 'dim' }, '左键按住拖动平移 · 点击采样点 → 完整问答 · 双击复位缩放'),
       )
       : null,
   )
 }
 
+/**
+ * PULSE 主图（FIG.01 四主图，2×2 大图）：等间隔采样序列的交互图——滚轮放缩（指针为锚，min 8 点）、
+ * 左键按住拖动平移（位移 <4px 不触发）、双击复位；悬停读数显示在图头（该时刻原始读数，不取插值）。
+ * 与 CurveChart（NEXUS 轮次）分离：采样均匀、无逐点问答、无阈值语义，交互口径与其一致。
+ * 视口等比（meet）：设计坐标 1000×h，容器更宽时居中留边不变形；线宽/圆点为屏幕像素。
+ */
+export function PulseChart(props: { metric: string; points: Array<{ ts: number; value: number }>; h?: number; label?: string }): ReactNode {
+  const pts = props.points.filter((p) => Number.isFinite(p.value))
+  const n = pts.length
+  const h = props.h ?? 170
+  const DW = 1000
+  const [win, setWin] = useState<[number, number]>([0, Math.max(0, n - 1)])
+  const [hover, setHover] = useState<number | null>(null)
+  const [drag, setDrag] = useState(false)
+  const wrapRef = useRef<HTMLDivElement | null>(null)
+  const dragRef = useRef<{ x: number; a: number; b: number; scale: number; moved: boolean } | null>(null)
+  useEffect(() => { setWin([0, Math.max(0, n - 1)]); setHover(null) }, [n, props.metric])
+  const viewOf = (clientX: number): { vx: number; scale: number } | null => {
+    const el = wrapRef.current
+    if (el === null) return null
+    const rect = el.getBoundingClientRect()
+    const scale = Math.min(rect.width / DW, rect.height / h)
+    const offX = (rect.width - DW * scale) / 2
+    return { vx: (clientX - rect.left - offX) / scale, scale }
+  }
+  // 滚轮放缩：以指针为锚点（min 8 点）；容器就绪后挂非 passive 监听才能 preventDefault
+  useEffect(() => {
+    const el = wrapRef.current
+    if (el === null || n < 2) return undefined
+    const onWheel = (e: WheelEvent): void => {
+      e.preventDefault()
+      const v = viewOf(e.clientX)
+      if (v === null) return
+      const f = Math.max(0, Math.min(1, v.vx / DW))
+      const factor = e.deltaY < 0 ? 0.78 : 1.28
+      setWin(([a, b]) => {
+        const span = b - a
+        const ns = Math.max(8, Math.min(n - 1, Math.round(span * factor)))
+        const c = a + span * f
+        let na = Math.round(c - ns * f)
+        na = Math.max(0, Math.min(n - 1 - ns, na))
+        return na === a && ns === span ? [a, b] : [na, na + ns]
+      })
+    }
+    el.addEventListener('wheel', onWheel, { passive: false })
+    return () => { el.removeEventListener('wheel', onWheel) }
+  }, [n])
+  // 左键按住拖动 = 平移时间窗（window 级 move/up 保证拖出画布也持续；位移 <4px 视为点击不触发）
+  useEffect(() => {
+    if (!drag) return undefined
+    const move = (e: MouseEvent): void => {
+      const d = dragRef.current
+      if (d === null) return
+      if (!d.moved && Math.abs(e.clientX - d.x) < 4) return
+      d.moved = true
+      setHover(null)
+      // 抓点跟随（灵敏度同鼠标）：像素位移 ÷ 缩放 × (窗口跨度 / 绘图区宽) = 索引位移
+      const di = ((e.clientX - d.x) / d.scale) * ((d.b - d.a) / DW)
+      const span = d.b - d.a
+      let na = Math.round(d.a - di)
+      na = Math.max(0, Math.min(n - 1 - span, na))
+      setWin([na, na + span])
+    }
+    const up = (): void => { dragRef.current = null; setDrag(false) }
+    window.addEventListener('mousemove', move)
+    window.addEventListener('mouseup', up)
+    return () => { window.removeEventListener('mousemove', move); window.removeEventListener('mouseup', up) }
+  }, [drag, n])
+  const hv = hover !== null && hover >= 0 && hover <= n - 1 ? hover : null
+  const headVal = n === 0
+    ? '—'
+    : hv !== null
+      ? fmtMetricValue(props.metric, pts[hv].value) + ' · ' + fmtTime(pts[hv].ts)
+      : '最新 ' + fmtMetricValue(props.metric, pts[n - 1].value) + ' · ' + fmtTime(pts[n - 1].ts)
+  const head = createElement('div', { className: 'mh' },
+    createElement('span', null, props.label ?? metricLabel(props.metric)),
+    createElement('span', { className: 'mv' }, headVal),
+    createElement('span', { className: 'hint' }, '滚轮放缩 · 左键按住拖动 · 双击复位'),
+  )
+  if (n < 2) {
+    return createElement('div', { className: 'nt-maincell' }, head, Empty({ text: '序列未就绪（需 ≥2 个采样）' }))
+  }
+  const a = Math.max(0, Math.min(win[0], n - 2))
+  const b = Math.max(a + 1, Math.min(win[1], n - 1))
+  const hvi = hv !== null && hv >= a && hv <= b ? hv : null
+  const plotW = DW
+  const vis: number[] = []
+  for (let i = a; i <= b && i < n; i++) vis.push(i)
+  const ys = vis.map((i) => pts[i].value)
+  const min = Math.min(...ys)
+  const max = Math.max(...ys)
+  const span = max - min || 1
+  const padT = 14
+  const padB = 22
+  const sy = (v: number): number => h - padB - ((v - min) / span) * (h - padT - padB)
+  const sx = (i: number): number => ((i - a) / Math.max(1, b - a)) * plotW
+  const kids: ReactNode[] = []
+  for (const r of [0, 0.5, 1]) {
+    const v = min + span * r
+    const y = sy(v)
+    kids.push(createElement('line', { key: 'g' + String(r), x1: 0, x2: DW, y1: y, y2: y, stroke: 'var(--nt-border,#d9d9d5)', strokeWidth: 1, opacity: 0.7, vectorEffect: 'non-scaling-stroke' }))
+    kids.push(createElement('text', { key: 't' + String(r), x: 4, y: y - 3, fontSize: 9, fill: 'var(--nt-faint,#9a9a95)' }, fmtMetricValue(props.metric, v)))
+  }
+  {
+    const spanMs = pts[b].ts - pts[a].ts
+    const short = spanMs < 36 * 3600000
+    const xt = (ts: number): string => {
+      const d = new Date(ts)
+      const hm = String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0')
+      return short ? hm : String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0') + ' ' + hm
+    }
+    for (const k of [a, Math.floor((a + b) / 2), b]) {
+      const x = sx(k)
+      kids.push(createElement('text', { key: 'x' + String(k), x: Math.min(DW - 4, Math.max(4, x)), y: h - 6, fontSize: 9, fill: 'var(--nt-faint,#9a9a95)', textAnchor: x < 30 || x > DW - 30 ? (x < 30 ? 'start' : 'end') : 'middle' }, xt(pts[k].ts)))
+    }
+  }
+  const d = vis.map((i, k) => (k === 0 ? 'M' : 'L') + sx(i).toFixed(1) + ' ' + sy(pts[i].value).toFixed(1)).join(' ')
+  kids.push(createElement('path', { key: 'area', d: d + ' L' + sx(b).toFixed(1) + ' ' + String(h - padB) + ' L' + sx(a).toFixed(1) + ' ' + String(h - padB) + ' Z', fill: 'var(--nt-ink,#101010)', opacity: 0.06 }))
+  kids.push(createElement('path', { key: 'line', d, fill: 'none', stroke: 'var(--nt-ink,#101010)', strokeWidth: 1.6, vectorEffect: 'non-scaling-stroke' }))
+  if (hvi !== null) {
+    kids.push(createElement('line', { key: 'xh', x1: sx(hvi), x2: sx(hvi), y1: padT - 6, y2: h - padB, stroke: 'var(--nt-faint,#9a9a95)', strokeWidth: 1, strokeDasharray: '3 3', opacity: 0.6, vectorEffect: 'non-scaling-stroke' }))
+    kids.push(createElement('circle', { key: 'hd', cx: sx(hvi), cy: sy(pts[hvi].value), r: 3.4, fill: 'var(--nt-accent,#e6321e)' }))
+  }
+  return createElement('div', { className: 'nt-maincell' },
+    head,
+    createElement('div', {
+      ref: wrapRef, className: 'nt-chart', style: { cursor: drag ? 'grabbing' : 'crosshair', userSelect: drag ? 'none' : undefined },
+      onMouseMove: (e: { clientX: number }): void => {
+        if (dragRef.current !== null) return
+        const v = viewOf(e.clientX)
+        if (v === null) { setHover(null); return }
+        const gi = a + Math.round((v.vx / plotW) * (b - a))
+        setHover(gi >= a && gi <= b ? gi : null)
+      },
+      onMouseLeave: () => { if (dragRef.current === null) setHover(null) },
+      onMouseDown: (e: { button: number; preventDefault(): void; clientX: number }) => {
+        if (e.button !== 0) return
+        e.preventDefault()
+        const v = viewOf(e.clientX)
+        dragRef.current = { x: e.clientX, a, b, scale: v === null ? 1 : v.scale, moved: false }
+        setDrag(true)
+      },
+      onDoubleClick: () => setWin([0, n - 1]),
+    },
+      createElement('svg', { viewBox: '0 0 ' + String(DW) + ' ' + String(h), width: '100%', height: h, preserveAspectRatio: 'xMidYMid meet', style: { display: 'block' }, role: 'img', 'aria-label': props.label ?? metricLabel(props.metric) }, ...kids),
+    ),
+  )
+}
+
 // ── 视图 1：总览 ──────────────────────────────────────────────────────────────
 
-export function OverviewView(props: { m2: M2State | null; pulse: PulseState | null; lfield: LfieldInfo | null; viewMode: 'pointed' | 'all'; onViewMode: (m: 'pointed' | 'all') => void; newRoot: string; onNewRoot: (v: string) => void; switching: boolean; onSwitchLfield: (root: string) => void; onOpenTurn: (s: string, t: number) => void }): ReactNode {
+export function OverviewView(props: { m2: M2State | null; pulse: PulseState | null; lfield: LfieldInfo | null; viewMode: 'pointed' | 'all'; onViewMode: (m: 'pointed' | 'all') => void; newRoot: string; onNewRoot: (v: string) => void; switching: boolean; onSwitchLfield: (root: string) => void; onOpenTurn: (s: string, t: number) => void; paused?: boolean; sessionNameOf?: (id: string) => { name: string; title: string } | null; nonce?: number }): ReactNode {
   const { m2, pulse } = props
   const n = m2?.totals
   const hr = n?.hitRate
   const last = pulse?.collector.lastTickTs ?? null
   const lagMs = last === null ? null : Date.now() - last
   const stale = lagMs !== null && lagMs > 180000
-  const rows: Array<{ layer: string; label: string; value: string; note?: string; warn?: boolean }> = [
+  const recent = m2?.recent ?? []
+  const latest = pulse?.latest ?? []
+  // 图表语法升级（2026-09-20 方案 A）：PULSE 近 1h 序列驱动主图/小图/采集健康带；刷新频率与心跳对齐，抽屉打开暂停
+  const seriesMap = usePulseSeriesMap(latest.map((l) => l.metric), props.paused === true, 3600000, 240, heartbeatSeriesMs(pulse?.collector ?? null), props.nonce ?? 0)
+  const [hoverTs, setHoverTs] = useState<number | null>(null)
+  const ptsOf = (metric: string): Array<{ ts: number; value: number }> => (seriesMap[metric]?.points ?? []).map((p) => ({ ts: p.ts, value: p.value }))
+  const latestOf = (name: string): PulsePoint | undefined => latest.find((l) => l.metric === name)
+  // NEXUS stat 走势：命中率卡 = 逐轮未命中率序列；读数规模卡 = 累计输入令牌（命中+未命中）
+  let accTok = 0
+  const cumTok: number[] = []
+  const missPct: Array<number | null> = []
+  for (const p of m2?.curve ?? []) {
+    accTok += p.tokenIn + p.cacheRead
+    cumTok.push(accTok)
+    const mr = curveValue(p, 'miss')
+    missPct.push(mr === null ? null : mr * 100)
+  }
+  const rows: Array<{ layer: string; label: string; value: string; note?: string; warn?: boolean; spark?: Array<number | null> }> = [
     { layer: 'PULSE', label: '采集器心跳', value: last === null ? '未采样' : fmtTime(last), note: pulse === null ? 'pulse 未装配' : 'tick ' + String(pulse.collector.ticks) + ' · 库内 ' + String(pulse.db.rows) + ' 行 · shell=' + String(pulse.collector.shellPath === null ? '无' : pulse.collector.shellPath), warn: stale },
-    { layer: 'NEXUS', label: '读数规模', value: n === undefined ? '—' : String(n.turns) + ' 轮', note: '窗口内落库读数 · 归属由 L 场指向决定（vault 观测腿已下线）' },
-    { layer: 'NEXUS', label: '窗口缓存命中率', value: hr === null || hr === undefined ? '—' : (hr * 100).toFixed(1) + '%', note: n === undefined ? '—' : '读 ' + String(n.cacheRead) + ' / 未命中 ' + String(n.missToken) + ' 令牌 · ' + String(n.turns) + ' 轮', warn: hr !== null && hr !== undefined && hr < 0.5 },
+    { layer: 'NEXUS', label: '读数规模', value: n === undefined ? '—' : String(n.turns) + ' 轮', note: '窗口内落库读数 · 归属由 L 场指向决定（vault 观测腿已下线）', spark: cumTok },
+    { layer: 'NEXUS', label: '窗口缓存命中率', value: hr === null || hr === undefined ? '—' : (hr * 100).toFixed(1) + '%', note: n === undefined ? '—' : '读 ' + String(n.cacheRead) + ' / 未命中 ' + String(n.missToken) + ' 令牌 · ' + String(n.turns) + ' 轮', warn: hr !== null && hr !== undefined && hr < 0.5, spark: missPct },
     { layer: 'INFER', label: '推理时延 TTFT', value: '—', note: 'Phase 2a 采集（provider 侧未接入）', warn: false },
     { layer: 'INFER', label: '层间对齐度', value: '—', note: '需 INFER 落地后方可计算 τ_e', warn: false },
     { layer: 'M5', label: '预言命中', value: '—', note: 'call_p 未落库（迁移至 schema v5）', warn: false },
     { layer: 'SELF', label: '自评覆盖率', value: m2 === null ? '—' : String(m2.selfcheck.checked) + ' / ' + String(m2.selfcheck.total), note: '每轮 record_turn_selfcheck 落盘比例' },
   ]
-  const recent = m2?.recent ?? []
-  const latest = pulse?.latest ?? []
   const HEADLINE = ['pulse.cpu.utilization', 'pulse.mem.used', 'pulse.gpu.util', 'pulse.proc.dsh.rss']
   const headline = HEADLINE.map((name) => latest.find((l) => l.metric === name)).filter((x): x is PulsePoint => x !== undefined)
-  const sorted = latest.slice().sort((a, b) => (metricGroup(a.metric) + a.metric).localeCompare(metricGroup(b.metric) + b.metric, 'zh-Hans-CN'))
+  // 小图只列主图之外的次要指标（守谷人 2026-09-20 二次反馈：小图不与主图重复）
+  const minor = latest.filter((m) => !HEADLINE.includes(m.metric))
+  // 占比 gauge（Grafana Bar Gauge 借鉴）：CPU/GPU 利用率、内存/显存占比；朱红刻度＝预警阈值（越过转朱红）
+  const gauges: Array<{ label: string; display: string; ratio: number; threshold?: number; warn?: boolean }> = []
+  const cpu = latestOf('pulse.cpu.utilization')
+  if (cpu !== undefined && cpu.value !== null) gauges.push({ label: 'CPU 利用率', display: fmtMetricValue(cpu.metric, cpu.value), ratio: cpu.value, threshold: 0.85, warn: cpu.value >= 0.85 })
+  const gpu = latestOf('pulse.gpu.util')
+  if (gpu !== undefined && gpu.value !== null) gauges.push({ label: 'GPU 利用率', display: fmtMetricValue(gpu.metric, gpu.value), ratio: gpu.value / 100, threshold: 0.9, warn: gpu.value >= 90 })
+  const mu = latestOf('pulse.mem.used')
+  const mt = latestOf('pulse.mem.total')
+  if (mu !== undefined && mt !== undefined && mu.value !== null && mt.value !== null && mt.value > 0) gauges.push({ label: '内存占比', display: fmtBytes(mu.value) + ' / ' + fmtBytes(mt.value), ratio: mu.value / mt.value, threshold: 0.9, warn: mu.value / mt.value >= 0.9 })
+  const gu = latestOf('pulse.gpu.mem.used')
+  const gt = latestOf('pulse.gpu.mem.total')
+  if (gu !== undefined && gt !== undefined && gu.value !== null && gt.value !== null && gt.value > 0) gauges.push({ label: '显存占比', display: fmtMetricValue(gu.metric, gu.value) + ' / ' + fmtMetricValue(gt.metric, gt.value), ratio: gu.value / gt.value, threshold: 0.9, warn: gu.value / gt.value >= 0.9 })
+  // USE 资源族分区（利用率/饱和/错误的组织原则）+ Netdata 式每指标一图：跨图共享同一 hoverTs = 同步十字线
+  const FAMILIES = ['CPU', '内存', 'GPU', '进程', '磁盘', '网络', '其他']
+  const fams = FAMILIES.map((f) => ({ f, ms: minor.filter((m) => metricGroup(m.metric) === f) })).filter((x) => x.ms.length > 0)
+  const hoverReadout = (() => {
+    if (hoverTs === null) return null
+    for (const m of latest) {
+      const hit = (seriesMap[m.metric]?.points ?? []).find((p) => p.ts === hoverTs)
+      if (hit !== undefined) return metricLabel(m.metric) + ' = ' + fmtMetricValue(m.metric, hit.value) + ' · ' + fmtTime(hoverTs)
+    }
+    return null
+  })()
+  // 采集健康带：近 1h 每桶样本在场（n>0）为墨色片段；空白＝该桶无样本（中断/缺席）
+  const bandSeries = seriesMap['pulse.cpu.utilization'] ?? seriesMap['pulse.gpu.util'] ?? seriesMap['pulse.proc.dsh.rss'] ?? null
+  const presenceLane = (label: string, key: string): { label: string; spans: Array<{ from: number; to: number }> } => {
+    const s = seriesMap[key]
+    const bucket = s?.bucketMs ?? 5000
+    const spans: Array<{ from: number; to: number }> = []
+    let cur: { from: number; to: number } | null = null
+    for (const p of s?.points ?? []) {
+      if (p.n > 0) {
+        if (cur === null) cur = { from: p.ts, to: p.ts + bucket }
+        else cur.to = p.ts + bucket
+      } else if (cur !== null) { spans.push(cur); cur = null }
+    }
+    if (cur !== null) spans.push(cur)
+    return { label, spans }
+  }
+  // 会话排行 / 活跃带（Datadog Top List + Grafana State Timeline 借鉴）：按输入令牌（命中+未命中）合计
+  const bySess = new Map<string, { tokens: number; turns: number; from: number; to: number }>()
+  for (const p of m2?.curve ?? []) {
+    const e = bySess.get(p.session) ?? { tokens: 0, turns: 0, from: p.ts, to: p.ts }
+    e.tokens += p.tokenIn + p.cacheRead
+    e.turns += 1
+    e.from = Math.min(e.from, p.ts)
+    e.to = Math.max(e.to, p.ts)
+    bySess.set(p.session, e)
+  }
+  const ranked = Array.from(bySess.entries()).sort((a, b) => b[1].tokens - a[1].tokens)
+  const nameOf = (sid: string): string => {
+    const info = props.sessionNameOf?.(sid) ?? null
+    const nm = info?.name ?? ''
+    const ti = info?.title ?? ''
+    if (nm === '') return ti === '' ? shortSession(sid) : ti
+    if (ti === '') return nm
+    return nm + ' · ' + (ti.length > 18 ? ti.slice(0, 18) + '…' : ti)
+  }
+  const sessionDomain: [number, number] | null = ranked.length === 0 ? null : [Math.min(...ranked.map(([, e]) => e.from)), Math.max(...ranked.map(([, e]) => e.to))]
   return createElement('div', null,
     createElement('div', { className: 'nt-note', style: { marginTop: 0 } },
       '读数为观测所得，非评价：本面板只呈现「发生了什么」。三层齐备前（INFER 缺席），任何跨层结论都只能用「对照」措辞。'),
     createElement('div', { className: 'nt-wb-grid' }, ...rows.map((r) => Stat({ layer: r.layer, label: r.label, value: r.value, note: r.note, warn: r.warn }))),
     Panel({
       title: '系统层读数（PULSE · 本机）', fig: 'FIG.01',
-      note: '量纲取自 src/pulse/{collect,counters}.ts 的构造点：utilization / proc.cpu 是「占单核比」已换算为百分比，io_rate 为字节/秒，gpu.mem 为 MiB，temp/power 为 °C/W。本机读数与云端缓存之间在 era=api 下没有因果通路——此处只作对照，不作归因。',
+      note: '主图四项（CPU 利用率 / 内存占用 / GPU 利用率 / 宿主 RSS，2×2，近 1 小时）：滚轮放缩（指针为锚，min 8 点）、左键按住拖动平移、双击复位，悬停读该时刻原始值（图头显示，不取插值）。小图只列主图之外的次要指标（与主图不重复），跨图共享十字线——悬停任一小图，全部小图同一时刻画线；占比量走横条 gauge，朱红刻度为预警阈值。量纲取自 src/pulse/{collect,counters}.ts 的构造点：utilization / proc.cpu 是「占单核比」已换算为百分比，io_rate 为字节/秒，gpu.mem 为 MiB，temp/power 为 °C/W。本机读数与云端缓存之间在 era=api 下没有因果通路——此处只作对照，不作归因。曲线刷新与心跳对齐：' + heartbeatRefreshLabel(pulse?.collector ?? null) + '。',
       children: latest.length === 0
         ? Empty({ text: pulse === null ? 'PULSE 层缺席：宿主内子插件未挂载或接口不可达' : '尚无采样——等待采集器首个 tick' })
         : createElement('div', null,
-          headline.length > 0
-            ? createElement('div', { className: 'nt-wb-grid' }, ...headline.map((m) => Stat({ layer: 'PULSE', label: metricLabel(m.metric), value: fmtMetricValue(m.metric, m.value), note: metricGroup(m.metric) + ' · ' + fmtTime(m.ts) })))
-            : null,
-          createElement('table', { className: 'nt-tbl', style: { marginTop: 10 } },
-            createElement('thead', null, createElement('tr', null,
-              ...['指标', '分组', '最新值', '采样时刻'].map((h) => createElement('th', { key: h }, h)))),
-            createElement('tbody', null, ...sorted.map((m) => createElement('tr', { key: m.metric },
-              createElement('td', null, metricLabel(m.metric)),
-              createElement('td', null, createElement('span', { className: 'nt-tag' }, metricGroup(m.metric))),
-              createElement('td', null, fmtMetricValue(m.metric, m.value)),
-              createElement('td', null, fmtTime(m.ts)),
-            )))),
+          createElement('div', { className: 'nt-maingrid' }, ...headline.map((m) =>
+            createElement(PulseChart, { key: m.metric, metric: m.metric, points: ptsOf(m.metric), h: 170, label: metricLabel(m.metric) }))),
+          gauges.length > 0 ? createElement('div', { className: 'nt-gauges' }, ...gauges.map((g) => BarGauge(g))) : null,
+          minor.length > 0 ? createElement('div', { className: 'nt-readout', style: { marginTop: 12 } }, hoverReadout ?? '悬停任一小图 → 全网格同步十字线与该时刻读数') : null,
+          ...fams.map(({ f, ms }) => createElement('div', { key: f },
+            createElement('div', { className: 'nt-famhd' }, f),
+            createElement('div', { className: 'nt-mini' }, ...ms.map((m) =>
+              createElement('div', { key: m.metric, className: 'cell' },
+                createElement('div', { className: 'cl' },
+                  createElement('span', null, metricLabel(m.metric)),
+                  createElement('span', { className: 'cv' }, fmtMetricValue(m.metric, m.value)),
+                ),
+                MiniChart({ points: ptsOf(m.metric), hoverTs, onHover: setHoverTs, label: metricLabel(m.metric) }),
+              ))))),
+          createElement('div', { className: 'nt-famhd' }, '采集健康带 · 近 1 小时'),
+          bandSeries !== null
+            ? StateBand({ domain: [bandSeries.from, bandSeries.to], lanes: [presenceLane('CPU 采样', 'pulse.cpu.utilization'), presenceLane('GPU 采样', 'pulse.gpu.util'), presenceLane('进程采样', 'pulse.proc.dsh.rss')], xTick: fmtDayTime })
+            : createElement('div', { className: 'nt-mini-empty' }, '序列未就绪：等待首个采样窗（约 1 分钟）'),
           createElement('p', { className: 'nt-note' },
             '采集健康：tick ' + String(pulse?.collector.ticks ?? 0) + ' · 库内 ' + String(pulse?.db.rows ?? 0) + ' 行 ' + String(latest.length) + ' 指标 · shell=' + String(pulse?.collector.shellPath ?? '无') + ' · 计数器 ' + (pulse?.collector.countersOk === true ? '正常' : '不可用') + ' · GPU ' + (pulse?.collector.gpuOk === true ? '正常' : '不可用') + ' · 助手重启 ' + String(pulse?.collector.countersRestarts ?? 0) + ' 次' + (pulse?.collector.lastError === null || pulse?.collector.lastError === undefined ? '' : ' · 最近错误：' + pulse.collector.lastError)),
         ),
     }),
     Panel({
-      title: '最近轮次读数', fig: 'FIG.02',
+      title: '最近轮次读数', fig: 'FIG.02', collapsible: true, defaultCollapsed: true,
       note: '读数为原始记录；轮次内的问题/回答属解释层，不写回读数（见抽屉）。',
       children: recent.length === 0
         ? Empty({ text: m2 === null ? 'M2 读数接口读取中或不可用' : '窗口内暂无轮次记录' })
@@ -626,7 +984,21 @@ export function OverviewView(props: { m2: M2State | null; pulse: PulseState | nu
           )))),
     }),
     Panel({
-      title: 'L 场读数（独立指向）', fig: 'FIG.08',
+      title: '会话活跃与排行', fig: 'FIG.10',
+      note: '排行按输入令牌合计（命中+未命中）降序（Datadog Top List 式）；活跃带 = 会话首末轮之间的跨度（离散轮次的包络，Grafana State Timeline 式），不代表全程活跃。会话名 = 工作区目录名 · 会话标题（与曲线视图同源，cwd 缺失回退标题/短 id）。',
+      children: ranked.length === 0
+        ? Empty({ text: m2 === null ? 'M2 读数接口读取中或不可用' : '窗口内暂无会话读数' })
+        : createElement('div', null,
+          createElement('div', { className: 'nt-famhd' }, '输入令牌排行 · Top ' + String(Math.min(8, ranked.length))),
+          TopList({ rows: ranked.slice(0, 8).map(([sid, e]) => ({ label: nameOf(sid), sub: sid + ' · ' + String(e.turns) + ' 轮 · ' + fmtDayTime(e.from) + ' → ' + fmtDayTime(e.to), value: e.tokens, display: fmtK(e.tokens) + ' · ' + String(e.turns) + ' 轮' })) }),
+          createElement('div', { className: 'nt-famhd' }, '会话活跃带' + (sessionDomain === null ? '' : ' · ' + fmtDayTime(sessionDomain[0]) + ' → ' + fmtDayTime(sessionDomain[1]))),
+          sessionDomain === null
+            ? null
+            : StateBand({ domain: sessionDomain, lanes: ranked.slice(0, 6).map(([sid, e]) => ({ label: nameOf(sid), spans: [{ from: e.from, to: e.to }] })), xTick: fmtDayTime }),
+        ),
+    }),
+    Panel({
+      title: 'L 场读数（独立指向）', fig: 'FIG.08', collapsible: true, defaultCollapsed: true,
       note: 'M4-L：L 场读数按会话发起时的工作区（cwd）归属，每根计数独立（跨根不混算）。「视图」切换决定取数口径（全局 = 全部工作区；指向 = 当前指向工作区）；切换指向只影响**新会话**的归属，既有归属不变。',
       children: props.lfield === null
         ? Empty({ text: 'L 场接口不可用（/api/nautilus/lfield）' })
@@ -662,10 +1034,10 @@ export function OverviewView(props: { m2: M2State | null; pulse: PulseState | nu
 
 // ── 视图 2：曲线 ──────────────────────────────────────────────────────────────
 
-export type CurveKey = 'miss' | 'ms' | 'tps' | 'cum'
+export type CurveKey = 'miss' | 'stack' | 'ms' | 'tps' | 'cum'
 export function curveValue(p: M2Point, key: CurveKey): number | null {
-  // cum（累计输入）需要沿序列累加，不是逐点函数——在 CurveView 里按序累加（此处显式返回 null）
-  if (key === 'cum') return null
+  // cum（累计输入）/ stack（输入构成）需要沿序列派生，不是逐点函数——在 CurveView 里按序处理（此处显式返回 null）
+  if (key === 'cum' || key === 'stack') return null
   if (key === 'ms') return p.durationMs
   if (key === 'tps') return p.tps
   const read = p.cacheRead
@@ -673,8 +1045,8 @@ export function curveValue(p: M2Point, key: CurveKey): number | null {
   const den = read + miss
   return den <= 0 ? null : miss / den
 }
-export function curveUnit(key: CurveKey): string { return key === 'miss' ? '%' : key === 'ms' ? 'ms' : key === 'cum' ? 'tok' : 'tok/s' }
-export function curveLabel(key: CurveKey): string { return key === 'miss' ? '未命中率' : key === 'ms' ? '每轮时长' : key === 'cum' ? '累计输入' : '解码速度' }
+export function curveUnit(key: CurveKey): string { return key === 'miss' ? '%' : key === 'ms' ? 'ms' : key === 'stack' || key === 'cum' ? 'tok' : 'tok/s' }
+export function curveLabel(key: CurveKey): string { return key === 'miss' ? '未命中率' : key === 'stack' ? '输入构成' : key === 'ms' ? '每轮时长' : key === 'cum' ? '累计输入' : '解码速度' }
 
 /** /m2/analysis 的逐会话行（只取注记所需字段）。 */
 export type AnalysisRow = { session: string; shape: string; tauE: number | null; burst: { fromTurn: number; toTurn: number; direction: string } | null }
@@ -699,6 +1071,7 @@ export function shortSession(id: string): string {
 
 const CURVE_YFMT: Record<CurveKey, (v: number) => string> = {
   miss: (v) => String(Math.round(v)) + '%',
+  stack: (v) => fmtK(v),
   ms: (v) => String(Math.round(v)),
   tps: (v) => v.toFixed(0),
   cum: (v) => fmtK(v),
@@ -712,10 +1085,13 @@ export function CurveView(props: {
   analysis?: AnalysisRow[] | null
   sessionNameOf?: (id: string) => { name: string; title: string } | null
   onOpenTurn?: (session: string, turn: number) => void
+  nonce?: number
 }): ReactNode {
   const [key, setKey] = useState<CurveKey>('miss')
   const [scope, setScope] = useState<string>('all')
   const [pickOpen, setPickOpen] = useState(false)
+  // 构成柱悬停行号（原始 rows 下标；悬停读数与高亮由本视图持有，StackedBars 无 hooks）
+  const [stackHover, setStackHover] = useState<number | null>(null)
   // 时间档位（1 周 / 1 月）；全屏：绝对定位占满工作台面板（fixed 会被宿主布局的 transform 基改名空间劫持）、Esc 退出
   const [range, setRange] = useState<7 | 30>(7)
   const [full, setFull] = useState(false)
@@ -726,7 +1102,8 @@ export function CurveView(props: {
   const metrics = (props.pulse?.latest ?? []).map((l) => l.metric)
   const [picked, setPicked] = useState<string>('')
   const metric = picked !== '' && metrics.includes(picked) ? picked : (metrics[0] ?? '')
-  const series = useJson<PulseSeries>('/api/nautilus/pulse/series?metric=' + encodeURIComponent(metric) + '&windowMs=3600000&maxPoints=240', metric === '' || source !== 'pulse' || props.paused === true, 60000)
+  // PULSE 采样曲线：刷新与心跳对齐（auto 档=心跳间隔；手动档不轮询、采样完成经 nonce 重取）
+  const series = useJson<PulseSeries>('/api/nautilus/pulse/series?metric=' + encodeURIComponent(metric) + '&windowMs=3600000&maxPoints=240', metric === '' || source !== 'pulse' || props.paused === true, heartbeatSeriesMs(props.pulse?.collector ?? null), props.nonce ?? 0)
   // 全屏：Esc 退出（图表高度由 CurveChart 自测容器，无需宿主侧实测）
   useEffect(() => {
     if (!full) return undefined
@@ -739,6 +1116,16 @@ export function CurveView(props: {
   const curve = (props.m2?.curve ?? []).filter((p) => p.ts >= rangeFrom)
   const sessions = Array.from(new Set(curve.map((p) => p.session)))
   const scoped = scope === 'all' ? curve : curve.filter((p) => p.session === scope)
+  // 输入构成堆叠柱（方案 A，借鉴 Grafana 构成行）：每轮一根，缓存读（墨）+ 未命中输入（朱红）；输出令牌是另一维度不入图
+  const stackRows = scoped.map((p) => ({
+    x: axis === 'date' ? p.ts : p.turn,
+    session: p.session,
+    turn: p.turn,
+    segs: [
+      { key: 'read', v: p.cacheRead, fill: 'var(--nt-ink,#101010)', name: '缓存读' },
+      { key: 'miss', v: p.tokenIn, fill: 'var(--nt-accent,#e6321e)', name: '未命中输入' },
+    ],
+  }))
   // cum = 累计输入（Σ(命中+未命中) 按轮序，弱代理；中段加速平台 = S 形候选，正式判据仍看未命中率曲线）
   let cumAcc = 0
   const pts = scoped.map((p) => {
@@ -792,7 +1179,7 @@ export function CurveView(props: {
     }
   }
   const metricSeg = createElement('div', { className: 'nt-wb-seg' },
-    ...(['miss', 'cum', 'tps', 'ms'] as CurveKey[]).map((k) => createElement('button', { key: k, className: k === key ? 'on' : '', onClick: () => setKey(k) }, curveLabel(k))),
+    ...(['miss', 'stack', 'cum', 'tps', 'ms'] as CurveKey[]).map((k) => createElement('button', { key: k, className: k === key ? 'on' : '', onClick: () => setKey(k) }, curveLabel(k))),
     createElement('span', { style: { width: 12 } }),
     ...([7, 30] as Array<7 | 30>).map((r) => createElement('button', { key: r, className: range === r ? 'on' : '', onClick: () => setRange(r) }, r === 7 ? '1 周' : '1 月')),
     createElement('span', { style: { width: 12 } }),
@@ -828,11 +1215,35 @@ export function CurveView(props: {
       )
       : null,
   )
-  const chartPanel = (hh: number): ReactNode => Panel({
-    title: curveLabel(key) + ' 时序曲线' + (full ? '（全屏）' : ''), fig: 'FIG.02',
-    note: '时间轴为记录时间戳（非等间隔）：轮次并非均匀采样，曲线的斜率不代表速率；朱红虚线为阈值参考（' + (threshold === undefined ? '本指标不设阈值' : String(threshold) + curveUnit(key)) + '），朱红实心点＝越过阈值的轮；τ_e 注记取自 /m2/analysis 检出值（单会话聚焦时显示）。时间档位 ' + (range === 7 ? '1 周' : '1 月') + '。',
-    children: CurveChart({ points: pts, threshold, thresholdLabel: 'S 形阈值参考（P1）', yFmt: CURVE_YFMT[key], anno, xTick: axis === 'turn' ? (v: number): string => 't' + String(Math.round(v)) : undefined, h: hh, label: curveLabel(key), tipOf, onOpenTurn: props.onOpenTurn, resetKey: String(range) + '/' + String(key) + '/' + String(scope) }),
+  const stackTip = stackHover !== null && stackRows[stackHover] !== undefined
+    ? (() => {
+      const r = stackRows[stackHover]
+      const tot = r.segs.reduce((a, s) => a + s.v, 0)
+      return (axis === 'date' ? fmtDayTime(r.x) : 't' + String(r.turn)) + ' · 缓存读 ' + fmtK(r.segs[0].v) + ' · 未命中 ' + fmtK(r.segs[1].v) + ' · 合计 ' + fmtK(tot) + ' tok · 点击下钻'
+    })()
+    : '悬停柱看该轮构成 · 点击下钻'
+  const stackLegend = createElement('div', { className: 'nt-legend' },
+    ...([['缓存读（被复用输入）', 'var(--nt-ink,#101010)'], ['未命中输入（需注意）', 'var(--nt-accent,#e6321e)']] as Array<[string, string]>).map(([nm, c]) =>
+      createElement('span', { key: nm }, createElement('i', { style: { background: c } }), nm)),
+    createElement('span', { className: 'nt-readout', style: { marginLeft: 'auto' } }, stackTip),
+  )
+  const stackBars = (hh: number): ReactNode => StackedBars({
+    rows: stackRows, h: hh, hoverIndex: stackHover, onHover: setStackHover,
+    onOpenRow: (i) => { const r = stackRows[i]; if (r !== undefined && props.onOpenTurn !== undefined) props.onOpenTurn(r.session, r.turn) },
+    xTick: axis === 'turn' ? (v: number): string => 't' + String(Math.round(v)) : (v: number): string => fmtDayTime(v),
+    yFmt: (v: number): string => fmtK(v), label: '输入构成',
   })
+  const chartPanel = (hh: number): ReactNode => key === 'stack'
+    ? Panel({
+      title: curveLabel(key) + ' 时序图' + (full ? '（全屏）' : ''), fig: 'FIG.02',
+      note: '输入构成堆叠柱（Grafana 构成行式，每轮一根）：墨色段＝缓存读（被复用的输入），朱红段＝未命中输入（tokenIn 口径）；输出令牌是另一维度，不入此图。柱高＝该轮输入总量；轮次为离散事件、非均匀时间采样，柱距不代表等时距。悬停看该轮构成，点击柱下钻完整问答。',
+      children: createElement('div', null, stackLegend, stackBars(hh)),
+    })
+    : Panel({
+      title: curveLabel(key) + ' 时序曲线' + (full ? '（全屏）' : ''), fig: 'FIG.02',
+      note: '时间轴为记录时间戳（非等间隔）：轮次并非均匀采样，曲线的斜率不代表速率；朱红虚线为阈值参考（' + (threshold === undefined ? '本指标不设阈值' : String(threshold) + curveUnit(key)) + '），朱红实心点＝越过阈值的轮；τ_e 注记取自 /m2/analysis 检出值（单会话聚焦时显示）。时间档位 ' + (range === 7 ? '1 周' : '1 月') + '。',
+      children: CurveChart({ points: pts, threshold, thresholdLabel: 'S 形阈值参考（P1）', yFmt: CURVE_YFMT[key], anno, xTick: axis === 'turn' ? (v: number): string => 't' + String(Math.round(v)) : undefined, h: hh, label: curveLabel(key), tipOf, onOpenTurn: props.onOpenTurn, resetKey: String(range) + '/' + String(key) + '/' + String(scope) }),
+    })
   if (full) {
     return createElement('div', { style: { position: 'absolute', inset: 0, zIndex: 55, background: 'var(--nt-bg,#f2f2f0)', display: 'flex', flexDirection: 'column', padding: '12px 18px', overflow: 'hidden' } },
       createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginBottom: 10 } },
@@ -844,9 +1255,11 @@ export function CurveView(props: {
       ),
       createElement('div', { style: { flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' } },
         createElement('div', { className: 'nt-note', style: { margin: '0 0 8px', flex: 'none' } },
-          '时间档位 ' + (range === 7 ? '1 周' : '1 月') + ' · 滚轮放缩（指针为锚，双击复位）· 右键拖动平移 · 悬停采样点看简略读数，点击下钻完整问答。'),
+          '时间档位 ' + (range === 7 ? '1 周' : '1 月') + ' · 滚轮放缩（指针为锚，双击复位）· 左键按住拖动平移 · 悬停采样点看简略读数，点击下钻完整问答。'),
         createElement('div', { style: { flex: 1, minHeight: 0 } },
-          CurveChart({ points: pts, threshold, thresholdLabel: 'S 形阈值参考（P1）', yFmt: CURVE_YFMT[key], anno, fill: true, label: curveLabel(key), tipOf, onOpenTurn: props.onOpenTurn, resetKey: String(range) + '/' + String(key) + '/' + String(scope) }),
+          key === 'stack'
+            ? createElement('div', null, stackLegend, stackBars(360))
+            : CurveChart({ points: pts, threshold, thresholdLabel: 'S 形阈值参考（P1）', yFmt: CURVE_YFMT[key], anno, fill: true, label: curveLabel(key), tipOf, onOpenTurn: props.onOpenTurn, resetKey: String(range) + '/' + String(key) + '/' + String(scope) }),
         ),
       ),
     )
@@ -862,7 +1275,7 @@ export function CurveView(props: {
           metricSeg,
           pickerBox,
           createElement('span', { className: 'nt-note', style: { marginTop: 0, flex: '1 1 260px' } },
-            '会话名 = dsh 工作区目录名（取自宿主会话列表 cwd）。滚轮放缩（指针为锚，双击复位）；右键按住拖动平移；悬停采样点看该轮简略读数，点击下钻完整问答。'),
+            '会话名 = dsh 工作区目录名（取自宿主会话列表 cwd）。滚轮放缩（指针为锚，双击复位）；左键按住拖动平移；悬停采样点看该轮简略读数，点击下钻完整问答。'),
           createElement('span', { style: { flex: 1 } }),
           coverageLine,
           createElement('button', { className: 'nt-btn', onClick: () => setFull(true) }, '⛶ 全屏'),
@@ -876,7 +1289,7 @@ export function CurveView(props: {
         ),
         Panel({
           title: '本机采样曲线 · ' + (metric === '' ? '无指标' : metricLabel(metric)), fig: 'FIG.02',
-          note: 'PULSE 是等间隔采样（默认 5 s 一采，桶均值聚合到最多 240 点）：与 NEXUS 轮次曲线不同，这里的时间轴均匀，斜率可读。窗口 1 小时；每 60 s 刷新一次。',
+          note: 'PULSE 是等间隔采样（默认 5 s 一采，桶均值聚合到最多 240 点）：与 NEXUS 轮次曲线不同，这里的时间轴均匀，斜率可读。窗口 1 小时；刷新与心跳对齐：' + heartbeatRefreshLabel(props.pulse?.collector ?? null) + '。',
           children: metrics.length === 0
             ? Empty({ text: 'PULSE 层缺席：无指标可选（宿主内子插件未挂载）' })
             : Spark({ points: pulsePts, h: 180, label: metricLabel(metric) }),
@@ -1210,8 +1623,8 @@ export function Workbench(props: { onExitToConversation?: () => void; sessionNam
   const ok = (v: unknown): string => (v === null ? '缺席' : '在场')
   // 用 createElement 渲染视图组件（**不可**写成 OverviewView({...}) 直接调用）：
   // 直接调用会把子组件的 hooks 算进父组件，切换视图时 hooks 数量变化 → React 抛错、整页渲染失败。
-  const body = view === 'overview' ? createElement(OverviewView, { m2, pulse, lfield, viewMode, onViewMode: setViewMode, newRoot, onNewRoot: setNewRoot, switching, onSwitchLfield: switchLfield, onOpenTurn: (s: string, t: number) => setDrawer({ session: s, turn: t }) })
-    : view === 'curve' ? createElement(CurveView, { m2, era, pulse, paused, analysis, sessionNameOf: props.sessionNameOf, onOpenTurn: (s: string, t: number) => setDrawer({ session: s, turn: t }) })
+  const body = view === 'overview' ? createElement(OverviewView, { m2, pulse, lfield, viewMode, onViewMode: setViewMode, newRoot, onNewRoot: setNewRoot, switching, onSwitchLfield: switchLfield, onOpenTurn: (s: string, t: number) => setDrawer({ session: s, turn: t }), paused, sessionNameOf: props.sessionNameOf, nonce })
+    : view === 'curve' ? createElement(CurveView, { m2, era, pulse, paused, analysis, sessionNameOf: props.sessionNameOf, onOpenTurn: (s: string, t: number) => setDrawer({ session: s, turn: t }), nonce })
     : view === 'hypotheses' ? createElement(HypothesesView, { m2, ann, analysis, onProphecy: (id: string) => { setView('prophecy'); setToast('已跳到预言标注：' + id) } })
     : view === 'prophecy' ? createElement(ProphecyView, { ann, m2, toast: setToast, reload: () => setNonce((v) => v + 1) })
     : createElement(ReportView, { m2, pulse, era, ann, analysis })

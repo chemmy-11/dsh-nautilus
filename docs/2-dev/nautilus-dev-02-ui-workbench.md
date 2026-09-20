@@ -1,6 +1,6 @@
 # Nautilus 开发文档二 · 工作台 UI（S4 定版）
 
-> 版本 **v0.1**（2026-09-12 起草，**待开发组评审**）
+> 版本 **v0.2**（2026-09-12 起草；2026-09-20 增补 §4.5 图表语法升级）
 > 定版依据：守谷人 2026-09-12 裁定——**S4「瑞士制图」为主皮肤**，浅/暗双主题随宿主 UI 切换；nexus 层补人工标注 UI 后设计定版。
 > 交互原型（视觉与交互的唯一权威参照）：[./ui-s4-prototype.html](./ui-s4-prototype.html)——本文档描述其落地口径，与原型冲突时以原型视觉、本文档契约为准并回写修订。
 > 上游：[../1-planning/nautilus-nautilus-positioning.md](../1-planning/nautilus-nautilus-positioning.md)（L2 工作台呈现 · 差异化矩阵）· AGENTS.md §3（客户端半区契约）
@@ -119,6 +119,32 @@
 | toast | 底部居中 2.2s，用于一切 mock 写操作回执 |
 | 口径注记 | 每个图表下方必带（Fact First）：统计口径 / 混杂来源 / 诚实边界（示意数据声明） |
 
+### 4.5 图表语法升级（2026-09-20 守谷人裁决：方案 A「自绘借鉴」，不引入图表库）
+
+**裁决背景**：观测看板此前只有折线 + 表格两种表达，守谷人判定「太单调」，指示借鉴大厂开源观测看板（Grafana / Netdata / Datadog），不反复造轮子。三方案对比（A 自绘语法升级 / B 最小改造 / C 引入 uPlot）后裁决 **方案 A 全量**：借组件语法、不借引擎——瓶颈在表达语法（构成/占比/排行/状态的缺席），不在图表引擎性能（数据 ≤240 点，SVG 自绘已解决等比缩放/缩放平移/全屏）。
+
+| 借鉴组件 | 出处 | 落点 | 实现 |
+|---|---|---|---|
+| stat 卡内嵌走势线（sparkline） | Grafana Stat / Datadog Query Value | 总览 stat 卡（命中率=逐轮未命中率序列、读数规模=累计输入令牌；PULSE 头条 4 卡=近 1h 序列） | `charts.ts Sparkline` |
+| 每指标一图 + 跨图同步十字线 | Netdata 方法论（「每个指标默认就有图」） | FIG.01 PULSE 15 指标：表格 → USE 资源族分区小图网格（3 列），共享 hoverTs，悬停读数列于网格上方 | `charts.ts MiniChart`（无 hooks，hover 由 OverviewView 持有） |
+| 占比横条 gauge | Grafana Bar Gauge | FIG.01：CPU/GPU 利用率、内存/显存占比；朱红刻度＝阈值（CPU 85% / GPU·内存·显存 90%），越过转朱红 | `charts.ts BarGauge` |
+| 堆叠构成柱 | Grafana Node Exporter Full 构成行 | 曲线视图新增「输入构成」档：每轮一根，缓存读（墨）+ 未命中输入（朱红）；输出令牌为另一维度不入图；悬停构成/点击下钻 | `charts.ts StackedBars` |
+| 状态带 | Grafana State Timeline | FIG.01 采集健康带（近 1h 逐桶样本在场，空白=中断）；FIG.10 会话活跃带（首末轮跨度包络） | `charts.ts StateBand` |
+| 排行条 | Datadog Top List | FIG.10 会话输入令牌排行 Top 8（附轮数） | `charts.ts TopList` |
+| USE 资源族分区 | Brendan Gregg USE 方法 / node exporter 生态 | PULSE 指标按 CPU/内存/GPU/进程/磁盘/网络 分区呈现 | `metricGroup()`（已有）+ 族头样式 |
+
+**实现纪律**：新原语集中 `src/client/charts.ts`（零第三方依赖、SVG/DIV 自绘）；**全部无 hooks**（可像 Stat/Spark 一样直调，交互状态由视图持有经 props 传入）；颜色只取 `--nt-*` 令牌（var() fallback 之外零硬编码色，测试守卫）；缺席态显式（无序列 → 「暂无数据」，无指标 → 对应 gauge 不渲染，不写 0）。测试：SSR 冒烟新增总览网格/排行/健康带 + 缺席诚实态断言，charts 原语形状/空态/纯度守卫（`scripts/test.mjs` 末尾三条）。
+
+**布局二次修订（2026-09-20，守谷人对首版反馈：排版乱 / 主图太小 / 小图重复）**：
+
+1. **FIG.01 主图 2×2**：CPU 利用率 / 内存占用 / GPU 利用率 / 宿主 RSS 四项升为交互大图（`PulseChart`，设计坐标 1000×170、meet 等比）：**滚轮放缩**（指针为锚，min 8 点）· **左键按住拖动平移** · **双击复位**，交互口径与曲线视图 CurveChart 一致；悬停读数显示在图头（原始值，不取插值）。原「头条 stat 卡 + sparkline」撤销——它们与主图重复。
+   **平移改左键（2026-09-20 四次反馈）**：右键拖动与浏览器手势冲突——两处平移（`PulseChart` + `CurveChart`）统一改**左键按住拖动**，以 4px 位移阈值区分点击与拖动（曲线视图 <4px 松开＝点击采样点下钻，逻辑自 svg onClick 迁至 mouseup）；右键还原给浏览器（contextmenu 抑制已移除），拖动期间 `user-select:none` 防误选。
+   **拖动灵敏度同鼠标（2026-09-20 五次反馈）**：索引位移 = 像素位移 ÷ 缩放 × (窗口跨度 ÷ 绘图区宽)——旧实现漏乘 `跨度/绘图区宽`，拖 1px 跳 1 索引、比鼠标快约 4 倍；修正后按住时指针下的数据点全程跟手（抓点绑定，取整误差 ≤0.5 索引）。
+2. **小图去重**：USE 分区小图网格只列**主图之外的次要指标**；全部为次要指标时（未来可能）读数位随之隐藏。
+3. **次要看板折叠**：`Panel` 新增 `collapsible`/`defaultCollapsed`（原生 `<details>/<summary>`，无 hooks、SSR 友好）；总览默认收起 FIG.02（最近轮次——数据曲线视图在）与 FIG.08（L 场指向——低频配置操作）。
+4. 测试同步：SSR 冒烟断言 `nt-maingrid`/主图图头（最新值 + 交互提示）/`<details>` 折叠/主图恰 4 格；缺席诚实态断言保留。
+5. **曲线刷新与心跳对齐（2026-09-20 三次反馈）**：PULSE 序列取数不再固定 60 s——`heartbeatSeriesMs()`：auto 档 = max(1s, 心跳档位间隔)，手动档 = 0（不轮询，采样完成经 nonce 触发重取），PULSE 缺席 = 60 s 兜底；总览主图/小图（`usePulseSeriesMap`）与曲线视图 PULSE 模式（`useJson`）统一走该口径，图注显式标注当前刷新频率（`heartbeatRefreshLabel`）。悬停缩放窗为索引窗，随滑动窗口整体前移（每桶位前移一格），与 Grafana 实时看板行为一致。
+
 ---
 
 ## 5. 人工标注 UI（本轮新增，定版）
@@ -184,7 +210,9 @@
 | 五视图 + 抽屉 + era 条 | `src/client/workbench.ts`（600 行） | ✅ 已实现，产物已下发（§E10） |
 | 全局面板入口 | `src/client/index.ts`：`sidebar.panellist`（list 槽 → `id`，order 50，label 走函数形）+ `main`（**keyed 槽 → `key`**），两值同 `nautilus-workbench` | ✅ 已注册并进常驻测试 |
 | 槽位标识字段 | `list` → `options.id`；`keyed` → `options.key`（传错抛 `keyed slot main requires options.key`，并拖垮整批浏览器半区插件集） | ⚠️ 硬契约，见 §E10 |
-| 逐会话双 tab | 同文件，`conversation.view` ×2（Vault 观测 / L 场读数） | ✅ 保留（加法，不替换） |
+| 逐会话双 tab | ~~同文件，`conversation.view` ×2~~ **2026-09-27 收敛**：vault 观测 tab 随观测腿下线删除、L 场读数 tab 能力搬进工作台后删除——客户端半区只剩工作台一个入口面（`client/index.ts` 仅 inject + sessionNameOf + 工作台双注册），`conversation.view` 不再注册 | ✅ 已收敛 |
+| 图表语法升级（§4.5） | `src/client/charts.ts`（Sparkline/MiniChart/BarGauge/StackedBars/StateBand/TopList，全部无 hooks）+ 总览 FIG.01 网格化（USE 分区/同步十字线/gauge/健康带）+ FIG.10 会话活跃与排行 + 曲线视图「输入构成」堆叠柱档 | ✅ 2026-09-20 落地（六件套 30/30；端上验收待 dsh-next 刷新，稳定版 dsh 不动） |
+| `fmtK` 缺失修复 | `curveLabel('cum')` 的 y 轴格式引用了未定义的 `fmtK`（客户端半区无 tsc 把关漏网）——切「累计输入」档会 ReferenceError | ✅ 顺手修复 |
 | 取数口径 | §6 现成只读 API：`/state` · `/m2/state?root=all` · `/m2/annotations` · `/m2/turn-text` · `/pulse/state` | ✅ 未命中率对齐 `routes.ts:167`（`tokenIn/(tokenIn+cacheRead)`） |
 | 唯一写路径 | `POST /api/nautilus/m2/annotations`（预言标注） | ✅ 失败 toast 不静默 |
 | 缺席态 | INFER 层未接入 / 无数据 → 缺席文案与诚实边界，不写 0 | ✅ 全视图覆盖 |

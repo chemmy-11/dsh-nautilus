@@ -18,5 +18,6 @@ Nautilus 各阶段的具体开发文档：模块设计、接口契约、schema�
 | [nautilus-dev-03-os-layer.md](./nautilus-dev-03-os-layer.md) | 开发文档三 · Phase 1：pulse（OS/GPU 层）——15 条序列 / 6 族口径、常驻计数器助手的成本实测、`metric_sample` 与 v3→v4 迁移、只读取数路由 | v0.1，**待开发组评审** |
 | [evidence-phase1-20260913.md](./evidence-phase1-20260913.md) | 证据归档 · Phase 1 + S 系列：通道成本对比、15 族落库、迁移与 soak（E21 起含 S1.1 自评多源采集） | 归档中（soak 回填后定稿） |
 | [nautilus-dev-04-selfcheck-ingest.md](./nautilus-dev-04-selfcheck-ingest.md) | 开发文档四 · **S1.1 自评多源采集**：`selfcheck_record`（v5 迁移）、共享 ingest、`POST /selfcheck`（token 门默认关）、工具 quote 硬门、MCP 前瞻约束 | v0.1（**S1.1 已交付**，见 E21；S1.2 面板切读待建） |
+| [evidence-dev02-20260920.md](./evidence-dev02-20260920.md) | 证据归档 · dev-02 图表语法升级（§4.5 方案 A：PULSE 小图网格/gauge/排行/状态带/构成柱，六件套 30/30） | 已归档（端上 dsh-next 验收待补） |
 
 （待建：**S1.2「自评读侧统一与覆盖率三态」开发文档**（面板切读 `selfcheck_record`、按 source_kind/agent 分层、缺口三态——决策 D-SC4 落点）；Phase 2a「模型层 API 时代」开发文档；Phase 3「core 管道与时间窗对齐」；1 分钟档聚合与 OTLP 导出按 [nautilus-dev-03-os-layer.md](./nautilus-dev-03-os-layer.md) §7 的 OQ 推进）

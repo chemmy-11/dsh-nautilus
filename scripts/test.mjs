@@ -546,7 +546,7 @@ test('host bundle 单入口：pulse 作为子插件挂载并注册自身路由',
     })
     const deadline = Date.now() + 5000
     while (Date.now() < deadline && !routes.includes('/api/nautilus/pulse/state')) await new Promise((r) => setTimeout(r, 25))
-    // vault 观测腿下线（2026-09-27）后：无 /state · /vault · /action 三条；S1.1 新增 /selfcheck；T 系列新增 /m2/turn-annotations
+    // vault 观测腿下线（2026-09-27）后：无 /state · /vault · /action 三条；S1.1 新增 /selfcheck
     assert.deepEqual([...routes].sort(), [
       '/api/nautilus/lfield',
       '/api/nautilus/m2/analysis',
@@ -738,4 +738,117 @@ test('selfcheck ingest 通道：默认关 403 → token 门 401 → 非法 400 �
     // Windows：node:sqlite 的文件句柄要等 GC 才释放，重试也可能吃 EPERM——%TEMP% 由系统回收，不因清理竞态误报测试失败
     try { rmSync(tmp, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }) } catch { /* 容忍残留 */ }
   }
+})
+
+// ── 工作台图表语法升级（2026-09-20 方案 A）：SSR 冒烟 + charts 原语纪律 ──────────
+
+test('workbench 图表升级 SSR：总览 PULSE 网格/gauge/排行/健康带 + 曲线构成柱入口', async () => {
+  const esbuild = await import('esbuild')
+  const rds = await import('react-dom/server')
+  const react = await import('react')
+  const renderToStaticMarkup = rds.renderToStaticMarkup ?? rds.default?.renderToStaticMarkup
+  const repo = fileURLToPath(new URL('..', import.meta.url))
+  const dir = mkdtempSync(join(repo, '.charts-smoke-'))
+  const out = join(dir, 'wb.mjs')
+  try {
+    esbuild.buildSync({
+      entryPoints: [fileURLToPath(new URL('../src/client/workbench.ts', import.meta.url))],
+      bundle: true, format: 'esm', platform: 'node', outfile: out, logLevel: 'silent',
+      external: ['react', 'react/jsx-runtime', 'react-dom', 'react-dom/server'],
+    })
+    const wb = await import(pathToFileURL(out).href)
+    const el = (Type, props, ...kids) => react.createElement(Type, props, ...kids)
+    const h = (node) => renderToStaticMarkup(node)
+    const noop = () => {}
+    const now = Date.now()
+    const pt = (turn, session, miss, cache) => ({ session, turn, ts: now - (40 - turn) * 60000, tokenIn: miss, tokenOut: 100, cacheRead: cache, durationMs: 1200, tps: 42.5 })
+    const curve = [pt(1, 'session-aaaa1111', 500, 100), pt(2, 'session-aaaa1111', 400, 300), pt(3, 'session-bbbb2222', 100, 900), pt(4, 'session-bbbb2222', 50, 950)]
+    const m2 = {
+      pointing: 'L:\ws\demo',
+      totals: { turns: 4, tokenIn: 1050, tokenOut: 400, cacheRead: 2250, missToken: 1050, hitRate: 0.68 },
+      curve, recent: curve.slice().reverse(),
+      selfcheck: { checked: 3, total: 4, bySession: {} },
+      sessionMeta: { 'session-aaaa1111': { startTs: now - 3600000, turns: 2 }, 'session-bbbb2222': { startTs: now - 1800000, turns: 2 } },
+    }
+    const pulse = {
+      collector: { ticks: 120, lastTickTs: now - 2000, countersOk: true, gpuOk: true, shellPath: 'powershell', execAvailable: true, lastError: null, mode: 'auto', intervalMs: 5000 },
+      db: { rows: 12345, oldestTs: now - 86400000, newestTs: now, schemaVersion: 4 },
+      latest: [
+        { metric: 'pulse.cpu.utilization', value: 0.92, ts: now, tags: {} },
+        { metric: 'pulse.cpu.ctx_switches', value: 1200, ts: now, tags: {} },
+        { metric: 'pulse.mem.used', value: 1.2e10, ts: now, tags: {} },
+        { metric: 'pulse.mem.total', value: 3.4e10, ts: now, tags: {} },
+        { metric: 'pulse.gpu.util', value: 95, ts: now, tags: {} },
+        { metric: 'pulse.proc.dsh.rss', value: 5.5e8, ts: now, tags: {} },
+      ],
+    }
+    // ① 总览：主图 2×2 + USE 资源族分区（仅次要指标）+ 占比 gauge + 健康带占位 + 会话排行/活跃带 + 折叠面板
+    const ov = h(el(wb.OverviewView, { m2, pulse, lfield: null, viewMode: 'all', onViewMode: noop, newRoot: '', onNewRoot: noop, switching: false, onSwitchLfield: noop, onOpenTurn: noop }))
+    for (const s of ['采集健康带', '输入令牌排行', '会话活跃带', '悬停任一小图', 'nt-gauges', 'CPU 利用率', '内存占比', '2.0k · 2 轮', 'aaaa1111']) {
+      assert.ok(ov.includes(s), '总览图表升级缺内容: ' + s)
+    }
+    // 布局二次修订：主图 2×2 在场（图头含最新值与交互提示）；次要看板为可折叠 details/summary
+    for (const s of ['nt-maingrid', 'nt-maincell', '滚轮放缩 · 左键按住拖动 · 双击复位', '92.0%', '<details', '<summary']) {
+      assert.ok(ov.includes(s), '总览主图/折叠缺内容: ' + s)
+    }
+    // 曲线刷新与心跳对齐：auto 档（fixture intervalMs=5000）→ 图注应写明 5 s/次
+    for (const s of ['曲线刷新与心跳对齐', '5 s/次']) {
+      assert.ok(ov.includes(s), '总览心跳对齐缺内容: ' + s)
+    }
+    assert.ok(ov.split('nt-maincell').length - 1 === 4, '主图应为 4 格（每格容器类名恰好一次）')
+    // 缺席诚实态：无 gpu.mem 指标 → 显存占比 gauge 不得出现；SSR 无取数 → 小图空态而非编造曲线
+    assert.ok(!ov.includes('显存占比'), '总览渲染了缺席指标的 gauge（显存占比）')
+    assert.ok(ov.includes('暂无数据'), '总览小图缺空态（序列未取数时应显式缺席）')
+    // ② 曲线：构成柱入口（按钮）在场；默认仍为未命中率曲线
+    const cv = h(el(wb.CurveView, { m2, era: 'api', pulse, analysis: [], sessionNameOf: () => ({ name: 'ws', title: 'demo' }) }))
+    assert.ok(cv.includes('输入构成'), '曲线视图缺「输入构成」档位')
+  } finally {
+    rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
+  }
+})
+
+test('charts 原语 SSR：StackedBars/StateBand/TopList/BarGauge/Sparkline 形状与空态', async () => {
+  const esbuild = await import('esbuild')
+  const rds = await import('react-dom/server')
+  const react = await import('react')
+  const renderToStaticMarkup = rds.renderToStaticMarkup ?? rds.default?.renderToStaticMarkup
+  const repo = fileURLToPath(new URL('..', import.meta.url))
+  const dir = mkdtempSync(join(repo, '.charts-unit-'))
+  const out = join(dir, 'charts.mjs')
+  try {
+    esbuild.buildSync({
+      entryPoints: [fileURLToPath(new URL('../src/client/charts.ts', import.meta.url))],
+      bundle: true, format: 'esm', platform: 'node', outfile: out, logLevel: 'silent',
+      external: ['react', 'react/jsx-runtime'],
+    })
+    const ch = await import(pathToFileURL(out).href)
+    const h = (node) => renderToStaticMarkup(node)
+    const rows = [
+      { x: 1, segs: [{ key: 'read', v: 100, fill: 'black', name: '缓存读' }, { key: 'miss', v: 50, fill: 'red', name: '未命中' }] },
+      { x: 2, segs: [{ key: 'read', v: 0, fill: 'black', name: '缓存读' }, { key: 'miss', v: 80, fill: 'red', name: '未命中' }] },
+    ]
+    const sb = h(react.createElement(ch.StackedBars, { rows, hoverIndex: 1, xTick: (v) => 't' + v }))
+    assert.ok(sb.includes('<rect') && sb.includes('t1') && sb.includes('t2'), 'StackedBars 缺柱或刻度')
+    assert.ok(h(react.createElement(ch.StackedBars, { rows: [] })).includes('暂无数据'), 'StackedBars 空态缺失')
+    const band = h(react.createElement(ch.StateBand, { domain: [0, 100], lanes: [{ label: 'CPU 采样', spans: [{ from: 10, to: 60 }] }], xTick: (t) => String(t) }))
+    assert.ok(band.includes('CPU 采样') && band.includes('left:10.00%') && band.includes('width:50.00%'), 'StateBand 泳道/片段几何缺失')
+    const tl = h(react.createElement(ch.TopList, { rows: [{ label: 'a', value: 300, display: '300' }, { label: 'b', value: 100, display: '100' }, { label: 'z', value: 0, display: '0' }] }))
+    assert.ok(tl.includes('>a<') && tl.includes('width:100.0%') && !tl.includes('>z<'), 'TopList 排行条/零值剔除缺失')
+    const g = h(react.createElement(ch.BarGauge, { label: 'GPU', display: '95%', ratio: 0.95, threshold: 0.9, warn: true }))
+    assert.ok(g.includes('warn') && g.includes('width:95.0%') && g.includes('left:90.0%'), 'BarGauge 警示/阈值刻度缺失')
+    assert.equal(h(react.createElement(ch.Sparkline, { values: [1] })), '', 'Sparkline 点不足应渲染 null（不占位）')
+    assert.ok(h(react.createElement(ch.Sparkline, { values: [1, 2, 3] })).includes('<path'), 'Sparkline 缺折线')
+  } finally {
+    rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
+  }
+})
+
+test('charts 原语纪律：无 hooks（可像 Stat/Spark 一样直调）+ --nt-* 令牌外零硬编码色', () => {
+  const src = readFileSync(new URL('../src/client/charts.ts', import.meta.url), 'utf8')
+  for (const bad of ['useState(', 'useEffect(', 'useRef(', 'useLayoutEffect(']) {
+    assert.ok(!src.includes(bad), 'charts.ts 出现 hooks（破坏「无 hooks 可直调」纪律）: ' + bad)
+  }
+  const stripped = src.replace(/var\(--nt-[a-z0-9-]+\s*,[^)]*\)/gi, '')
+  const hex = stripped.match(/#[0-9a-fA-F]{3,8}\b/g)
+  assert.deepEqual(hex, null, 'charts.ts 在 --nt-* 令牌 fallback 之外出现硬编码色: ' + JSON.stringify(hex))
 })
