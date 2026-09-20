@@ -14,6 +14,7 @@
 |---|---|
 | [nautilus-opening-report.md](./nautilus-opening-report.md) | 开题报告（第一期）：技术调研、指标口径、总体设计、Phase 0–5 计划 |
 | [nautilus-research-2-positioning.md](./nautilus-research-2-positioning.md) | 第二期调研：产品定位（Agent 工作台）、竞争格局、路线阶梯、可借鉴开源项目清单 |
+| [nautilus-selfcheck-multisource.md](./nautilus-selfcheck-multisource.md) | 自评多源采集（S 系列）：通道定 HTTP ingest、declaration 改证据要求（D-SC1/2 已签核）；规则完善与诚实边界 |
 
 ## 关联
 

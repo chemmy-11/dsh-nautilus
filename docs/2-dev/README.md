@@ -18,4 +18,4 @@ Nautilus 各阶段的具体开发文档：模块设计、接口契约、schema�
 | [nautilus-dev-03-os-layer.md](./nautilus-dev-03-os-layer.md) | 开发文档三 · Phase 1：pulse（OS/GPU 层）——15 条序列 / 6 族口径、常驻计数器助手的成本实测、`metric_sample` 与 v3→v4 迁移、只读取数路由 | v0.1，**待开发组评审** |
 | [evidence-phase1-20260913.md](./evidence-phase1-20260913.md) | 证据归档 · Phase 1：通道成本对比（一次性 2.9 s CPU vs 常驻 16–31 ms）、15 族落库、软失败路径、迁移与存储、1 小时 soak | 归档中（soak 回填后定稿） |
 
-（待建：Phase 2a「模型层 API 时代」开发文档；Phase 3「core 管道与时间窗对齐」；1 分钟档聚合与 OTLP 导出按 [nautilus-dev-03-os-layer.md](./nautilus-dev-03-os-layer.md) §7 的 OQ 推进）
+（待建：**S1「自评多源采集」实现文档**（口径见 [../1-planning/nautilus-selfcheck-multisource.md](../1-planning/nautilus-selfcheck-multisource.md)：v5 迁移 + POST ingest + 工具改造，待开 issue）；Phase 2a「模型层 API 时代」开发文档；Phase 3「core 管道与时间窗对齐」；1 分钟档聚合与 OTLP 导出按 [nautilus-dev-03-os-layer.md](./nautilus-dev-03-os-layer.md) §7 的 OQ 推进）
