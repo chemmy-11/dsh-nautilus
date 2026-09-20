@@ -69,7 +69,7 @@
 
 ## 工程红线（事故教训固化）
 
-1. **单实例合约**：in-box 包（`@deepseek-ai/*`：宿主族 `@deepseek-ai/dsh-*` 与 `@deepseek-ai/cordis`/`@deepseek-ai/schemastery`；非 scoped 的 `cordis`/`schemastery` 不在 dsh 安装闭包内、不要用）只进 peerDependencies，严禁 dependencies；peer 范围带显式 prerelease 分支（当前 `@deepseek-ai/dsh-host-webserver`: `^0.1.1-rc.2 || ^0.1.2-alpha.2 || ^0.1.5-rc.1`），且 **devDep pin 的版本必须落在 peer 范围内**（`check:deps` R3 自动校验）；遇「peer 装不上」查解析路径，禁止塞 dependencies 修复（hoist 双实例 → 模块级 Symbol 错位 → 全 tool 链崩溃）。
+1. **单实例合约**：in-box 包（`@deepseek-ai/*`：宿主族 `@deepseek-ai/dsh-*` 与 `@deepseek-ai/cordis`/`@deepseek-ai/schemastery`；非 scoped 的 `cordis`/`schemastery` 不在 dsh 安装闭包内、不要用）只进 peerDependencies，严禁 dependencies；peer 范围带显式 prerelease 分支（当前 `@deepseek-ai/dsh-host-webserver`: `^0.1.1-rc.2 || ^0.1.2-alpha.2 || ^0.1.5-rc.1 || ^0.1.6-alpha.1`；**每个分支都必须自带预发布标签**——裸 `^0.1.6` 会静默排除 alpha 线，`check:deps` R4 拦此），且 **devDep pin 的版本必须落在 peer 范围内**（`check:deps` R3 自动校验）；遇「peer 装不上」查解析路径，禁止塞 dependencies 修复（hoist 双实例 → 模块级 Symbol 错位 → 全 tool 链崩溃）。
 2. **vault 只读**：对 vaultRoot 零写入（不创建 / 不修改任何 vault 内文件）；观测数据与配置只在 `~/.dsh/nexus/`。
 3. **迁移幂等**：SQLite schema 变更走 v{N+1} 顺序迁移，可重复执行；改名 / 搬迁类迁移仅在新缺失时执行，绝不覆盖已有数据。
 4. **集中常量**：事件名 / 路由前缀 / API 路径集中定义，避免裸字符串拼写漂移失去编译期保护。

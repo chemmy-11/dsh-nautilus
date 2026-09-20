@@ -8,6 +8,10 @@
  *  R3 peer/devDep 同步：@deepseek-ai/dsh-host-webserver 的 devDependency 必须精确 pin，
  *     且其版本线（major.minor.patch-tag）落在 peer 范围内——升级 devDep 忘改 peer
  *     会让「构建对准的宿主」与「声明支持的宿主」脱节（2026-09-10 0.1.5-rc.1 适配教训）。
+ *  R4 每个宿主 peer 分支都要带预发布标签：按 semver 预发布规则，`0.1.6-alpha.2` 只能被
+ *     「同元组且带预发布」的比较器匹配——写裸 `^0.1.6` 会**静默排除 alpha 线**（R2 拦不住，
+ *     它只查整个范围串里出现过 '-rc'）。带 tag 的分支同时覆盖 alpha 与日后转正的 stable
+ *     （`^0.1.6-alpha.1` ⊇ 0.1.6），故「只写带 tag 的分支」是唯一安全形态（2026-09-13 0.1.6-alpha.2 适配教训）。
  * 违规即 exit 1。
  */
 import { readFileSync } from 'node:fs'
@@ -22,6 +26,14 @@ for (const [name] of Object.entries(pkg.dependencies ?? {})) {
 for (const [name, range] of Object.entries(pkg.peerDependencies ?? {})) {
   if (/^@deepseek-ai\/dsh(-|$)/.test(name) && !String(range).includes('-rc')) {
     violations.push(`R2: peer 范围缺显式 prerelease 分支: ${name}: ${range}`)
+  }
+}
+
+// R4：宿主 peer 的每个 || 分支都必须自带预发布标签（裸分支会静默排除 alpha 线）
+const hostPeerRange = pkg.peerDependencies?.['@deepseek-ai/dsh-host-webserver']
+if (typeof hostPeerRange === 'string') {
+  for (const branch of hostPeerRange.split('||').map((s) => s.trim()).filter((s) => s !== '')) {
+    if (!branch.includes('-')) violations.push(`R4: 宿主 peer 分支缺预发布标签（裸分支静默排除 alpha 线）: ${branch}`)
   }
 }
 

@@ -352,6 +352,46 @@ client-modules: package @dsh-external/dsh-nexus resolves from multiple active Lo
 
 ---
 
+## E16 双宿主适配：dsh 0.1.6-alpha.2 并存安装（2026-09-20）
+
+**背景**：守谷人为最新版 dsh 单独开了并存安装 `C:\Users\15266\dsh-next`（命令 `dsh-next`，`DSH_HOME=C:\Users\15266\.dsh-next`，默认端口 3081），要求适配并实装，**不得影响 0.1.5-rc.2 的稳定环境**。按 CONTRIBUTING「宿主版本适配五步」执行。
+
+**① 依赖面**
+- 对照两棵安装树的版本：`dsh` 0.1.5-rc.2 → 0.1.6-alpha.2；宿主族全部同线升版（`dsh-host-webserver` / `dsh-client-modules` / `dsh-client-ui-{layout,sidebar,renderer,conversation}` / `dsh-base` / `dsh-web-app` 均 `0.1.6-alpha.2`）；`@deepseek-ai/cordis` **4.0.2** 与 `@deepseek-ai/schemastery` **3.18.2** 两版一致（未变）。
+- peer 追加 `^0.1.6-alpha.1` 分支，**保留旧分支**；devDep 仍精确 pin `0.1.5-rc.2`（两宿主共存，构建对准稳定线）。
+- `check:deps` 新增 **R4**：宿主 peer 的**每个 `||` 分支都必须自带预发布标签**。理由：按 semver 预发布规则，`0.1.6-alpha.2` 只能被「同元组且带预发布」的比较器匹配，写裸 `^0.1.6` 会被 R2 放过却静默排除 alpha 线。**反向验证**：把分支改成裸 `^0.1.6` 后 `check-deps` exit 1 并打印 `R4: 宿主 peer 分支缺预发布标签（裸分支静默排除 alpha 线）: ^0.1.6`；还原后 OK（注意：PS 5.1 `Set-Content -Encoding UTF8` 会写 BOM 把 JSON.parse 打崩造成**假通过**，必须用 `UTF8Encoding($false)` 写入）。
+
+**② 契约面逐项核对（0.1.6 安装树的 `lib/types`）**
+
+| 契约 | rc.2 | 0.1.6-alpha.2 | 结论 |
+|---|---|---|---|
+| 槽位注册选项 | `keyed→key` / `list→id,order,label` | 同（label 仍 `string \| (()=>string)`；**新增可选 `priority`**，同 key/id 同 priority 重复注册会抛） | 未变，不改码 |
+| `main` 槽 / `ctx.layout` | keyed + `selectPanel(MainPanelId\|null)` | 同 | 未变 |
+| `sidebar.panellist` | list + `SidebarPanelIconOwnerProps` / `SidebarPanelMetadata` | 同 | 未变 |
+| `WebRoute` | `{kind:'exact'\|'prefix',path,handler}` + `register(route)` | 同 | 未变 |
+| `ctx.subprocess` | `spawn(graceMs/maxBytes/signal)`→`exitCode/signal/readFrom` | 同 | 未变 |
+| `dsh.client` 清单 | `platform,inject?,external?` | 同 + **新增可选 `immediately?`** | 未变（新字段未用） |
+| `dsh.bundle.patch` | `{patch}` | 同 | 未变 |
+
+**结论：契约面零变更 → 不改码**，只动依赖声明与文档（与 0.1.5-rc.1→rc.2 那次同一形态）。新版另有 `dsh-client-ui-slots` 由虚拟变为**真实包**、新增 `dsh-client-ui-sidebar-{browser,terminal}`，均不影响本包（客户端 bundle 运行时只 require 基线 `react`）。
+
+**③ 门禁**：六件套全绿；`npm test` **22/22**（含心跳控制用例）。
+
+**④ profile 实测（按守谷人要求：不代装，只交目录）**
+- 组合核验：`dsh-next --profile web --patch <临时叠加> --dump-config` → 本包**单条目** `- id: nexus`（叠加文件在 `%TEMP%`，进程内生效）。
+- 起实例：`dsh-next --profile web --patch <叠加> --port 3099 --no-open`（受管后台作业，核完 `job_kill`，端口 3099 已确认关闭）。
+- 启动日志：`[nexus] Pulse OS/GPU 层已挂载（子插件）` + `[pulse] 采集启动：mode=auto interval=5000ms counters=15000ms gpu=10000ms exec=ctx.subprocess db=C:\Users\15266\.dsh-next\nexus\nexus.db`（**库落在新家，与稳定环境的数据完全隔离**）。
+- 启动图：本行 `{"id":"@dsh-external/dsh-nexus","rev":"a05f2c1db892a264-51",...}`；下发 bundle **143474 B**，标记 `sidebar.panellist` / `nt-hb-lab` / `/api/nexus/pulse/control` / `getDerivedStateFromError` 全命中。
+- 接口：`/api/nexus/{state,vault,lfield,m2/state?root=all,m2/analysis?root=all,m2/annotations,pulse/state}` 全 **200**；pulse `mode=auto intervalMs=5000 ticks=5 metrics=15 shell=powershell gpuOk=true`。
+- 心跳控制：`{intervalMs:1000}` → 200 `{mode:auto,intervalMs:1000}`；`{mode:manual,sample:true}` → 200，ticks **5→6**、mode=manual；`{intervalMs:500}` → **400** `interval-out-of-range`。
+- **对稳定环境的影响**：探测全程未写 `.dsh-next/profiles/web/**`（不带叠加的 `--dump-config` 无本包行）；稳定版 3080 的 `/api/nexus/state` 仍 200；仓库内 `lib/` 产物与源码一致（本轮无源码改动）。
+
+**⑤ 记录**：本文件 + `README.md`/`README.en.md`「兼容性」双向更新（宿主支持矩阵 + 适配验证）+ `CONTRIBUTING.md` 红线 1 的 peer 范围。
+
+**诚实边界**：① 实装由守谷人手动执行（本次未代装，profile 保持原样）；② 探测在 `.dsh-next\nexus\nexus.db` 建了库并写入少量采样（新家自有数据，装插件后可继续用；要干净可删该目录）；③ DOM 仍未由我观测（OQ-U6）；④ 稳定版宿主仍在运行上一版宿主代码（`/pulse/control` 与 `mode/intervalMs` 需重启 3080 才生效——上一轮遗留项）；⑤ 1 s 档开销仍未实测。
+
+---
+
 ## E8 诚实边界（引用本归档时必须一并引用）
 
 1. **端上读数口径**：§E8 初稿时本层尚未装配（证据全来自离线探针）；**§E9 起已热装配进 profile `web`**，宿主路径已有端上四元组读数（OQ-3 收敛）。但 E5 的 1 小时档仍只有中间读数，且「连续 1 小时无内存增长」尚未给出完整序列。
