@@ -492,9 +492,15 @@ export function CurveChart(props: {
   resetKey?: string | number
   onOpenTurn?: (session: string, turn: number) => void
   tipOf?: (meta: M2Point) => { head: string; lines: string[] }
+  /** 人工层标记（T 系列契合，dev-02 §5）：与 points 平行；非空项 = 描边环 + 档位数字。只改点样貌，不动读数线。 */
+  marks?: Array<string | null>
   label?: string
 }): ReactNode {
   const base = props.points.filter((p) => p.y !== null && Number.isFinite(p.y))
+  // marks 与 points 对齐 → 过滤出与 base 同序的标记序列（flatMap 保序保对齐）
+  const marksBase: Array<string | null> | null = props.marks === undefined
+    ? null
+    : props.points.flatMap((p, i) => (p.y !== null && Number.isFinite(p.y) ? [props.marks?.[i] ?? null] : []))
   const n = base.length
   const fill = props.fill === true
   const DW = 1120
@@ -634,6 +640,11 @@ export function CurveChart(props: {
     const isHv = hv === v.gi
     kids.push(createElement('circle', { key: 'm' + String(v.gi), cx: sx(v.gi), cy: sy(y), r: isHv ? 4.2 : 2.2, fill: exceed || isHv ? 'var(--nt-accent,#e6321e)' : 'var(--nt-ink,#101010)', opacity: isHv ? 1 : 0.85 }))
     if (isHv) kids.push(createElement('circle', { key: 'mr' + String(v.gi), cx: sx(v.gi), cy: sy(y), r: 7.5, fill: 'none', stroke: 'var(--nt-accent,#e6321e)', strokeWidth: 1.1 }))
+    const mk = marksBase !== null ? marksBase[v.gi] : null
+    if (mk !== null && mk !== undefined && !isHv) {
+      kids.push(createElement('circle', { key: 'fkr' + String(v.gi), cx: sx(v.gi), cy: sy(y), r: 6.8, fill: 'none', stroke: 'var(--nt-accent,#e6321e)', strokeWidth: 1.1, opacity: 0.9 }))
+      kids.push(createElement('text', { key: 'fkt' + String(v.gi), x: sx(v.gi), y: sy(y) - 9.5, fontSize: 8, fill: 'var(--nt-accent,#e6321e)', textAnchor: 'middle', fontWeight: 700 }, mk))
+    }
   }
   if (hv !== null) {
     kids.push(createElement('line', { key: 'xh', x1: sx(hv), x2: sx(hv), y1: padT - 4, y2: h - padB, stroke: 'var(--nt-faint,#9a9a95)', strokeWidth: 1, strokeDasharray: '3 3', opacity: 0.6 }))
@@ -1104,6 +1115,11 @@ export function CurveView(props: {
   const metric = picked !== '' && metrics.includes(picked) ? picked : (metrics[0] ?? '')
   // PULSE 采样曲线：刷新与心跳对齐（auto 档=心跳间隔；手动档不轮询、采样完成经 nonce 重取）
   const series = useJson<PulseSeries>('/api/nautilus/pulse/series?metric=' + encodeURIComponent(metric) + '&windowMs=3600000&maxPoints=240', metric === '' || source !== 'pulse' || props.paused === true, heartbeatSeriesMs(props.pulse?.collector ?? null), props.nonce ?? 0)
+  // T 系列人工层（D-T5）：已标轮清单取一次不轮询（nonce 触发重取）→ 曲线/构成柱徽标。只改点样貌不动读数线。
+  const fits = useJson<{ annotations: Array<{ session: string; turn: number; fit: number | null; exempt: number }> }>('/api/nautilus/m2/turn-annotations', props.paused === true, 0, props.nonce ?? 0)
+  const fitMark = new Map<string, string>()
+  for (const a of fits?.annotations ?? []) fitMark.set(String(a.session) + ':' + String(a.turn), Number(a.exempt) === 1 ? 'N' : String(a.fit ?? 'N'))
+  const markOf = (s: string, t: number): string | null => fitMark.get(String(s) + ':' + String(t)) ?? null
   // 全屏：Esc 退出（图表高度由 CurveChart 自测容器，无需宿主侧实测）
   useEffect(() => {
     if (!full) return undefined
@@ -1229,6 +1245,7 @@ export function CurveView(props: {
   )
   const stackBars = (hh: number): ReactNode => StackedBars({
     rows: stackRows, h: hh, hoverIndex: stackHover, onHover: setStackHover,
+    marks: stackRows.map((r) => markOf(r.session, r.turn)),
     onOpenRow: (i) => { const r = stackRows[i]; if (r !== undefined && props.onOpenTurn !== undefined) props.onOpenTurn(r.session, r.turn) },
     xTick: axis === 'turn' ? (v: number): string => 't' + String(Math.round(v)) : (v: number): string => fmtDayTime(v),
     yFmt: (v: number): string => fmtK(v), label: '输入构成',
@@ -1242,7 +1259,7 @@ export function CurveView(props: {
     : Panel({
       title: curveLabel(key) + ' 时序曲线' + (full ? '（全屏）' : ''), fig: 'FIG.02',
       note: '时间轴为记录时间戳（非等间隔）：轮次并非均匀采样，曲线的斜率不代表速率；朱红虚线为阈值参考（' + (threshold === undefined ? '本指标不设阈值' : String(threshold) + curveUnit(key)) + '），朱红实心点＝越过阈值的轮；τ_e 注记取自 /m2/analysis 检出值（单会话聚焦时显示）。时间档位 ' + (range === 7 ? '1 周' : '1 月') + '。',
-      children: CurveChart({ points: pts, threshold, thresholdLabel: 'S 形阈值参考（P1）', yFmt: CURVE_YFMT[key], anno, xTick: axis === 'turn' ? (v: number): string => 't' + String(Math.round(v)) : undefined, h: hh, label: curveLabel(key), tipOf, onOpenTurn: props.onOpenTurn, resetKey: String(range) + '/' + String(key) + '/' + String(scope) }),
+      children: CurveChart({ points: pts, threshold, thresholdLabel: 'S 形阈值参考（P1）', yFmt: CURVE_YFMT[key], anno, marks: pts.map((p) => markOf(p.meta.session, p.meta.turn)), xTick: axis === 'turn' ? (v: number): string => 't' + String(Math.round(v)) : undefined, h: hh, label: curveLabel(key), tipOf, onOpenTurn: props.onOpenTurn, resetKey: String(range) + '/' + String(key) + '/' + String(scope) }),
     })
   if (full) {
     return createElement('div', { style: { position: 'absolute', inset: 0, zIndex: 55, background: 'var(--nt-bg,#f2f2f0)', display: 'flex', flexDirection: 'column', padding: '12px 18px', overflow: 'hidden' } },
@@ -1259,7 +1276,7 @@ export function CurveView(props: {
         createElement('div', { style: { flex: 1, minHeight: 0 } },
           key === 'stack'
             ? createElement('div', null, stackLegend, stackBars(360))
-            : CurveChart({ points: pts, threshold, thresholdLabel: 'S 形阈值参考（P1）', yFmt: CURVE_YFMT[key], anno, fill: true, label: curveLabel(key), tipOf, onOpenTurn: props.onOpenTurn, resetKey: String(range) + '/' + String(key) + '/' + String(scope) }),
+            : CurveChart({ points: pts, threshold, thresholdLabel: 'S 形阈值参考（P1）', yFmt: CURVE_YFMT[key], anno, marks: pts.map((p) => markOf(p.meta.session, p.meta.turn)), fill: true, label: curveLabel(key), tipOf, onOpenTurn: props.onOpenTurn, resetKey: String(range) + '/' + String(key) + '/' + String(scope) }),
         ),
       ),
     )

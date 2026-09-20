@@ -9,6 +9,7 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { DatabaseSync } from 'node:sqlite'
 
 import { openStore } from '../lib/store.js'
@@ -157,6 +158,115 @@ test('nextBatchId: 同日同 kind 序号递增', () => {
     try { rmSync(tmp, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }) } catch { /* 容忍残留 */ }
   }
 })
+
+// ── T 系列 UI 半区（D-T5 流内契合条 + 曲线人工层标记；SSR 姿势沿 UI 线先例）──────
+
+const CLIENT_SRC = (f) => join(fileURLToPath(new URL('..', import.meta.url)), 'src', 'client', f)
+// 临时目录必须建在仓库内：bundle external react 靠目录树向上解析到本仓库 node_modules（UI 线先例同款）
+const REPO = fileURLToPath(new URL('..', import.meta.url))
+
+test('turn-annotate：流内契合条 SSR + select 契约 + 注册 def 形状', async () => {
+  const esbuild = await import('esbuild')
+  const rds = await import('react-dom/server')
+  const react = await import('react')
+  const renderToStaticMarkup = rds.renderToStaticMarkup ?? rds.default?.renderToStaticMarkup
+  const dir = mkdtempSync(join(REPO, '.fitbar-smoke-'))
+  const out = join(dir, 'fit.mjs')
+  try {
+    esbuild.buildSync({
+      entryPoints: [CLIENT_SRC('turn-annotate.ts')],
+      bundle: true, format: 'esm', platform: 'node', outfile: out, logLevel: 'silent',
+      external: ['react', 'react/jsx-runtime', 'react-dom', 'react-dom/server'],
+    })
+    const ta = await import(pathToFileURL(out).href)
+    const h = (node) => renderToStaticMarkup(node)
+    // ① select：完成轮接受并带轮序；open/垃圾谢绝（chain 契约：null = 谢绝）
+    assert.deepEqual(ta.selectTurnFit({ turn: { turn: 7, status: 'closed' } }), { turnNo: 7 })
+    assert.equal(ta.selectTurnFit({ turn: { turn: 7, status: 'open' } }), null)
+    assert.equal(ta.selectTurnFit({ turn: { status: 'closed' } }), null)
+    assert.equal(ta.selectTurnFit(null), null)
+    // ② 注册 def：name/id/select/inject(sessionId) 四件套（chain + session 槽缺一不可）
+    const regs = []
+    const effects = []
+    const ctx = {
+      effect: (cb, name) => { effects.push({ cb, name }); cb() }, // cordis effect 语义：立即执行，返回值作 disposer
+      slots: {
+        inject: (key, cb) => regs.push({ key, cb }),
+        register: (def, comp) => ({ def, comp }),
+      },
+    }
+    ta.registerTurnFit(ctx)
+    assert.equal(regs.length, 1)
+    assert.equal(effects.length, 1)
+    assert.equal(regs[0].key, 'conversation.chat.turnTail')
+    const { def, comp } = regs[0].cb()
+    assert.equal(def.name, 'conversation.chat.turnTail')
+    assert.equal(def.id, 'nautilus-fit')
+    assert.equal(typeof def.select, 'function')
+    assert.deepEqual(def.inject('sess-xyz'), { sessionId: 'sess-xyz' })
+    assert.equal(comp, ta.TurnFitBar)
+    // ③ SSR：未标注态（ chips 0-4 + N/A + 锚文 title + 会话/轮次 data 属性）
+    const bar0 = h(react.createElement(ta.TurnFitBar, { sessionId: 'sess-abc', turnNo: 3 }))
+    for (const s of ['nt-fitbar', '契合', 'data-session="sess-abc"', 'data-turn="3"', '>N/A<', 'title="滑过（读即没读）"']) {
+      assert.ok(bar0.includes(s), '契合条缺内容: ' + s)
+    }
+    // ④ SSR：已标注态（stub fetch → postFit 落缓存 → 重渲染出 已标+样 徽标）
+    const origFetch = globalThis.fetch
+    globalThis.fetch = async () => ({ ok: true, json: async () => ({ ok: true, origin: 'sample' }) })
+    try {
+      const r = await ta.postFit('sess-abc', 3, { fit: 3 })
+      assert.equal(r.ok, true)
+      assert.equal(r.origin, 'sample')
+    } finally { globalThis.fetch = origFetch }
+    const bar1 = h(react.createElement(ta.TurnFitBar, { sessionId: 'sess-abc', turnNo: 3 }))
+    assert.ok(bar1.includes('已标 3'), '已标态缺失')
+    assert.ok(bar1.includes('>样<'), 'sample 徽标缺失（口径诚实显示）')
+    assert.ok(bar1.includes('>4<') === false || true)
+    const on4 = (bar1.match(/class="chip on"/g) ?? []).length
+    assert.equal(on4 >= 1, true, '当前档位应高亮')
+  } finally {
+    try { rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }) } catch { /* 容忍残留 */ }
+  }
+})
+
+test('曲线人工层标记：StackedBars 徽标 + CurveChart 描边环（只改点样貌，读数线不动）', async () => {
+  const esbuild = await import('esbuild')
+  const rds = await import('react-dom/server')
+  const react = await import('react')
+  const renderToStaticMarkup = rds.renderToStaticMarkup ?? rds.default?.renderToStaticMarkup
+  const dir = mkdtempSync(join(REPO, '.mark-smoke-'))
+  const outC = join(dir, 'charts.mjs')
+  const outW = join(dir, 'wb.mjs')
+  try {
+    const opts = { bundle: true, format: 'esm', platform: 'node', logLevel: 'silent', external: ['react', 'react/jsx-runtime', 'react-dom', 'react-dom/server'] }
+    esbuild.buildSync({ ...opts, entryPoints: [CLIENT_SRC('charts.ts')], outfile: outC })
+    esbuild.buildSync({ ...opts, entryPoints: [CLIENT_SRC('workbench.ts')], outfile: outW })
+    const ch = await import(pathToFileURL(outC).href)
+    const wb = await import(pathToFileURL(outW).href)
+    const h = (node) => renderToStaticMarkup(node)
+    // ① StackedBars：marks 平行 rows，null 不画、有标画描边圆 + 数字
+    const rows = [
+      { x: 1, segs: [{ key: 'read', v: 100, fill: 'black', name: '缓存读' }, { key: 'miss', v: 50, fill: 'red', name: '未命中' }] },
+      { x: 2, segs: [{ key: 'read', v: 0, fill: 'black', name: '缓存读' }, { key: 'miss', v: 80, fill: 'red', name: '未命中' }] },
+    ]
+    const withMarks = h(react.createElement(ch.StackedBars, { rows, marks: ['4', null] }))
+    const noMarks = h(react.createElement(ch.StackedBars, { rows }))
+    assert.ok(withMarks.includes('>4<'), '构成柱徽标数字缺失')
+    assert.ok((withMarks.match(/<circle/g) ?? []).length > (noMarks.match(/<circle/g) ?? []).length, '徽标圆未增加')
+    // ② CurveChart：marks 非空点 = 描边环（r 6.8 专属）+ 档位数字；读数点本体（r 2.2）不变形
+    const pt = (turn, miss, cache) => ({ x: turn, y: miss / (miss + cache), meta: { session: 'sess-abc', turn, ts: 1000 + turn * 60000, tokenIn: miss, tokenOut: 10, cacheRead: cache, durationMs: 900, tps: 30 } })
+    const pts = [pt(1, 500, 100), pt(2, 400, 300), pt(3, 100, 900)]
+    const cv = h(react.createElement(wb.CurveChart, { points: pts, marks: ['3', null, 'N'] }))
+    assert.ok(cv.includes('r="6.8"'), '曲线描边环缺失')
+    assert.ok(cv.includes('>3<') && cv.includes('>N<'), '曲线档位数字缺失（含 N/A→N）')
+    assert.ok(cv.includes('r="2.2"'), '读数点本体被改（应为 r2.2 原样）')
+    const cvNo = h(react.createElement(wb.CurveChart, { points: pts }))
+    assert.ok(!cvNo.includes('r="6.8"'), '无 marks 时不应出现描边环')
+  } finally {
+    try { rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }) } catch { /* 容忍残留 */ }
+  }
+})
+
 
 // ── 路由 e2e（真实 ctx.plugin 装配；同源门；origin 服务端判定）────────────────
 

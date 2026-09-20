@@ -138,6 +138,8 @@ export function MiniChart(props: {
 /**
  * 堆叠构成柱（Grafana 构成行式）：一行＝一个离散事件（轮），每段 fill 由调用方给令牌色。
  * hover/点击行号是**原始 rows 下标**（组件内部过滤零行不重排）；状态由父级持有（本组件无 hooks）。
+ * `marks`：与 rows 平行的人工层标记（T 系列契合标注；null = 无标记）——柱顶上方一枚
+ * 徽标（描边圆 + 档位数字），**只改点样貌、不动读数线/柱体**（dev-02 §5 解读与观测分层）。
  * 行数 0 → 空态。
  */
 export function StackedBars(props: {
@@ -149,6 +151,7 @@ export function StackedBars(props: {
   xTick?: (x: number) => string
   yFmt?: (v: number) => string
   label?: string
+  marks?: Array<string | null>
 }): ReactNode {
   const indexed: Array<{ row: (typeof props.rows)[number]; oi: number }> = []
   props.rows.forEach((row, oi) => {
@@ -186,6 +189,12 @@ export function StackedBars(props: {
     }
     const isHv = props.hoverIndex === oi
     if (isHv) kids.push(createElement('rect', { key: 'hl' + String(oi), x: bx - 2, y: padT, width: bw + 4, height: plotH, fill: 'none', stroke: C.faint, strokeWidth: 1, strokeDasharray: '2 3' }))
+    const mark = props.marks !== undefined ? props.marks[oi] : null
+    if (mark !== null && mark !== undefined) {
+      const cx = bx + bw / 2
+      kids.push(createElement('circle', { key: 'mk' + String(oi), cx, cy: padT - 6, r: 5.5, fill: C.panel2, stroke: C.accent, strokeWidth: 1 }))
+      kids.push(createElement('text', { key: 'mkt' + String(oi), x: cx, y: padT - 3, fontSize: 7.5, fill: C.accent, textAnchor: 'middle', fontWeight: 700 }, mark))
+    }
     kids.push(createElement('rect', {
       key: 'hit' + String(oi), x: padL + i * cw, y: padT, width: cw, height: plotH, fill: 'transparent',
       onMouseMove: props.onHover === undefined ? undefined : () => props.onHover(oi),

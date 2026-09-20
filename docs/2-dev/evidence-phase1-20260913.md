@@ -546,6 +546,22 @@ client-modules: package @dsh-external/dsh-nexus resolves from multiple active Lo
 
 ---
 
+## E23 T 系列 UI 半区落地：流内契合条 + 曲线人工层（2026-09-27，守谷人「UI 线已完成，开工然后收敛」）
+
+**前提**：UI 图表线由守谷人并行完成并先期入库（`0504028`，本线代为收敛）；同文件并写风险解除。
+
+| 件 | 内容 |
+|---|---|
+| **流内契合条**（D-T5 主入口） | `src/client/turn-annotate.ts`：挂宿主 `conversation.chat.turnTail` 链槽。**契约经 0.1.5-rc.2 运行时源码核实**：chain 条目 def = `select(owner)`（null=谢绝/非 null=接受且并入 `matched`）、session 槽 `inject: (sessionId) => injected`（先例：宿主 message-feedback 同型注册）。条形态：5 档 + N/A chips（title=锁版锚文）、fit=4 引文框就地展开（≤200 计数）、`+理由`、已标回显（`已标 N` + sample 口径 `样` 徽标）、服务端 400 错误码人话映射 |
+| 曲线人工层 | `StackedBars` 加法 `marks` prop（柱顶描边圆 + 档位数字）；`CurveChart` 加法 `marks` prop（已标点外环 r6.8 + 数字；悬停环在场让位）——**只改点样貌，读数线/点本体不变形**；数据源 `GET /m2/turn-annotations` 取一次不轮询（nonce 重取）；N/A→`N` |
+| 两线收敛提交 | `0504028`（UI 线原样入库，938 行）→ 本笔（T 线 UI，不混 hunk） |
+
+**门禁**：`npm test` **38/38**（test-t 8 条：新增契合条 SSR/select 契约/注册 def 形状、构成柱徽标+曲线描边环两条；test.mjs 更新 1 条：client 注册序列断言 +3 条目）；六件套 + check-meta + shim 全绿（`lib/client.js` 重建含契合条）。
+
+**诚实边界**：① **端上核对未做**——`TurnLocation.turn` 与库键轮序一致性、契合条实际视觉，待宿主重启窗口（与 S1.1/T.1 同批四元组：重建产物刷新页面 → 标一轮 → GET 回读核对 turn 序号）；② chain 槽「首个接受者渲染」：若未来他插件抢占 turnTail，本条静默谢绝——登记序列测试守注册面，端上验收时看渲染；③ 折线环与悬停环并发时本环让位（设计取舍，非缺陷）；④ 抽屉内「契合区」（dev-05 §3 的补充视图）未做——流内条已是低摩擦主入口，抽屉区等 §5 标签式标注提案一并裁。
+
+---
+
 ## E8 诚实边界（引用本归档时必须一并引用）
 
 1. **端上读数口径**：§E8 初稿时本层尚未装配（证据全来自离线探针）；**§E9 起已热装配进 profile `web`**，宿主路径已有端上四元组读数（OQ-3 收敛）。但 E5 的 1 小时档仍只有中间读数，且「连续 1 小时无内存增长」尚未给出完整序列。

@@ -16,6 +16,8 @@ import type { MainPanelId } from '@deepseek-ai/dsh-client-ui-layout/client' // �
 import type {} from '@deepseek-ai/dsh-client-ui-sidebar/client' // 拉 sidebar.panellist SlotMap 类型
 // 工作台（全局面板）：五视图 + 抽屉 + era 条，规格见 docs/2-dev/nautilus-dev-02-ui-workbench.md
 import { Workbench, WorkbenchIcon, WORKBENCH_ID, WORKBENCH_LABEL } from './workbench'
+// 流内契合打分件（T 系列 D-T5）：conversation.chat.turnTail 链槽，契约见 dev-05 §3
+import { registerTurnFit } from './turn-annotate'
 
 /** 路径末段（会话名解析用；不含尾部分隔符）。 */
 function baseName(p: string): string {
@@ -84,4 +86,6 @@ export function apply(ctx: {
     ),
     '@dsh-external/dsh-nautilus: workbench panel',
   )
+  // 流内契合打分件（D-T5）：会话轮末打分，标注走同源 POST /m2/turn-annotations（守谷人专用）
+  registerTurnFit(ctx)
 }

@@ -1,7 +1,7 @@
 # 开发文档五 · T 系列 逐轮人工标注（契合 · 混合入口）
 
 > 版本 v0.1（2026-09-27 开项）。上游决策：[../1-planning/nautilus-turn-annotation.md](../1-planning/nautilus-turn-annotation.md) v0.2（D-T1 签核；量表锁版 `schema_version=1`；D-T2/T3/T4 本文定案）。
-> **两线并行纪律**：本专项 UI 半区（**流内打分件**[D-T5：`conversation.chat.turnTail` 链槽，守谷人 2026-09-27 裁决] + 曲线人工层标记）**挂起待 UI 图表线收敛**——`src/client/workbench.ts` 与其同文件并写会互相覆盖，且 `npm run build` 会连带打包未完成的 workbench 半成品。宿主半区先交付，写路径以 HTTP API 可用；UI 落地后补 E23。
+> **两线并行纪律**（2026-09-27 已收敛）：UI 图表线由守谷人完成并先期入库（`0504028`），**UI 半区（流内契合条 + 曲线人工层标记）已随本线交付，见 E23**。`src/client` 不进 tsc（tsconfig exclude），客户端类型纪律 = 本地类型 + 运行时契约测试。
 
 ## 1. 锁版量表（schema_version=1，2026-09-27 守谷人「锁板」）
 
@@ -68,5 +68,5 @@ CREATE TABLE IF NOT EXISTS annotation_sample (        -- 抽样队列（一行�
 ## 6. 验收与边界
 
 - 六件套全绿 + E22 归档（宿主半区离线证据；端上四元组仍等守谷人重启窗口——S1.1 同批生效）。
-- UI 半区挂账（§序言纪律）：**流内契合条**（turnTail 链槽注册 + chips/引文框/已标回显）与曲线人工层标记待 UI 线收敛后落，届时补 dev-02 §5 表格行与 E23。
+- UI 半区（T.2）：**已交付（E23）**——流内契合条（turnTail 链槽）+ 构成柱徽标 + 曲线描边环；dev-02 §5.4 已登记呈现位。端上核对（`TurnLocation.turn` 序号 vs 库键、实际视觉）待宿主重启窗口。
 - 诚实边界照抄决策文档 §7（人标也是自报，噪声地板等 D-T4 复标量化；spot 不进分布结论；era=api 只作对照）。
