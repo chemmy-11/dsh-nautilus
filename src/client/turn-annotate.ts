@@ -1,23 +1,25 @@
 /**
- * @dsh-external/dsh-nautilus — 流内契合打分件（T 系列 UI 半区主入口，决策 D-T5）。
+ * @dsh-external/dsh-nautilus — 流内契合打分件（T 系列 UI 半区主入口）。
  *
- * 挂宿主公开槽位 `conversation.chat.turnTail`（kind chain / scope session；dsh 0.1.5-rc.2
- * `dsh-client-ui-chat` contract/slots.d.ts 源码核实）：已完成轮动作行上方的紧凑契合条——
- * 判断在热的现场直接标，写路径 = POST /api/nautilus/m2/turn-annotations（同源浏览器门，
- * 与 S1.1 token 通道隔离）。量表锁版 schema_version=1（docs/1-planning/nautilus-turn-annotation.md §1）。
+ * 版面（2026-09-27 守谷人改口）：挂宿主 `conversation.chat.assistant-actions` 列表槽
+ * （助手消息 IconActions 行，赞/踩同排；kind list / scope session；owner 仅 { messageId }），
+ * 按钮本体**零 Nautilus 背景**——无框文本按钮融入宿主 IconActions 行（--dsw-alias-* 令牌），
+ * 选择面板为最小中性浮层。此前 turnTail 链槽方案废弃（端上实测最新轮的 tail 不稳定出现）。
+ *
+ * messageId → 轮序映射：`useChat` 快照扫描（SessionStandardProps 文档化 hook）——
+ * 找 kind='turn-tail' 且 data.closing.finalNode.messageId === messageId 的节点，
+ * 取 location.turn.turn。解析不到就不渲染（无轮号无法落库）。
  *
  * 契约要点（renderer client.js 运行时核实）：
- *  - chain 条目 def 带 `select(owner)`：返回 null = 谢绝（换下一个条目），非 null = 接受
- *    且返回值以 `matched` 并入组件 props；全链谢绝 = 不渲染。
- *  - session 槽条目 def 带 `inject: (sessionId) => injected`——会话身份从这里来
- *    （先例：宿主自带 message-feedback 的同型注册）。
+ *  - list 槽 def 用 `id`（keyed 才用 key）；`inject: (sessionId) => injected` 供会话身份。
+ *  - 宿主渲染位 = TurnTailNodeView 内（data-actions-reveal：最新轮 always / 旧轮 hover）。
  *
- * 纪律：零第三方 import（react 除外）；本地类型（src/client 不进 tsc，类型只是文档）；
- * `nt-` 前缀 + `--nt-*` 令牌（fallback 与令牌默认值同值）；SSR 安全（样式/effect 全部守卫）。
+ * 纪律：零第三方 import（react 除外）；本地类型（src/client 不进 tsc）；
+ * 颜色只取 --dsw-alias-* / --nt-* 令牌（fallback 同值）；SSR 安全。
  */
 import { createElement, useEffect, useState, useSyncExternalStore, type ReactNode } from 'react'
 
-/** 锁版量表（决策文档 §1 原文；chip title 携全锚文，界面只显档位数字）。 */
+/** 锁版量表（决策文档 §1 原文；选项 title 携全锚文，界面只显档位数字）。 */
 export const FIT_SCALE: Array<{ fit: number; short: string; anchor: string }> = [
   { fit: 4, short: '4', anchor: '改变了我下一步动作/笔记（被引用、被追问、被改道）——必附引文' },
   { fit: 3, short: '3', anchor: '推进了问题本身（不是答对，是把问题推深一层）' },
@@ -29,7 +31,7 @@ const QUOTE_MAX = 200
 const NOTE_MAX = 500
 const API_URL = '/api/nautilus/m2/turn-annotations'
 
-// ── 标注缓存（全局单例：GET 清单一次喂所有轮的条；POST 后就地更新）────────────
+// ── 标注缓存（全局单例：GET 清单一次喂所有消息的按钮；POST 后换快照更新）────────
 
 export interface FitRow {
   session: string
@@ -70,7 +72,7 @@ function applyRows(annotations: Array<Record<string, unknown>>): void {
   notify()
 }
 
-/** 拉一次全量标注清单（多条同会话的条共享；失败显式置错，不静默）。 */
+/** 拉一次全量标注清单（行内多按钮共享；失败显式置错，不静默）。 */
 export function ensureFitLoaded(): void {
   if (state.loaded || state.loading) return
   state = { ...state, loading: true }
@@ -122,129 +124,138 @@ export function subscribeFit(fn: () => void): () => void {
   return () => { listeners.delete(fn) }
 }
 
-// ── chain 选择器：只验轮号合法性（渲染时机归宿主）────────────────────────────
+// ── messageId → 轮序（useChat 快照扫描；文档化 hook，不碰宿主 DOM 契约）────────
 
-export interface TurnFitMatched { turnNo: number }
-/** 实测（0.1.5-rc.2 端上）：刚完成的轮 status 仍为 'open' 时宿主已渲染 turnTail——
- * 此处若按 status 谢绝会吞掉最新轮的条，故只验轮号，时机全权信宿主。 */
-export function selectTurnFit(owner: { turn?: { turn?: unknown } } | null | undefined): TurnFitMatched | null {
-  const t = owner?.turn
-  const no = t?.turn
-  if (t === null || t === undefined || !Number.isFinite(Number(no))) return null
-  return { turnNo: Number(no) }
+/** 构造 useChat 选择器：定位 closing.finalNode.messageId === messageId 的 turn-tail 节点。 */
+export function turnSelectorFor(messageId: string): (snapshot: unknown) => number | null {
+  return (snapshot) => {
+    const nodes = (snapshot as { nodes?: Map<string, unknown> } | null | undefined)?.nodes
+    if (nodes === undefined || nodes === null || typeof nodes.values !== 'function') return null
+    for (const node of nodes.values() as IterableIterator<Record<string, unknown>>) {
+      const n = node as { kind?: unknown; location?: { turn?: { turn?: unknown } }; data?: { closing?: { finalNode?: { messageId?: unknown } } | null; turn?: unknown } }
+      if (n.kind !== 'turn-tail') continue
+      const mid = n.data?.closing?.finalNode?.messageId
+      if (mid !== messageId) continue
+      const t = n.location?.turn?.turn ?? n.data?.turn
+      const no = Number(t)
+      return Number.isFinite(no) ? no : null
+    }
+    return null
+  }
 }
 
 // ── 组件 ──────────────────────────────────────────────────────────────────────
 
 let styleDone = false
 const CSS_LINES = [
-  '.nt-fitbar{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin:2px 0 6px;padding:4px 8px;border:1px dashed var(--nt-border,#d9d9d5);border-radius:2px;font-family:var(--nt-font,Helvetica,Arial,sans-serif);font-size:11px;color:var(--nt-dim,#5f5f5c);background:var(--nt-panel2,#f7f7f5)}',
-  '.nt-fitbar .lb{font-size:9px;letter-spacing:2px;text-transform:uppercase;color:var(--nt-faint,#9a9a95)}',
-  '.nt-fitbar .chip{border:1px solid var(--nt-border2,#c8c8c3);background:var(--nt-panel,#fff);color:var(--nt-text,#101010);font-size:10.5px;line-height:1;padding:3px 7px;cursor:pointer;border-radius:2px;font-variant-numeric:tabular-nums}',
-  '.nt-fitbar .chip:hover{border-color:var(--nt-text,#101010)}',
-  '.nt-fitbar .chip.on{border-color:var(--nt-accent,#e6321e);color:var(--nt-accent,#e6321e);font-weight:700}',
-  '.nt-fitbar .chip:disabled{opacity:.45;cursor:default}',
-  '.nt-fitbar .done{font-size:10px;color:var(--nt-text,#101010)}',
-  '.nt-fitbar .tag{font-size:9px;letter-spacing:1px;border:1px solid var(--nt-accent,#e6321e);color:var(--nt-accent,#e6321e);padding:0 4px}',
-  '.nt-fitbar .ext{flex-basis:100%;display:flex;gap:6px;align-items:flex-start;flex-wrap:wrap}',
-  '.nt-fitbar textarea,.nt-fitbar input[type=text]{flex:1 1 260px;border:1px solid var(--nt-border2,#c8c8c3);background:var(--nt-panel,#fff);color:var(--nt-text,#101010);font-size:11px;padding:4px 6px;border-radius:2px;font-family:inherit;resize:vertical}',
-  '.nt-fitbar .err{flex-basis:100%;font-size:10px;color:var(--nt-accent,#e6321e)}',
-  '.nt-fitbar .hint{font-size:9.5px;color:var(--nt-faint,#9a9a95)}',
+  // 行内按钮：融入 IconActions（无框、透明底、secondary 标签色；hover 提级）
+  '.nt-fitact{position:relative;display:inline-flex;align-items:center;height:24px;padding:0 6px;border:0;border-radius:4px;background:transparent;color:var(--dsw-alias-label-secondary,var(--nt-dim,#5f5f5c));font-size:var(--dsh-content-font-size-secondary,13px);line-height:1;cursor:pointer;user-select:none;white-space:nowrap}',
+  '.nt-fitact:hover{color:var(--dsw-alias-label-primary,var(--nt-text,#101010));background:var(--dsw-alias-fill-hover,rgba(0,0,0,.05))}',
+  '.nt-fitact[data-marked="1"]{color:var(--dsw-alias-label-primary,var(--nt-text,#101010));font-weight:600}',
+  '.nt-fitact .nv{font-variant-numeric:tabular-nums;margin-left:3px}',
+  // 选择浮层：最小中性面（宿主令牌；无 Nautilus 装饰）
+  '.nt-fitpop{position:absolute;top:calc(100% + 6px);right:0;z-index:30;display:flex;flex-direction:column;gap:6px;padding:8px 9px;border:1px solid var(--dsw-alias-border-secondary,rgba(0,0,0,.12));border-radius:8px;background:var(--dsw-alias-surface-primary,#fff);box-shadow:0 6px 22px rgba(0,0,0,.14);min-width:230px;font-size:var(--dsh-content-font-size-secondary,13px);color:var(--dsw-alias-label-primary,var(--nt-text,#101010))}',
+  '.nt-fitpop .row{display:flex;gap:4px;flex-wrap:wrap;align-items:center}',
+  '.nt-fitpop .opt{min-width:26px;padding:4px 7px;border:1px solid var(--dsw-alias-border-secondary,rgba(0,0,0,.12));border-radius:6px;background:transparent;color:inherit;font-size:12px;line-height:1;cursor:pointer;font-variant-numeric:tabular-nums}',
+  '.nt-fitpop .opt:hover{border-color:var(--dsw-alias-label-tertiary,rgba(0,0,0,.3))}',
+  '.nt-fitpop .opt.on{border-color:var(--dsw-alias-border-accent,#e6321e);color:#e6321e;font-weight:700}',
+  '.nt-fitpop .opt.na{min-width:34px}',
+  '.nt-fitpop textarea,.nt-fitpop input[type=text]{width:100%;box-sizing:border-box;border:1px solid var(--dsw-alias-border-secondary,rgba(0,0,0,.12));border-radius:6px;background:transparent;color:inherit;font:inherit;font-size:12px;padding:5px 6px;resize:vertical}',
+  '.nt-fitpop .err{color:#e6321e;font-size:11px}',
+  '.nt-fitpop .hint{color:var(--dsw-alias-label-tertiary,rgba(0,0,0,.35));font-size:10.5px}',
 ]
-function injectFitbarStyle(): void {
+function injectFitStyle(): void {
   if (styleDone || typeof document === 'undefined') return
   styleDone = true
   const el = document.createElement('style')
-  el.id = 'nt-fitbar-style'
+  el.id = 'nt-fitact-style'
   el.textContent = CSS_LINES.join(String.fromCharCode(10))
   document.head.appendChild(el)
 }
 
-/** 单轮契合条 props（渲染器展开后的形状；本地类型仅作文档）。
- * 轮号读取链：`matched.turnNo`（renderer chain 合并规则：select 返回值挂 **props.matched**，
- * 0.1.5-rc.2 端上实测）→ `turn.turn`（ownerProps 的 TurnLocation）→ `turnNo`（测试直传形态）。 */
-export interface TurnFitBarProps {
+/** 行内契合按钮 props（渲染器展开后的形状；本地类型仅作文档）。 */
+export interface TurnFitActionProps {
   sessionId: string
-  turnNo?: number
-  matched?: TurnFitMatched
-  turn?: { turn?: unknown }
+  messageId: string
+  /** SessionStandardProps（chat 契约）：快照选择 hook，轮序从这里解析。 */
+  useChat?: (selector: (snapshot: unknown) => number | null) => number | null
 }
 
-export function TurnFitBar(props: TurnFitBarProps): ReactNode {
-  injectFitbarStyle()
+export function TurnFitAction(props: TurnFitActionProps): ReactNode {
+  injectFitStyle()
   const snap = useSyncExternalStore(subscribeFit, fitSnapshot, fitSnapshot)
   useEffect(() => { ensureFitLoaded() }, [])
-  const turnNo = Number(props.matched?.turnNo ?? props.turn?.turn ?? props.turnNo)
-  const sessionId = String(props.sessionId ?? '')
-  const [pending, setPending] = useState<number | 'na' | null>(null) // 正在补引文/理由的档位
+  const [open, setOpen] = useState(false)
   const [quote, setQuote] = useState('')
   const [note, setNote] = useState('')
-  const [noteOpen, setNoteOpen] = useState(false)
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState<string | null>(null)
-  const row = snap.byKey.get(keyOf(sessionId, turnNo))
+  const turnNo = typeof props.useChat === 'function' ? props.useChat(turnSelectorFor(props.messageId)) : null
+  if (turnNo === null || !Number.isFinite(turnNo)) return null // 轮序未解析 → 不渲染（无轮号无法落库）
+  const row = snap.byKey.get(keyOf(props.sessionId, turnNo))
   const submit = async (body: { fit?: number; exempt?: 1; quote?: string; note?: string }): Promise<void> => {
     setBusy(true)
     setErr(null)
-    const r = await postFit(sessionId, turnNo, body)
+    const r = await postFit(props.sessionId, turnNo, body)
     setBusy(false)
     if (!r.ok) { setErr(errText(r.error ?? '未知错误')); return }
-    setPending(null)
     setQuote('')
     setNote('')
-    setNoteOpen(false)
+    setOpen(false)
   }
-  const onChip = (fit: number | 'na'): void => {
+  const onOpt = (fit: number | 'na'): void => {
     setErr(null)
-    if (fit === 4) { setPending(4); return } // 最强锚必附引文：先展开引文框再提交（服务端双门拒裸 4）
+    if (fit === 4) return // 4 在浮层内走引文框提交（服务端双门拒裸 4）
     if (fit === 'na') { void submit({ exempt: 1 }); return }
-    void submit({ fit, note: noteOpen && note.trim() !== '' ? note.trim().slice(0, NOTE_MAX) : undefined })
+    void submit({ fit, note: note.trim() !== '' ? note.trim().slice(0, NOTE_MAX) : undefined })
   }
-  const chips = [
-    ...FIT_SCALE.map((s) => createElement('button', {
-      key: 'f' + String(s.fit), className: 'chip' + (row !== undefined && row.fit === s.fit ? ' on' : ''),
-      title: s.anchor, disabled: busy, onClick: () => onChip(s.fit),
-    }, s.short)),
-    createElement('button', {
-      key: 'na', className: 'chip' + (row !== undefined && row.exempt === 1 ? ' on' : ''),
-      title: 'N/A = 无判断对象（纯操作性指令轮）→ 豁免，不进分母', disabled: busy, onClick: () => onChip('na'),
-    }, 'N/A'),
-  ]
-  const noteCtl = noteOpen || note !== ''
-    ? createElement('input', {
-      type: 'text', className: 'nt-input', maxLength: NOTE_MAX, placeholder: '一句话理由（可空）', value: note,
-      onChange: (e: { target: { value: string } }) => setNote(e.target.value),
-    })
-    : createElement('button', { className: 'chip', disabled: busy, onClick: () => setNoteOpen(true), title: '附一句话理由（可空）' }, '+理由')
-  const ext = pending === 4
-    ? createElement('div', { className: 'ext' },
-      createElement('textarea', {
-        maxLength: QUOTE_MAX, rows: 2, autoFocus: true,
-        placeholder: 'fit=4 必附引文：我引用/追问/改道于哪句？（≤200 字）',
-        value: quote, onChange: (e: { target: { value: string } }) => setQuote(e.target.value),
-      }),
-      noteCtl,
-      createElement('button', {
-        className: 'chip', disabled: busy || quote.trim() === '',
-        onClick: () => { void submit({ fit: 4, quote: quote.trim(), note: noteOpen && note.trim() !== '' ? note.trim() : undefined }) },
-      }, '提交 4'),
-      createElement('button', { className: 'chip', disabled: busy, onClick: () => { setPending(null); setErr(null) } }, '取消'),
-      createElement('span', { className: 'hint' }, String(quote.trim().length) + '/' + String(QUOTE_MAX)),
-    )
-    : (pending === null ? null : createElement('div', { className: 'ext' }, noteCtl))
-  const status = row === undefined
-    ? null
+  const label = row === undefined
+    ? '契合'
     : row.exempt === 1
-      ? createElement('span', { className: 'done' }, 'N/A · 已豁免')
-      : createElement('span', { className: 'done' }, '已标 ' + String(row.fit) + (row.origin === 'sample' ? ' ' : ''),
-        row.origin === 'sample' ? createElement('span', { className: 'tag', title: '抽样队列口径（origin=sample，服务端判定）' }, '样') : null)
-  return createElement('div', { className: 'nt-fitbar', 'data-session': sessionId, 'data-turn': String(turnNo) },
-    createElement('span', { className: 'lb' }, '契合'),
-    ...chips,
-    status,
-    snap.error !== null ? createElement('span', { className: 'err' }, snap.error === 'HTTP 404' ? '标注服务未上线（宿主重启后生效）' : '清单加载失败：' + snap.error) : null,
-    err !== null ? createElement('span', { className: 'err' }, err) : null,
-    ext,
+      ? createElement('span', null, '契合', createElement('span', { className: 'nv' }, 'N/A'))
+      : createElement('span', null, '契合', createElement('span', { className: 'nv' }, String(row.fit) + (row.origin === 'sample' ? '样' : '')))
+  const pop = open
+    ? createElement('div', { className: 'nt-fitpop', role: 'menu' },
+      createElement('div', { className: 'row' },
+        ...FIT_SCALE.map((s) => createElement('button', {
+          key: 'f' + String(s.fit), className: 'opt' + (row !== undefined && row.fit === s.fit ? ' on' : ''),
+          title: s.anchor, disabled: busy, onClick: () => onOpt(s.fit),
+        }, s.short)),
+        createElement('button', {
+          className: 'opt na' + (row !== undefined && row.exempt === 1 ? ' on' : ''),
+          title: 'N/A = 无判断对象（纯操作性指令轮）→ 豁免，不进分母', disabled: busy, onClick: () => onOpt('na'),
+        }, 'N/A'),
+        createElement('span', { className: 'hint' }, 't' + String(turnNo)),
+      ),
+      row !== undefined && row.fit === 4
+        ? null
+        : createElement('div', { className: 'row' },
+          createElement('textarea', {
+            maxLength: QUOTE_MAX, rows: 2, placeholder: '选 4 必附引文：我引用/追问/改道于哪句？（≤200 字）',
+            value: quote, onChange: (e: { target: { value: string } }) => setQuote(e.target.value),
+          })),
+      row !== undefined && row.fit === 4
+        ? null
+        : createElement('div', { className: 'row' },
+          createElement('input', {
+            type: 'text', maxLength: NOTE_MAX, placeholder: '一句话理由（可空）', value: note,
+            onChange: (e: { target: { value: string } }) => setNote(e.target.value),
+          }),
+          createElement('button', {
+            className: 'opt', disabled: busy || quote.trim() === '',
+            onClick: () => { void submit({ fit: 4, quote: quote.trim(), note: note.trim() !== '' ? note.trim() : undefined }) },
+          }, '提交 4')),
+      err !== null ? createElement('div', { className: 'err' }, err) : null,
+    )
+    : null
+  return createElement('div', { style: { position: 'relative', display: 'inline-flex' } },
+    createElement('button', {
+      className: 'nt-fitact', 'data-marked': row === undefined ? '0' : '1',
+      'data-session': props.sessionId, 'data-turn': String(turnNo),
+      title: '契合：守谷人对本轮的人工判读（5 档锚定 · N/A 豁免）',
+      onClick: () => { setOpen((v) => !v); setErr(null) },
+    }, label),
+    pop,
   )
 }
 
@@ -261,7 +272,7 @@ function errText(code: string): string {
 
 // ── 注册（index.ts apply() 调用）───────────────────────────────────────────────
 
-/** chain 槽注册：name/id/select/inject 缺一不可（select 缺 = 恒谢绝）。 */
+/** list 槽注册：name/id/inject（list 用 id；无 select——渲染时机与消息身份全由宿主给）。 */
 export function registerTurnFit(ctx: {
   effect(callback: () => unknown, name: string): unknown
   slots: {
@@ -270,16 +281,15 @@ export function registerTurnFit(ctx: {
   }
 }): void {
   ctx.effect(
-    () => ctx.slots.inject('conversation.chat.turnTail', () =>
+    () => ctx.slots.inject('conversation.chat.assistant-actions', () =>
       ctx.slots.register({
-        name: 'conversation.chat.turnTail',
+        name: 'conversation.chat.assistant-actions',
         id: 'nautilus-fit',
-        order: 20,
-        select: selectTurnFit,
+        order: 30,
         // session 槽 inject 首参 = sessionId（renderer runInject：binding.key）
         inject: (sessionId: string) => ({ sessionId }),
-      }, TurnFitBar),
+      }, TurnFitAction),
     ),
-    '@dsh-external/dsh-nautilus: turn fit bar',
+    '@dsh-external/dsh-nautilus: turn fit action',
   )
 }

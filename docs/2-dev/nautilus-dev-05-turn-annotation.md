@@ -49,7 +49,7 @@ CREATE TABLE IF NOT EXISTS annotation_sample (        -- 抽样队列（一行�
   - recheck 语义：覆盖已有标注时旧值挪入 `fit_prev/quote_prev`（复标批次靠它成对）。
   - 200 → `{ok, origin, overwritten, fit_prev_available}`。
 - `GET /api/nautilus/m2/turn-annotations` → `{annotations:[...], coverage:{spot:{n}, sample:{marked, pending}, exempted, byFit:{0..4}, rechecked}}`——**spot 与 sample 计数分开呈现，永不合并成单一"覆盖率"**。
-- **流内打分件（D-T5，UI 半区主入口）**：客户端注册 `conversation.chat.turnTail`（kind `chain` / scope `session`；owner `TurnLocation{ turn: number, seq, status }`——dsh 0.1.5-rc.2 `dsh-client-ui-chat` `contract/slots.d.ts` 源码核实）。渲染：已完成轮动作行上方一条紧凑契合条——5 档 + N/A chips、fit=4 引文框就地展开、note 单行；已标态回显（GET 清单缓存或按轮查询）。`TurnLocation.turn` 与库键同源，端上核对一次（标注后 GET 回读核对 turn 序号一致）再记证据。零新依赖、`nt-` 前缀 + `--nt-*` 令牌、SVG 自绘。
+- **流内契合按钮（D-T5b，UI 半区主入口）**：客户端注册 `conversation.chat.assistant-actions`（kind `list` / scope `session` / owner `{ messageId }`——宿主 IconActions 行，赞/踩同排，每条定稿助手消息必渲染；~~D-T5 turnTail 链槽~~废弃，端上实测最新轮 tail 不稳定出现，守谷人改口）。行内无框文本按钮（`--dsw-alias-*` 令牌、零 Nautilus 背景）+ 最小中性浮层：5 档 + N/A、fit=4 引文框、理由、已标回显（按钮显 `契合 N`，sample 口径加「样」）。messageId→轮序：`useChat` 快照扫描（SessionStandardProps 文档化 hook：turn-tail 节点 `closing.finalNode.messageId` 匹配取 `location.turn.turn`），解析不到不渲染。`useChat` 轮序与库键同源，端上核对一次（标注后 GET 回读核对 turn 序号一致）再记证据。零新依赖、`nt-` 前缀。
 
 ## 4. 抽样生成器 `scripts/annotation-sample.mjs`（会话侧，直连自家库）
 

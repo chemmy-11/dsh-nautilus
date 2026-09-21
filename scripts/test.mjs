@@ -411,7 +411,7 @@ test('client bundle：ModuleLoader 往返 + 命名导出面 + 面板注册契约
   }
   exportsObj.apply(ctx)
   // 2026-09-27：vault 观测 tab 与 L 场读数 tab 均已下线（能力已搬进工作台）——客户端 = 工作台双注册
-  // + T 系列 D-T5 流内契合条（conversation.chat.turnTail 链槽，见 dev-05 §3）
+  // + T 系列契合按钮（守谷人改口：assistant-actions 列表槽 IconActions 行内，见 dev-05 §3 / D-T5b）
   assert.deepEqual(calls, [
     'effect:@dsh-external/dsh-nautilus: workbench icon',
     'inject:sidebar.panellist',
@@ -419,9 +419,9 @@ test('client bundle：ModuleLoader 往返 + 命名导出面 + 面板注册契约
     'effect:@dsh-external/dsh-nautilus: workbench panel',
     'inject:main',
     'register:main|nautilus-workbench',
-    'effect:@dsh-external/dsh-nautilus: turn fit bar',
-    'inject:conversation.chat.turnTail',
-    'register:conversation.chat.turnTail|nautilus-fit',
+    'effect:@dsh-external/dsh-nautilus: turn fit action',
+    'inject:conversation.chat.assistant-actions',
+    'register:conversation.chat.assistant-actions|nautilus-fit',
   ])
   // 工作台契约（§3.0 实测）：panellist 的 list id 与 main 的 key 必须同值——否则图标行点不到主区
   const panelIds = calls.filter((c) => c.startsWith('register:sidebar.panellist|') || c.startsWith('register:main|')).map((c) => c.split('|')[1])

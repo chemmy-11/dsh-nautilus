@@ -68,7 +68,8 @@ CREATE TABLE IF NOT EXISTS turn_annotation (
 - `POST /api/nautilus/m2/turn-annotations`：校验（量表范围/豁免/fit=4 引文/原文在场）→ origin 判定 → upsert。同源浏览器门（工作台内部动作，**不走 S1.1 的 token 通道**——那是给外部 harness 的，本通道守谷人专用）。【已上线，`a2093c1`】
 - `GET /api/nautilus/m2/turn-annotations`：清单 + 双口径覆盖率（spot/sample 分开）。【已上线】
 - **流内打分件（D-T5，✅ 守谷人选项框裁决：`conversation.chat.turnTail` 链槽）**：宿主公开槽位（dsh 0.1.5-rc.2 源码核实：`dsh-client-ui-chat` `contract/slots.d.ts`——kind `chain` / scope `session` / owner `TurnLocation{ turn: number, seq, status, steps }`），渲染于已完成轮次动作行上方，**判断在热的现场直接标**。形态：5 档 + N/A 平铺、fit=4 引文框就地展开、POST 同源直写。`TurnLocation.turn` 与本库 `(session, turn)` 键同源（同一 session/event 流的轮序）——实现时做一次端上核对并记入证据。
-  - 落选备选记档：`conversation.chat.assistant-actions`（列表槽，owner 仅 `messageId`，需 messageId→轮序映射，5 档塞不进图标行须挂 `conversation.input.overlay` 弹层）——工程摩擦高一截，视觉优势不足以抵。
+  - 落选备选记档：`conversation.chat.assistant-actions`（列表槽，owner 仅 `messageId`，需 messageId→轮序映射，5 档塞不进图标行须挂弹层）——原判「工程摩擦高一截」。
+- **D-T5b（2026-09-27 守谷人改口，端上反馈驱动）**：turnTail 链槽端上实测**最新轮的条不稳定出现**（tail 节点材料化时机非契约面，多轮修复不根除）→ 槽位改为上条「落选备选」`conversation.chat.assistant-actions`：IconActions 行内（赞/踩同排），**每条定稿助手消息必渲染**（宿主 `data-actions-reveal`：最新轮 always / 旧轮 hover——恰补「最新轮没条」）；按钮本体**零 Nautilus 背景**（无框文本按钮融入宿主行视觉，`--dsw-alias-*` 令牌），5 档选择收进最小中性浮层。messageId→轮序走 `useChat` 快照扫描（SessionStandardProps 文档化 hook：扫 kind='turn-tail' 且 `data.closing.finalNode.messageId` 匹配的节点取 `location.turn.turn`），解析不到不渲染。教训：D-T5 的「落选理由」在端上实际问题面前重新定价——映射一个文档化 hook 即解，「最新轮必现」权重更高。
   - 并存不混用：宿主自带 `dsh-message-feedback`（赞/踩）是通用反馈、存宿主侧；契合标注是带量表的观测口径、落本插件库。
 - 抽屉控件**降级为补充视图**（主入口 = 流内件）；曲线已标点人工层标记照旧（改点描边/徽标，**不改读数线**——解读与观测分层可视化）。
 

@@ -165,7 +165,7 @@ const CLIENT_SRC = (f) => join(fileURLToPath(new URL('..', import.meta.url)), 's
 // 临时目录必须建在仓库内：bundle external react 靠目录树向上解析到本仓库 node_modules（UI 线先例同款）
 const REPO = fileURLToPath(new URL('..', import.meta.url))
 
-test('turn-annotate：流内契合条 SSR + select 契约 + 注册 def 形状', async () => {
+test('turn-annotate：IconActions 行内契合按钮 SSR + 轮序解析 + 注册 def 形状', async () => {
   const esbuild = await import('esbuild')
   const rds = await import('react-dom/server')
   const react = await import('react')
@@ -180,12 +180,18 @@ test('turn-annotate：流内契合条 SSR + select 契约 + 注册 def 形状', 
     })
     const ta = await import(pathToFileURL(out).href)
     const h = (node) => renderToStaticMarkup(node)
-    // ① select：只验轮号合法性——status 一律不拦（端上实测刚完成轮 status='open' 时宿主已渲染 tail）
-    assert.deepEqual(ta.selectTurnFit({ turn: { turn: 7, status: 'closed' } }), { turnNo: 7 })
-    assert.deepEqual(ta.selectTurnFit({ turn: { turn: 7, status: 'open' } }), { turnNo: 7 })
-    assert.equal(ta.selectTurnFit({ turn: { status: 'closed' } }), null)
-    assert.equal(ta.selectTurnFit(null), null)
-    // ② 注册 def：name/id/select/inject(sessionId) 四件套（chain + session 槽缺一不可）
+    // ① 轮序解析器：定位 closing.finalNode.messageId 对应的 turn-tail 节点 → location.turn.turn
+    const snap = {
+      nodes: new Map([
+        ['k1', { kind: 'user', data: {} }],
+        ['k2', { kind: 'turn-tail', location: { kind: 'turn', turn: { turn: 5 } }, data: { turn: 5, closing: { finalNode: { messageId: 'msg-xyz' } } } }],
+      ]),
+    }
+    assert.equal(ta.turnSelectorFor('msg-xyz')(snap), 5)
+    assert.equal(ta.turnSelectorFor('msg-none')(snap), null)
+    assert.equal(ta.turnSelectorFor('msg-xyz')(null), null)
+    assert.equal(ta.turnSelectorFor('msg-xyz')({}), null)
+    // ② 注册 def：list 槽 = name/id/inject(sessionId)（无 select——渲染时机与消息身份全由宿主给）
     const regs = []
     const effects = []
     const ctx = {
@@ -198,35 +204,35 @@ test('turn-annotate：流内契合条 SSR + select 契约 + 注册 def 形状', 
     ta.registerTurnFit(ctx)
     assert.equal(regs.length, 1)
     assert.equal(effects.length, 1)
-    assert.equal(regs[0].key, 'conversation.chat.turnTail')
+    assert.equal(regs[0].key, 'conversation.chat.assistant-actions')
     const { def, comp } = regs[0].cb()
-    assert.equal(def.name, 'conversation.chat.turnTail')
+    assert.equal(def.name, 'conversation.chat.assistant-actions')
     assert.equal(def.id, 'nautilus-fit')
-    assert.equal(typeof def.select, 'function')
+    assert.equal(def.select, undefined, 'list 槽不该带 select')
     assert.deepEqual(def.inject('sess-xyz'), { sessionId: 'sess-xyz' })
-    assert.equal(comp, ta.TurnFitBar)
-    // ③ SSR：未标注态（ chips 0-4 + N/A + 锚文 title + 会话/轮次 data 属性）
-    const bar0 = h(react.createElement(ta.TurnFitBar, { sessionId: 'sess-abc', turnNo: 3 }))
-    for (const s of ['nt-fitbar', '契合', 'data-session="sess-abc"', 'data-turn="3"', '>N/A<', 'title="滑过（读即没读）"']) {
-      assert.ok(bar0.includes(s), '契合条缺内容: ' + s)
+    assert.equal(comp, ta.TurnFitAction)
+    // ③ SSR：未标注态——行内按钮（无浮层）、data-session/data-turn 齐全、零 Nautilus 背景类
+    const act0 = h(react.createElement(ta.TurnFitAction, { sessionId: 'sess-abc', messageId: 'msg-xyz', useChat: (sel) => sel(snap) }))
+    for (const s of ['nt-fitact', '契合', 'data-session="sess-abc"', 'data-turn="5"', 'data-marked="0"']) {
+      assert.ok(act0.includes(s), '行内按钮缺内容: ' + s)
     }
-    // ③b SSR：renderer 真实管道形态——轮号经 props.matched / owner.turn 到达（端上 0.1.5-rc.2 合并规则的回归位）
-    const barR = h(react.createElement(ta.TurnFitBar, { sessionId: 'sess-abc', matched: { turnNo: 9 }, turn: { turn: 9 } }))
-    assert.ok(barR.includes('data-turn="9"'), 'matched.turnNo 管道失效（端上会打成 turn:undefined → invalid:session_or_turn）')
-    // ④ SSR：已标注态（stub fetch → postFit 落缓存 → 重渲染出 已标+样 徽标）
+    assert.ok(!act0.includes('nt-fitbar'), '旧版条形残留（应只有行内按钮）')
+    assert.ok(!act0.includes('nt-fitpop'), '未点击时浮层不该出现')
+    // ④ SSR：已标注态（stub fetch → postFit 落缓存 → 按钮显 档位+样、data-marked=1）
     const origFetch = globalThis.fetch
     globalThis.fetch = async () => ({ ok: true, json: async () => ({ ok: true, origin: 'sample' }) })
     try {
-      const r = await ta.postFit('sess-abc', 3, { fit: 3 })
+      const r = await ta.postFit('sess-abc', 5, { fit: 3 })
       assert.equal(r.ok, true)
       assert.equal(r.origin, 'sample')
     } finally { globalThis.fetch = origFetch }
-    const bar1 = h(react.createElement(ta.TurnFitBar, { sessionId: 'sess-abc', turnNo: 3 }))
-    assert.ok(bar1.includes('已标 3'), '已标态缺失')
-    assert.ok(bar1.includes('>样<'), 'sample 徽标缺失（口径诚实显示）')
-    assert.ok(bar1.includes('>4<') === false || true)
-    const on4 = (bar1.match(/class="chip on"/g) ?? []).length
-    assert.equal(on4 >= 1, true, '当前档位应高亮')
+    const act1 = h(react.createElement(ta.TurnFitAction, { sessionId: 'sess-abc', messageId: 'msg-xyz', useChat: (sel) => sel(snap) }))
+    assert.ok(act1.includes('data-marked="1"'), '已标态缺失')
+    assert.ok(act1.includes('>3'), '按钮档位缺失')
+    assert.ok(act1.includes('样'), 'sample 口径徽标缺失（诚实显示）')
+    // ⑤ 轮序解析不到 → 不渲染（无轮号无法落库，宁缺勿错）
+    const actNone = h(react.createElement(ta.TurnFitAction, { sessionId: 'sess-abc', messageId: 'msg-none', useChat: (sel) => sel(snap) }))
+    assert.equal(actNone, '', '解析不到轮序时应不渲染')
   } finally {
     try { rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }) } catch { /* 容忍残留 */ }
   }
