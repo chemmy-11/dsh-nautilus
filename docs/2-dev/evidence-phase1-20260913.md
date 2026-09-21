@@ -562,6 +562,32 @@ client-modules: package @dsh-external/dsh-nexus resolves from multiple active Lo
 
 ---
 
+## E24 T 系列端上四元组 + 轮序同源验证闭合（2026-09-27，宿主重启窗口）
+
+**环境四元组**：dsh `0.1.5-rc.2`（`dsh --version` = 检出包一致）· profile `web` · 装配方式：bundle（git 依赖锁定，`dsh plugin add`；client 半区随 `lib/client.js` 静态服务即时生效，host 半区路由随进程重启生效——两半生效时机不同为既录口径）· Windows 11 / Node v24.18.0。
+
+**前后数字**（迁移/路由/门禁，重启前后对照）：
+
+| 项 | 重启前 | 重启后 |
+|---|---|---|
+| `GET /m2/turn-annotations`（curl 无同源头） | 404（宿主旧代码无此路由） | **403 forbidden**（路由在场，门内拒绝——实现口径：GET 也在同源门内） |
+| 带 `origin` 头 GET | — | **200** `{revision, annotations[], coverage{...}}` |
+| 无同源头 POST | 404 | **403 forbidden**（同源门工作） |
+| `PRAGMA user_version` | 5 | **6**（v6 迁移幂等执行；五表齐：`turn_annotation`/`annotation_sample`/`selfcheck_record`/`turn_read` 563 行原样/`metric_sample`） |
+| `POST /selfcheck`（无 token） | 404 | **403 `ingest-disabled`**（S1.1 通电，默认关，符合设计） |
+
+**首条人工标注 + 轮序同源验证**（E23 边界①闭合）：
+
+- 守谷人在 GUI 流内点选契合 3 → 落库 `{session-d4fd337e…, turn: 15, fit: 3, origin: 'spot', note 原样入库}`；coverage `spot:1, byFit{3:1}` ✓。
+- **轮序比对**：按钮点击的消息 = 我方 turn 15 回复（「收到，转向 assistant-actions 列表槽…」）；库内 `turn_text` turn 15 的 assistant_text 与该回复逐字吻合 → **`useChat` 快照轮序（`location.turn.turn`）↔ 库键 `(session, turn)` 同源成立**（D-T5b 的 messageId→轮序映射路径经端上实证）。
+- 附带发现（记档）：75 秒内改标一次 → `fit_prev=3`、coverage `rechecked:1`——**`rechecked` 现语义 = 「被覆盖过 ≥1 次的行数」**，不分 D-T4 复标批次与随手改标；噪声地板成对数据将来以 `annotation_sample.kind='recheck'` 队列为准，不得直接引用此计数。
+
+**提交链**：`75a3552`（turnTail 版）→ `180f046`（404 人话）→ `365673d`（matched 管道 + open 谢绝移除）→ `7cbd5df`（**D-T5b 改口**：assistant-actions 槽 + useChat 轮序解析 + 行内原生按钮）。端上实测驱动的三次迭代均归档于提交信息。
+
+**剩余边界**：抽屉「契合区」未做（等 §5 标签式标注提案一并裁）；浮层视觉为最小中性面（守谷人评「UI 设计一般」，打磨记 OQ）；push 待守谷人指令（本地领先 origin 多笔）。
+
+---
+
 ## E8 诚实边界（引用本归档时必须一并引用）
 
 1. **端上读数口径**：§E8 初稿时本层尚未装配（证据全来自离线探针）；**§E9 起已热装配进 profile `web`**，宿主路径已有端上四元组读数（OQ-3 收敛）。但 E5 的 1 小时档仍只有中间读数，且「连续 1 小时无内存增长」尚未给出完整序列。
