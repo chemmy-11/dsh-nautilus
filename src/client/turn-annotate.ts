@@ -122,14 +122,15 @@ export function subscribeFit(fn: () => void): () => void {
   return () => { listeners.delete(fn) }
 }
 
-// ── chain 选择器：已完成轮接受（matched 带轮序），其余谢绝 ─────────────────────
+// ── chain 选择器：只验轮号合法性（渲染时机归宿主）────────────────────────────
 
 export interface TurnFitMatched { turnNo: number }
-export function selectTurnFit(owner: { turn?: { turn?: unknown; status?: unknown } } | null | undefined): TurnFitMatched | null {
+/** 实测（0.1.5-rc.2 端上）：刚完成的轮 status 仍为 'open' 时宿主已渲染 turnTail——
+ * 此处若按 status 谢绝会吞掉最新轮的条，故只验轮号，时机全权信宿主。 */
+export function selectTurnFit(owner: { turn?: { turn?: unknown } } | null | undefined): TurnFitMatched | null {
   const t = owner?.turn
   const no = t?.turn
   if (t === null || t === undefined || !Number.isFinite(Number(no))) return null
-  if (t.status === 'open') return null // 未收口的轮不标（turnTail 本就只在完成轮渲染，双保险）
   return { turnNo: Number(no) }
 }
 
@@ -159,27 +160,33 @@ function injectFitbarStyle(): void {
   document.head.appendChild(el)
 }
 
-/** 单轮契合条 props（渲染器展开后的形状；本地类型仅作文档）。 */
+/** 单轮契合条 props（渲染器展开后的形状；本地类型仅作文档）。
+ * 轮号读取链：`matched.turnNo`（renderer chain 合并规则：select 返回值挂 **props.matched**，
+ * 0.1.5-rc.2 端上实测）→ `turn.turn`（ownerProps 的 TurnLocation）→ `turnNo`（测试直传形态）。 */
 export interface TurnFitBarProps {
   sessionId: string
-  turnNo: number
+  turnNo?: number
+  matched?: TurnFitMatched
+  turn?: { turn?: unknown }
 }
 
 export function TurnFitBar(props: TurnFitBarProps): ReactNode {
   injectFitbarStyle()
   const snap = useSyncExternalStore(subscribeFit, fitSnapshot, fitSnapshot)
   useEffect(() => { ensureFitLoaded() }, [])
+  const turnNo = Number(props.matched?.turnNo ?? props.turn?.turn ?? props.turnNo)
+  const sessionId = String(props.sessionId ?? '')
   const [pending, setPending] = useState<number | 'na' | null>(null) // 正在补引文/理由的档位
   const [quote, setQuote] = useState('')
   const [note, setNote] = useState('')
   const [noteOpen, setNoteOpen] = useState(false)
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState<string | null>(null)
-  const row = snap.byKey.get(keyOf(props.sessionId, props.turnNo))
+  const row = snap.byKey.get(keyOf(sessionId, turnNo))
   const submit = async (body: { fit?: number; exempt?: 1; quote?: string; note?: string }): Promise<void> => {
     setBusy(true)
     setErr(null)
-    const r = await postFit(props.sessionId, props.turnNo, body)
+    const r = await postFit(sessionId, turnNo, body)
     setBusy(false)
     if (!r.ok) { setErr(errText(r.error ?? '未知错误')); return }
     setPending(null)
@@ -231,7 +238,7 @@ export function TurnFitBar(props: TurnFitBarProps): ReactNode {
       ? createElement('span', { className: 'done' }, 'N/A · 已豁免')
       : createElement('span', { className: 'done' }, '已标 ' + String(row.fit) + (row.origin === 'sample' ? ' ' : ''),
         row.origin === 'sample' ? createElement('span', { className: 'tag', title: '抽样队列口径（origin=sample，服务端判定）' }, '样') : null)
-  return createElement('div', { className: 'nt-fitbar', 'data-session': props.sessionId, 'data-turn': String(props.turnNo) },
+  return createElement('div', { className: 'nt-fitbar', 'data-session': sessionId, 'data-turn': String(turnNo) },
     createElement('span', { className: 'lb' }, '契合'),
     ...chips,
     status,

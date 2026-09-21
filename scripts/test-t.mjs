@@ -180,9 +180,9 @@ test('turn-annotate：流内契合条 SSR + select 契约 + 注册 def 形状', 
     })
     const ta = await import(pathToFileURL(out).href)
     const h = (node) => renderToStaticMarkup(node)
-    // ① select：完成轮接受并带轮序；open/垃圾谢绝（chain 契约：null = 谢绝）
+    // ① select：只验轮号合法性——status 一律不拦（端上实测刚完成轮 status='open' 时宿主已渲染 tail）
     assert.deepEqual(ta.selectTurnFit({ turn: { turn: 7, status: 'closed' } }), { turnNo: 7 })
-    assert.equal(ta.selectTurnFit({ turn: { turn: 7, status: 'open' } }), null)
+    assert.deepEqual(ta.selectTurnFit({ turn: { turn: 7, status: 'open' } }), { turnNo: 7 })
     assert.equal(ta.selectTurnFit({ turn: { status: 'closed' } }), null)
     assert.equal(ta.selectTurnFit(null), null)
     // ② 注册 def：name/id/select/inject(sessionId) 四件套（chain + session 槽缺一不可）
@@ -210,6 +210,9 @@ test('turn-annotate：流内契合条 SSR + select 契约 + 注册 def 形状', 
     for (const s of ['nt-fitbar', '契合', 'data-session="sess-abc"', 'data-turn="3"', '>N/A<', 'title="滑过（读即没读）"']) {
       assert.ok(bar0.includes(s), '契合条缺内容: ' + s)
     }
+    // ③b SSR：renderer 真实管道形态——轮号经 props.matched / owner.turn 到达（端上 0.1.5-rc.2 合并规则的回归位）
+    const barR = h(react.createElement(ta.TurnFitBar, { sessionId: 'sess-abc', matched: { turnNo: 9 }, turn: { turn: 9 } }))
+    assert.ok(barR.includes('data-turn="9"'), 'matched.turnNo 管道失效（端上会打成 turn:undefined → invalid:session_or_turn）')
     // ④ SSR：已标注态（stub fetch → postFit 落缓存 → 重渲染出 已标+样 徽标）
     const origFetch = globalThis.fetch
     globalThis.fetch = async () => ({ ok: true, json: async () => ({ ok: true, origin: 'sample' }) })
