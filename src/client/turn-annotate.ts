@@ -25,7 +25,7 @@ import { createElement, useEffect, useState, useSyncExternalStore, type ReactNod
 
 /** 读侧契约（AL.4b v2）：1–5 锚文的**单点来源**；本件不自造量表。 */
 const ALIGNMENTS_URL = '/api/nautilus/m2/alignments'
-/** 豁免（N/A）已标态的补充来源：契约 `human[]` 只含 align 非空行，豁免行不进数组（见 dev-02 §3 AL.4c 注记）。 */
+/** 写路径（POST 双形同门）；**读**只用 ALIGNMENTS_URL——v3 起 human[] 已含豁免行，故不再补读本端点。 */
 const TURN_ANNOTATIONS_URL = '/api/nautilus/m2/turn-annotations'
 const QUOTE_MAX = 200
 const NOTE_MAX = 500
@@ -40,7 +40,7 @@ export const BOUNDARY_SCALE: Array<{ key: string; label: string }> = [
 /** 契约锚文（1–5）；未加载时为空数组——选项只显档位数字，不编造锚文。 */
 export interface AnchorRow { score: number; text: string }
 
-// ── 判读缓存（全局单例：对齐台账 + 豁免清单各拉一次喂所有消息的按钮；POST 后换快照）──
+// ── 判读缓存（全局单例：契约台账拉一次喂所有消息的按钮；POST 后换快照）────────────
 
 export interface AlignRow {
   session: string
@@ -66,18 +66,24 @@ const listeners = new Set<() => void>()
 const notify = (): void => { for (const fn of listeners) { try { fn() } catch { /* 单监听器异常不饿死其余 */ } } }
 const keyOf = (session: string, turn: number): string => session + ':' + String(turn)
 
-/** 契约 human[] → 缓存行（该数组只含 align 非空行；豁免行由 mergeExempt 补）。 */
+/**
+ * 契约 human[] → 缓存行。**v3 起 human[] 含全部新量表行**（有分 + 豁免；humanTotal == human[].length），
+ * 故豁免行（align:null + exempt:1）也在这里进来——不再需要任何补充读。
+ */
 function fromHuman(rows: Array<Record<string, unknown>>): Map<string, AlignRow> {
   const out = new Map<string, AlignRow>()
   for (const r of rows) {
     const session = String(r.session ?? '')
     const turn = Number(r.turn)
-    if (session === '' || !Number.isFinite(turn) || r.align === null || r.align === undefined) continue
+    if (session === '' || !Number.isFinite(turn)) continue
+    const hasAlign = typeof r.align === 'number' && Number.isFinite(Number(r.align))
+    const exempt = Number(r.exempt ?? 0) === 1
+    if (!hasAlign && !exempt) continue // 既无分又不豁免的行不成其为判读（防御，契约下不会出现）
     out.set(keyOf(session, turn), {
       session, turn,
-      align: Number(r.align),
+      align: hasAlign ? Number(r.align) : null,
       boundary: r.boundary === null || r.boundary === undefined ? 'none' : String(r.boundary),
-      exempt: 0,
+      exempt: exempt ? 1 : 0,
       quote: r.quote == null ? null : String(r.quote),
       note: r.note == null ? null : String(r.note),
       origin: r.origin === 'sample' ? 'sample' : 'spot',
@@ -86,37 +92,18 @@ function fromHuman(rows: Array<Record<string, unknown>>): Map<string, AlignRow> 
   return out
 }
 
-/**
- * T 系列清单 → 仅补「豁免（N/A）」行。
- * 为什么留这一路：契约 human[] 只含 align 非空行，**豁免行不进数组**（只计数 coverage.exempted），
- * 单靠 human[] 会让已标 N/A 的轮次在按钮上退回「未标注」——那是静默丢状态。此路只补豁免、不碰 align。
- */
-function mergeExempt(byKey: Map<string, AlignRow>, rows: Array<Record<string, unknown>>): void {
-  for (const r of rows) {
-    const session = String(r.session ?? '')
-    const turn = Number(r.turn)
-    if (session === '' || !Number.isFinite(turn)) continue
-    if (Number(r.exempt ?? 0) !== 1) continue
-    const k = keyOf(session, turn)
-    if (byKey.has(k)) continue
-    byKey.set(k, { session, turn, align: null, boundary: 'none', exempt: 1, quote: null, note: null, origin: r.origin === 'sample' ? 'sample' : 'spot' })
-  }
-}
-
-/** 拉一次对齐台账 + 豁免清单（行内多按钮共享；失败显式置错，不静默）。 */
+/** 拉一次对齐台账（行内多按钮共享；单端点，失败显式置错、不静默）。 */
 export function ensureAlignLoaded(): void {
   if (state.loaded || state.loading) return
   state = { ...state, loading: true }
   notify()
-  const get = (url: string) => fetch(url, { headers: { accept: 'application/json' } })
+  fetch(ALIGNMENTS_URL, { headers: { accept: 'application/json' } })
     .then(async (r) => {
       if (!r.ok) throw new Error('HTTP ' + String(r.status))
       return (await r.json()) as Record<string, unknown>
     })
-  Promise.all([get(ALIGNMENTS_URL), get(TURN_ANNOTATIONS_URL)])
-    .then(([al, ta]) => {
+    .then((al) => {
       const byKey = fromHuman((al.human as Array<Record<string, unknown>> | undefined) ?? [])
-      mergeExempt(byKey, (ta.annotations as Array<Record<string, unknown>> | undefined) ?? [])
       const raw = ((al.scale as { anchors?: Array<Record<string, unknown>> } | undefined)?.anchors) ?? []
       const anchors = raw
         .map((a) => ({ score: Number(a.score), text: String(a.text ?? '') }))
@@ -132,12 +119,12 @@ export function ensureAlignLoaded(): void {
 }
 
 /**
- * 提交一条人工判读（AL.4c 双形 body：带 align → 对齐量表；仅 exempt → N/A 豁免）。
+ * 提交一条人工判读（双形同门：带 align → 新量表；仅 exempt → N/A 豁免）。
  * 成功后把响应里的 origin 并进缓存（不重拉全量）。
  *
- * ⚠️ 已知契约洞（已回报 Lead，等写路由跟单）：豁免（不带 align）分支服务端目前落到**旧代际**行
- * （schema_version=1），因而不进 humanTotal/exempted 而计入 legacyFitRows。本件无需改动——
- * 写路由把判据补成「新量表豁免」后即自动对齐。
+ * **判据（与路由同源）**：body 里 `align` 键**或** `boundary` 键在场即判新形。
+ * 故此处**恒带 boundary**（缺省 'none'）——N/A 走 `align:null + exempt:1 + boundary`，
+ * 否则服务端会把它误判成旧形（schema_version=1）→ 既不进 exempted、又混进 legacyFitRows。
  */
 export async function postHumanAlign(session: string, turn: number, body: { align?: number; boundary?: string; exempt?: 1; quote?: string; note?: string }): Promise<{ ok: boolean; error?: string; origin?: 'spot' | 'sample' }> {
   let res: Response
@@ -145,7 +132,7 @@ export async function postHumanAlign(session: string, turn: number, body: { alig
     res = await fetch(TURN_ANNOTATIONS_URL, {
       method: 'POST',
       headers: { 'content-type': 'application/json', accept: 'application/json' },
-      body: JSON.stringify({ session, turn, ...body }),
+      body: JSON.stringify({ session, turn, boundary: body.boundary ?? 'none', ...body }),
     })
   } catch (e: unknown) {
     return { ok: false, error: e instanceof Error ? e.message : String(e) }
@@ -348,11 +335,15 @@ export function TurnFitAction(props: TurnFitActionProps): ReactNode {
 /** 服务端错误码 → 人话（口径见 dev-05 §3；不掩盖 400 语义）。 */
 function errText(code: string): string {
   if (code === 'HTTP 404') return '标注服务未上线（宿主重启后生效）'
-  if (code === 'quote-required') return '4/5 档必附引文'
+  if (code === 'align-quote-required') return '4/5 档必附引文'
+  if (code === 'quote-required') return '4/5 档必附引文（旧形码）'
   if (code === 'quote-too-long') return '引文超过 200 字'
   if (code === 'no-turn-text') return '该轮原文不在场，不可标（不让人对着摘要打分）'
-  // 双形写路由（带 align）尚未上线时，服务端按旧形判「既无 fit 也无 exempt」→ 回这个码
-  if (code === 'invalid:fit-xor-exempt') return '服务端尚未接受对齐量表（align 双形写路由未上线）'
+  if (code === 'invalid:align') return '对齐分必须是 1–5'
+  if (code === 'invalid:align-xor-exempt') return '档位与豁免必须二选一'
+  if (code === 'invalid:boundary') return '边界取值不在枚举内'
+  // 旧形码：本件从不发 fit，故只可能是服务端仍在跑改造前路由——不该再看到
+  if (code === 'invalid:fit-xor-exempt') return '档位与豁免必须二选一（客户端不应出现，出现即 bug）'
   if (code.startsWith('HTTP 40')) return '请求被拒（' + code + '）'
   return '提交失败：' + code
 }

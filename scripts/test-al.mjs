@@ -869,31 +869,55 @@ test('AL.4c 打分件换代：SSR 可见结果（对齐文案 / 无契合 / 无 
     assert.ok(src.includes('max-height:min(70vh,420px)'), 'B2：贴顶兜底 = 限高可滚')
     assert.ok(src.includes('min-width:272px'), 'B7：最小宽度按加总定值（5×28 + 40 + ~38 + 24 + 20 = 262 → 272）')
     assert.ok(src.includes('box-sizing:border-box'), 'B7：控件统一 border-box，宽度才可加总')
-    // ② 读态 join（A2）：stub fetch → human[]（带 align）+ T 系列清单（补豁免）→ 两态都可见
+    // ② 读态（A2 + v3）：**单端点** human[] 同时给「有分」与「豁免」两种行 —— 不再有第二条补充读
     const origFetch = globalThis.fetch
-    globalThis.fetch = async (url) => ({
-      ok: true,
-      json: async () => String(url).includes('/m2/alignments')
-        ? {
+    let fetchedUrls = []
+    globalThis.fetch = async (url) => {
+      fetchedUrls.push(String(url))
+      return {
+        ok: true,
+        json: async () => ({
           revision: 1,
           scale: { schemaVersion: 2, rubricVersion: 'al-v1', min: 50, anchors: [{ score: 4, text: '4 = 顺着对方状态把问题推深' }] },
-          coverage: {}, human: [{ session: 'sess-abc', turn: 5, align: 4, boundary: 'possession', exempt: 0, quote: '他引用了我那句', note: null, origin: 'sample', schemaVersion: 2, annotatedAt: 1, updatedAt: 2 }],
+          coverage: {},
+          human: [
+            { session: 'sess-abc', turn: 5, align: 4, boundary: 'possession', exempt: 0, quote: '他引用了我那句', note: null, origin: 'sample', schemaVersion: 2, annotatedAt: 1, updatedAt: 2 },
+            { session: 'sess-abc', turn: 7, align: null, boundary: 'none', exempt: 1, quote: null, note: '纯操作性轮', origin: 'spot', schemaVersion: 2, annotatedAt: 3, updatedAt: 4 },
+          ],
           self: [], consistency: null,
-        }
-        : { revision: 1, annotations: [{ session: 'sess-abc', turn: 7, fit: null, exempt: 1, quote: null, note: null, origin: 'spot' }] },
-    })
+        }),
+      }
+    }
     try {
       ta.ensureAlignLoaded()
       await new Promise((r) => setTimeout(r, 1))
     } finally { globalThis.fetch = origFetch }
+    assert.deepEqual(fetchedUrls, ['/api/nautilus/m2/alignments'], 'v3：读路径必须只剩单端点（补充读已删）')
     const marked = h(react.createElement(ta.TurnFitAction, { sessionId: 'sess-abc', messageId: 'msg-xyz', useChat, defaultOpen: true }))
     assert.ok(marked.includes('data-marked="1"'), 'A2：已标态必须来自 human[] join')
     assert.ok(marked.includes('>4'), 'A2：按钮显示人工判读档位')
     assert.ok(marked.includes('样'), 'A2：sample 口径徽标保留（诚实显示）')
     assert.ok(marked.includes('title="4 · 4 = 顺着对方状态把问题推深"'), 'A1：档位 title 锚文取自契约 scale.anchors')
+    // 豁免态断言必须打在**标签**上：按钮 title 里本来就有「N/A 豁免」四个字，只断 includes('N/A') 会假绿
     const exempt = h(react.createElement(ta.TurnFitAction, { sessionId: 'sess-abc', messageId: 'msg-exempt', useChat }))
-    assert.ok(exempt.includes('N/A'), 'A2：豁免（N/A）态仍可见——human[] 不含豁免行，故保留 T 系列清单补这一笔')
-    // ③ 轮序解析不到 → 不渲染（宁缺勿错）
+    assert.ok(exempt.includes('class="nv">N/A</span>'), 'v3：豁免态来自 human[] 的 align:null 行（标签级断言，不用 title 混过去）')
+    assert.ok(exempt.includes('data-marked="1"'), 'v3：豁免行也算已标（不该退回未标注）')
+    // ③ N/A 提交必须带**新形判据键**：抓 POST body——只发 {exempt:1} 会被服务端判成旧形
+    //    （schema_version=1）→ 不进 exempted 反而混进 legacyFitRows，正是 v3 之前那个代际错判。
+    let posted = null
+    globalThis.fetch = async (url, init) => {
+      posted = { url: String(url), body: JSON.parse(String((init ?? {}).body ?? '{}')) }
+      return { ok: true, json: async () => ({ ok: true, origin: 'spot' }) }
+    }
+    try {
+      const r = await ta.postHumanAlign('sess-abc', 7, { exempt: 1 })
+      assert.equal(r.ok, true)
+    } finally { globalThis.fetch = origFetch }
+    assert.equal(posted.url, '/api/nautilus/m2/turn-annotations', '写路径仍是 T 系列端点（不新开端点）')
+    assert.equal(posted.body.exempt, 1)
+    assert.ok(Object.prototype.hasOwnProperty.call(posted.body, 'boundary'), 'N/A body 必须带 boundary 键（服务端新形判据）')
+    assert.ok(!Object.prototype.hasOwnProperty.call(posted.body, 'fit'), '不得再发 fit（旧形信号）')
+    // ④ 轮序解析不到 → 不渲染（宁缺勿错）
     const none = h(react.createElement(ta.TurnFitAction, { sessionId: 'sess-abc', messageId: 'msg-none', useChat }))
     assert.equal(none, '', '解析不到轮序时不渲染')
   })
@@ -910,10 +934,18 @@ test('AL.4c 术语守卫（全量）：src/client 五文件不得出现已废止
   assert.ok(!ta.includes('FIT_SCALE'), '本地量表常量 FIT_SCALE 必须撤除')
   assert.ok(ta.includes('scale') && ta.includes('anchors'), '打分件必须从契约读锚文')
   assert.ok(!ta.includes('fit: number'), '打分件不得再传 fit 形状（写路径切 align 双形）')
-  // 写路径：带 align / 仅 exempt（双形），不新开端点
-  assert.ok(ta.includes('postHumanAlign'), '写路径必须换成对齐语义的函数')
-  assert.ok(ta.includes('{ exempt: 1 }'), 'N/A 豁免路径保留（仅 exempt → 旧形豁免分支）')
-  assert.ok(!ta.includes('invalid:align='), '不得编造契约外的错误码映射')
+  // 读路径：v3 起单端点；被删掉的补充读不许悄悄回来
+  assert.ok(!ta.includes('mergeExempt'), '补充读 mergeExempt 已随 v3 删除，不得复活')
+  assert.ok(!/Promise\.all\(\[get\(ALIGNMENTS_URL\)/.test(ta), '读路径不得再拉第二个端点')
+  assert.ok(!ta.includes("get(TURN_ANNOTATIONS_URL)"), 'T 系列端点只用于 POST 写，不得再用于读')
+  // 写路径：双形同门 + 恒带新形判据键（否则 N/A 会被服务端判成旧形）
+  assert.ok(ta.includes('postHumanAlign'), '写路径必须是对齐语义的函数')
+  assert.ok(ta.includes("boundary: body.boundary ?? 'none'"), 'POST body 必须恒带 boundary 键（新形判据）')
+  // 错误码映射必须落到**真实存在**的码上（路由实测：align-quote-required / invalid:align / invalid:align-xor-exempt）
+  for (const c of ["'align-quote-required'", "'invalid:align'", "'invalid:align-xor-exempt'", "'invalid:boundary'"]) {
+    assert.ok(ta.includes(c), 'errText 缺真实错误码映射：' + c)
+  }
+  assert.ok(!ta.includes('写路由未上线'), '临时措辞必须定稿（写路由已落地）')
 })
 
 // ── AL.4 写路径（POST /m2/turn-annotations 双形同门）────────────────────────────

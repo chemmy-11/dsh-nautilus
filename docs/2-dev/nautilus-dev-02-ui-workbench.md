@@ -118,8 +118,8 @@
 >
 > **A. 换代**：① 锚文不再写死在客户端——1–5 锚文取契约 scale.anchors（本地量表常量 FIT_SCALE 撤除），标签 / 浮层标题 / 提示一律「对齐」。
 > ② 写路径改走 POST /m2/turn-annotations 的**双形 body**（带 align / 仅 exempt），不再发 fit。
-> ③ 读态改 join 契约 human[]（(session,turn) 同键），锚文同源。**已知偏差（已回报）**：契约 human[] 只含 align 非空行、豁免行不进数组，
-> 单靠它会丢掉「已标 N/A」态——故豁免态仍由既有 T 系列 GET 补一笔（不新增端点；契约若补 human 侧豁免键即可撤掉这一路）。
+> ③ 读态**只读**契约 human[]（(session,turn) 同键），锚文同源；v3 起 human[] 收全部新量表行（含豁免），故单端点即足够——
+> 临时补读 T 系列清单的那一路已按 v3 删除（守卫：补充读不得复活）。
 > ④ 视图吃 v2：selfRatio 真比率（selfTotal=0 显示「分母为 0（缺席）」而非 0%）、代际隔离 human/self **两侧各自独立计数**、
 > 一致性表补**留出集（采纳判据）**一行、**删本地阈值常量改读契约 scale.min**（守卫：不得再出现本地阈值常量）。
 > ⑤ Drawer：「推理态自评」三行 clarity/defense/declaration（取自 turn_read，AL.3 起停写 → 永久显示「未落盘」）→
@@ -143,10 +143,8 @@
 >   控件统一 box-sizing:border-box（否则 min-width 落在内容盒，档位实际 ≈42px/个）。**改前**：min-width:230px 且 content-box → 一排需 ≈340px，
 >   故旧「提交 4」被迫换行到第二排。
 >
-> **未闭环（如实记录，不假装已通）**：写侧双形路由**尚未上线**——当前 POST /m2/turn-annotations 仍是旧形（fit XOR exempt），
-> 故对齐写入在此之前会收到 400（errText 已给人话：「服务端尚未接受对齐量表」）。
-> 另：N/A 豁免走「不带 align」分支时服务端落**旧代际**行（schema_version=1），不进 humanTotal/exempted 而计入 legacyFitRows——
-> 需写路由把判据补成「新量表豁免」（建议：boundary 键在场，或显式 align 键在场即可判新形），UI 侧无需改动。
+> **写侧已闭合（AL.4 跟单，main 86f8dfd）**：POST /m2/turn-annotations 双形同门，判据 = body 带 `boundary` 键（或 `align` 键）——
+> 故本件 POST **恒带 boundary**（N/A 发 `align:null + exempt:1 + boundary`），豁免行落 schema_version=2、进 exempted，不再被代际错判。
 > 测试缝：TurnFitAction 增 defaultOpen 仅供 SSR 断言浮层内容（renderToStaticMarkup 点不了按钮），线上不传、行为不变。
 > 连带：scripts/test-t.mjs 的 T 系列 UI 测试断言了旧文案与 postFit({fit})，随换代改了 5 行（范围例外，已上报）。
 >
