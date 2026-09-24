@@ -683,18 +683,25 @@ export class NautilusStore {
    *
    * 代际分层（决策 §9.3）：按 `align IS NOT NULL` 过滤——旧三行（clarity/defense）`align` 为 NULL，
    * 天然进不来，不会与新 1–5 量表混算；`rubricVersion` 原样带出（进化闭环要知道每行是哪版 rubric 打的）。
+   * AL.4b v2：`rubricVersion` 给定时再按它过滤——**只出当期版（al-v1）的行**，早于 al-v1 的对齐行
+   * 与旧三行一样只进 `selfcheckLegacyRows` 计数（代际不混算，路由 self[] 即此过滤）。
    * @param sourceKind 通道过滤（默认 dsh_tool；http/backfill/mcp 属历史对照，不进当期读数）。
+   * @param rubricVersion 准则版本过滤（默认 undefined = 不过滤；调用方传 nexus 的 `RUBRIC_VERSION`）。
    */
-  listSelfAlignments(sourceKind: 'dsh_tool' | 'http' | 'backfill' | 'mcp' = 'dsh_tool'): Array<{
+  listSelfAlignments(
+    sourceKind: 'dsh_tool' | 'http' | 'backfill' | 'mcp' = 'dsh_tool',
+    rubricVersion?: string,
+  ): Array<{
     extRef: string; turnOrdinal: number; align: number; boundary: string
     declaration: 0 | 1; quote: string | null; evidence: string | null
     rubricVersion: string | null; tsMs: number; agent: string
   }> {
+    const f = rubricVersion === undefined ? { sql: '', params: [] as string[] } : { sql: ' AND rubric_version = ?', params: [rubricVersion] }
     const rows = this.db.prepare(`
       SELECT ext_ref, turn_ordinal, align, boundary, declaration, quote, evidence, rubric_version, ts_ms, agent
-      FROM selfcheck_record WHERE align IS NOT NULL AND source_kind = ?
+      FROM selfcheck_record WHERE align IS NOT NULL AND source_kind = ?${f.sql}
       ORDER BY ts_ms DESC, ext_ref ASC, turn_ordinal ASC
-    `).all(sourceKind) as Array<Record<string, unknown>>
+    `).all(sourceKind, ...f.params) as Array<Record<string, unknown>>
     return rows.map((r) => ({
       extRef: String(r.ext_ref), turnOrdinal: Number(r.turn_ordinal), align: Number(r.align),
       boundary: String(r.boundary ?? 'none'),
@@ -704,6 +711,21 @@ export class NautilusStore {
       rubricVersion: r.rubric_version == null ? null : String(r.rubric_version),
       tsMs: Number(r.ts_ms), agent: String(r.agent),
     }))
+  }
+
+  /**
+   * AL.4b v2 读侧：**非当期代际**的自评行数（`align IS NULL` 或 `rubric_version` ≠ 当期版）。
+   *
+   * 与 human 侧 `turnAlignmentCoverage().legacyFitRows` **对称但各自独立计数**（两张表、两个判据，
+   * 永不合并、永不互相推算，§9.3）——旧三行（clarity/defense）与早于 al-v1 的对齐行都只在这里计数，
+   * 不进 self[] / selfAligned / selfByAlign。
+   * @param rubricVersion 当期版本文本（调用方从 nexus 常量传入——store 不持有 rubric 版本知识）。
+   */
+  selfcheckLegacyRows(rubricVersion: string): number {
+    const r = this.db.prepare(
+      'SELECT COUNT(*) AS n FROM selfcheck_record WHERE align IS NULL OR rubric_version IS NULL OR rubric_version <> ?',
+    ).get(rubricVersion) as { n: number } | undefined
+    return Number(r?.n ?? 0)
   }
 
   /** 该会话的历史工作区归属（session_root；'' = 未归属 → 返回 null，不存空串）。 */
