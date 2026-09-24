@@ -10,7 +10,7 @@
  * 可测形态：核心逻辑为导出纯函数（buildPool / selectFromPool / nextBatchId），
  * CLI 只在**直接运行本文件**时执行——测试直接 import，不 spawn 子进程。
  * 用法：node scripts/annotation-sample.mjs --size=50 [--per-session=5] [--seed=7]
- *        [--kind=sample|recheck] [--root=pointed|all] [--db=<file>] [--dry-run]
+ *        [--kind=sample|recheck] [--root=all] [--db=<file>] [--dry-run]
  */
 import { pathToFileURL } from 'node:url'
 import { homedir } from 'node:os'
@@ -39,9 +39,11 @@ export function shuffle(arr, rnd) {
   return a
 }
 
-/** 组池：points（turnReadsSince 结果）→ 候选（session/turn/bucket/strata）。store 需 lfield/getTurnText/annotatedTurnKeys。 */
-export function buildPool(store, { kind = 'sample', rootMode = 'pointed', points } = {}) {
-  const root = rootMode === 'all' ? undefined : (store.lfieldRoot() || undefined)
+/** 组池：points（turnReadsSince 结果）→ 候选（session/turn/bucket/strata）。store 需 getTurnText/annotatedTurnKeys。
+ *  AL.4a：工作区指向两态已撤除——取数恒为全局口径（root 恒 undefined），不再查已删的指向方法。
+ *  入参不再有 rootMode：旧调用多传的字段被忽略，语义与 --root=all 一致（全局）。 */
+export function buildPool(store, { kind = 'sample', points } = {}) {
+  const root = undefined
   const pts = points ?? store.turnReadsSince(0, root)
   const shapes = new Map(analyze(pts).map((r) => [r.session, r.shape ?? 'none']))
   const { annotated, rechecked } = store.annotatedTurnKeys()
@@ -114,17 +116,19 @@ if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.a
   const perSession = Number(args['per-session'] ?? 5)
   const seed = Number(args.seed ?? 7)
   const kind = args.kind ?? 'sample'
-  const rootMode = args.root ?? 'pointed'
+  const rootMode = args.root ?? 'all'
   const dryRun = args['dry-run'] === true
   if (!Number.isInteger(size) || size < 1) { console.error('--size 必须为正整数'); process.exit(2) }
   if (!['sample', 'recheck'].includes(kind)) { console.error('--kind ∈ sample|recheck'); process.exit(2) }
+  // AL.4a：工作区指向两态已撤除——只认 all（全局）；旧 --root=pointed 响亮失败，不静默拿全局数据冒充指向数据
+  if (rootMode !== 'all') { console.error('--root 只接受 all（AL.4a 已撤除工作区指向两态，取数恒为全局）'); process.exit(2) }
   const dbFile = args.db || resolveDataDir(process.env.DSH_HOME || join(homedir(), '.dsh')).dbFile
   const store = openStore(dbFile)
   try {
-    const { pool } = buildPool(store, { kind, rootMode })
+    const { pool, root } = buildPool(store, { kind })
     const picks = selectFromPool(pool, { size, perSession, seed })
     const batchId = nextBatchId(dbFile, kind)
-    console.log(`池=${pool.length}（kind=${kind} root=${rootMode}）→ 抽=${picks.length} batch=${batchId} seed=${seed}`)
+    console.log(`池=${pool.length}（kind=${kind} root=${root ?? 'all'}）→ 抽=${picks.length} batch=${batchId} seed=${seed}`)
     for (const c of picks) console.log(`  ${c.session} · turn ${c.turn} · ${c.strata}`)
     if (dryRun) { console.log('（dry-run：未入队）'); process.exitCode = 0 } 
     else {
