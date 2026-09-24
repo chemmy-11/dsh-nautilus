@@ -162,13 +162,13 @@ test('nextBatchId: 同日同 kind 序号递增', () => {
   }
 })
 
-// ── T 系列 UI 半区（D-T5 流内契合条 + 曲线人工层标记；SSR 姿势沿 UI 线先例）──────
+// ── T 系列 UI 半区（D-T5 流内对齐条 + 曲线人工层标记；SSR 姿势沿 UI 线先例）──────
 
 const CLIENT_SRC = (f) => join(fileURLToPath(new URL('..', import.meta.url)), 'src', 'client', f)
 // 临时目录必须建在仓库内：bundle external react 靠目录树向上解析到本仓库 node_modules（UI 线先例同款）
 const REPO = fileURLToPath(new URL('..', import.meta.url))
 
-test('turn-annotate：IconActions 行内契合按钮 SSR + 轮序解析 + 注册 def 形状', async () => {
+test('turn-annotate：IconActions 行内对齐按钮 SSR + 轮序解析 + 注册 def 形状', async () => {
   const esbuild = await import('esbuild')
   const rds = await import('react-dom/server')
   const react = await import('react')
@@ -216,16 +216,16 @@ test('turn-annotate：IconActions 行内契合按钮 SSR + 轮序解析 + 注册
     assert.equal(comp, ta.TurnFitAction)
     // ③ SSR：未标注态——行内按钮（无浮层）、data-session/data-turn 齐全、零 Nautilus 背景类
     const act0 = h(react.createElement(ta.TurnFitAction, { sessionId: 'sess-abc', messageId: 'msg-xyz', useChat: (sel) => sel(snap) }))
-    for (const s of ['nt-fitact', '契合', 'data-session="sess-abc"', 'data-turn="5"', 'data-marked="0"']) {
+    for (const s of ['nt-fitact', '对齐', 'data-session="sess-abc"', 'data-turn="5"', 'data-marked="0"']) {
       assert.ok(act0.includes(s), '行内按钮缺内容: ' + s)
     }
     assert.ok(!act0.includes('nt-fitbar'), '旧版条形残留（应只有行内按钮）')
     assert.ok(!act0.includes('nt-fitpop'), '未点击时浮层不该出现')
-    // ④ SSR：已标注态（stub fetch → postFit 落缓存 → 按钮显 档位+样、data-marked=1）
+    // ④ SSR：已标注态（stub fetch → postHumanAlign 落缓存 → 按钮显 档位+样、data-marked=1）
     const origFetch = globalThis.fetch
     globalThis.fetch = async () => ({ ok: true, json: async () => ({ ok: true, origin: 'sample' }) })
     try {
-      const r = await ta.postFit('sess-abc', 5, { fit: 3 })
+      const r = await ta.postHumanAlign('sess-abc', 5, { align: 3 })
       assert.equal(r.ok, true)
       assert.equal(r.origin, 'sample')
     } finally { globalThis.fetch = origFetch }

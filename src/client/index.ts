@@ -18,7 +18,7 @@ import type {} from '@deepseek-ai/dsh-client-ui-sidebar/client' // 拉 sidebar.p
 import { Workbench, WorkbenchIcon, WORKBENCH_ID, WORKBENCH_LABEL } from './workbench'
 // 令牌层（U2：--nt-* 亮暗双主题跟随 DSH）——在 apply() 就注入：侧栏图标在 .nt-wb 之外也要吃到令牌
 import { ensureNautilusTheme } from './theme'
-// 流内契合打分件（T 系列 D-T5）：conversation.chat.turnTail 链槽，契约见 dev-05 §3
+// 流内对齐打分件（T 系列 D-T5）：conversation.chat.assistant-actions 列表槽，契约见 dev-05 §3
 import { registerTurnFit } from './turn-annotate'
 
 /** 路径末段（会话名解析用；不含尾部分隔符）。 */
@@ -89,6 +89,6 @@ export function apply(ctx: {
     ),
     '@dsh-external/dsh-nautilus: workbench panel',
   )
-  // 流内契合打分件（D-T5）：会话轮末打分，标注走同源 POST /m2/turn-annotations（守谷人专用）
+  // 流内对齐打分件（D-T5）：会话轮末判读，标注走同源 POST /m2/turn-annotations（守谷人专用）
   registerTurnFit(ctx)
 }

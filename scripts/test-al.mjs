@@ -406,6 +406,7 @@ const AL_FIXTURE = {
   scale: {
     schemaVersion: 2,
     rubricVersion: 'al-v1',
+    min: 50,
     anchors: [
       { score: 1, text: '1 = 没接住（绕开对方状态、答非所问）' },
       { score: 2, text: '2 = 听到了但只做了字面回应' },
@@ -418,12 +419,14 @@ const AL_FIXTURE = {
     humanTotal: 7, humanAligned: 6, exempted: 1, legacyFitRows: 3,
     byAlign: { '1': 1, '2': 0, '3': 2, '4': 2, '5': 1 },
     byBoundary: { none: 3, substitution: 1, possession: 1, coercion: 0, projection: 1 },
-    selfAligned: 5,
+    selfTotal: 20, selfAligned: 5, selfRatio: 0.25,
     selfByAlign: { '1': 0, '2': 1, '3': 1, '4': 2, '5': 1 },
+    legacySelfRows: 2,
   },
+  // 契约实测：human[] **只含 align 非空行**——豁免行进 coverage.exempted、旧行进 legacyFitRows，都不进数组。
+  // （视图对 align:null 有兜底，但 fixture 必须按契约造，否则测的是不存在的形状。）
   human: [
     { session: 'session-aaaa1111', turn: 3, align: 4, boundary: 'none', exempt: 0, quote: '把问题推深的那句', note: null, origin: 'spot', schemaVersion: 2, annotatedAt: 1000, updatedAt: 2000 },
-    { session: 'session-bbbb2222', turn: 1, align: null, boundary: 'none', exempt: 1, quote: null, note: '纯操作性轮', origin: 'spot', schemaVersion: 2, annotatedAt: 1500, updatedAt: 1600 },
     { session: 'session-cccc3333', turn: 2, align: 5, boundary: 'projection', exempt: 0, quote: '他引用了我那句', note: null, origin: 'sample', schemaVersion: 2, annotatedAt: 1700, updatedAt: 1800 },
   ],
   self: [
@@ -431,7 +434,7 @@ const AL_FIXTURE = {
     { extRef: 'session-cccc3333', turnOrdinal: 2, align: 5, boundary: 'projection', declaration: 0, quote: null, evidence: null, rubricVersion: 'al-v1', tsMs: 1900, agent: 'dsh' },
     { extRef: 'session-dddd4444', turnOrdinal: 1, align: 2, boundary: 'possession', declaration: 0, quote: null, evidence: null, rubricVersion: 'al-v1', tsMs: 1200, agent: 'dsh' },
   ],
-  consistency: { pairs: 2, exact: 0.5, near: 1, kappa: 0.615 },
+  consistency: { pairs: 2, exact: 0.5, near: 1, kappa: 0.615, holdout: { pairs: 1, exact: 1, near: 1, kappa: null } },
 }
 
 /** 客户端半区是 TS：按 test.mjs 同款姿势 esbuild 打临时 ESM（react 必须 external，否则两份实例）。 */
@@ -458,9 +461,12 @@ test('AL.4b 对齐视图 SSR：双路台账 / 分布 / 边界 / 一致性 / 版�
     assert.equal(typeof wb.AlignmentsView, 'function', '对齐视图必须导出')
     const html = h(react.createElement(wb.AlignmentsView, { align: AL_FIXTURE }))
     // ① 双路台账：同轮并列 + Δ = 自评 − 人工 + 只有一侧也列出（不补齐）
-    for (const s of ['双路台账', 'aaaa1111 · t3', 'cccc3333 · t2', 'dddd4444 · t1', '豁免', '把问题推深的那句']) {
+    // 轮次列 = 会话短 id + turn（B5：不再带 tNN 角标）
+    for (const s of ['双路台账', 'aaaa1111 · 3', 'cccc3333 · 2', 'dddd4444 · 1', '把问题推深的那句']) {
       assert.ok(html.includes(s), '台账缺内容: ' + s)
     }
+    assert.ok(!/>t\d+</.test(html), 'B5：台账不得出现 tNN 角标')
+    assert.ok(html.includes('豁免 1'), '豁免计数只在覆盖率里（human[] 按契约不含豁免行）')
     assert.ok(html.includes('title="Δ = 自评 − 人工">-1</td>'), 'aaaa1111 t3：Δ = 3 − 4 = −1')
     assert.ok(html.includes('title="Δ = 自评 − 人工">0</td>'), 'cccc3333 t2：Δ = 5 − 5 = 0')
     // ② 锚文进 title（来源 scale.anchors）
@@ -474,11 +480,13 @@ test('AL.4b 对齐视图 SSR：双路台账 / 分布 / 边界 / 一致性 / 版�
     for (const s of ['边界计数（正交轴）', '<td>替代</td>', '<td>占有</td>', '<td>强迫</td>', '<td>投射</td>']) {
       assert.ok(html.includes(s), '边界缺内容: ' + s)
     }
-    // ⑤ 一致性三指标 + 样本不足纪律（pairs=2 < 50）
-    for (const s of ['<th>对数</th>', '50.0%', '100.0%', '0.615', '只作观察，不得据此调整 rubric']) {
+    // ⑤ 一致性：聚合 + **留出集（采纳判据）** 两行 + 样本不足纪律（pairs=2 < 契约 scale.min=50）
+    for (const s of ['<th>口径</th>', '全部配对', '留出集（采纳判据）', '50.0%', '100.0%', '0.615', '只作观察，不得据此调整 rubric', '阈值取自契约 scale.min']) {
       assert.ok(html.includes(s), '一致性缺内容: ' + s)
     }
-    // ⑥ 版本面 + 术语纪律
+    // ⑥ v2 覆盖三件套：真比率 / 代际两侧各自独立计数
+    for (const s of ['25.0%', '自评 5 / 全局 20 轮', '人工 3 · 自评 2 行']) assert.ok(html.includes(s), 'v2 覆盖缺内容: ' + s)
+    // ⑦ 版本面 + 术语纪律
     for (const s of ['schema_version=2', 'rubric_version=al-v1']) assert.ok(html.includes(s), '版本面缺内容: ' + s)
     assert.ok(!html.includes('契合'), '对齐视图不得出现已废止术语「契合」')
   })
@@ -489,7 +497,7 @@ test('AL.4b 对齐视图：consistency=null → 样本不足；接口缺席 → 
     const none = h(react.createElement(wb.AlignmentsView, { align: { ...AL_FIXTURE, consistency: null } }))
     // 渲染层：React 会把 '<' 转义成 '&lt;'，故此处断语义文本；字面措辞由下面的源码守卫逐字校验
     assert.ok(none.includes('样本不足') && none.includes('一致性三指标不可计算'), '对数 <2 必须显示样本不足（而不是 0）')
-    assert.ok(!none.includes('<th>对数</th>'), '不可计算时不得渲染三指标表（否则看起来像 0）')
+    assert.ok(!none.includes('<th>口径</th>'), '不可计算时不得渲染三指标表（否则看起来像 0）')
     assert.ok(!none.includes('只作观察'), '无对数时不该出现采纳纪律提示（避免暗示有样本）')
     assert.ok(none.includes('双路台账'), '一致性缺席不影响台账照常呈现')
     const absent = h(react.createElement(wb.AlignmentsView, { align: null }))
@@ -518,6 +526,15 @@ test('AL.4b 源码守卫：视图不自造接口 / 术语零残留 / 自评覆�
   assert.ok(!wb.includes('selfcheck.checked'), '不得再读旧口径 selfcheck.checked')
   // 契约措辞逐字在场：pairs<2 时显示「样本不足（<2 对）」，不是 0
   assert.ok(wb.includes('样本不足（<2 对）'), '必须逐字显示「样本不足（<2 对）」')
+  // AL.4c v2：阈值改读契约（不得再留本地常量）、留出集行、自评真比率与两侧代际计数
+  assert.ok(!wb.includes('ALIGN_MIN_PAIRS'), '本地阈值常量必须撤除（改读契约 scale.min）')
+  assert.ok(wb.includes('a.scale.min'), '阈值必须取自契约 scale.min（单点来源）')
+  assert.ok(wb.includes('留出集（采纳判据）'), '一致性必须给出留出集行（决策 §5 采纳判据口）')
+  assert.ok(wb.includes('c.selfRatio'), '自评覆盖必须读契约 selfRatio（真比率，selfTotal=0 时缺席）')
+  assert.ok(wb.includes('c.legacySelfRows'), '代际隔离必须两侧各自独立计数')
+  // A7 两句诚实声明：边界是描述性的、三指标只算 align
+  assert.ok(wb.includes('边界计数是描述性的'), '边界面板必须声明「描述性」')
+  assert.ok(wb.includes('口径仅 align，不含 boundary'), '一致性面板必须声明「只算 align」')
 })
 // ── AL.4b 对齐读侧（GET /m2/alignments：契约形状 / 覆盖与一致性数字 / 路径安全）──────────
 
@@ -780,5 +797,107 @@ test('AL.4b 口径守卫：一致性只有一份实现——脚本 import 共享
   // v2：scale.min 与 self[] 的代际过滤都取共享常量，不许在路由里写死
   assert.ok(rt.includes('min: MIN_PAIRS'), '路由 scale.min 必须取共享阈值常量（UI 读它，不再写本地常量）')
   assert.ok(rt.includes("listSelfAlignments('dsh_tool', RUBRIC_VERSION)"), 'self[] 过滤三件套走共享 rubric 常量')
+})
+
+// ── AL.4c 打分件换代：SSR 可见结果 + 术语全量守卫 ─────────────────────────────
+
+/** 泛化版客户端 bundle 助手（AL.4b 的 withWorkbenchClient 专供工作台；本件按入口文件打包）。 */
+async function withClientModule(entry, fn) {
+  const esbuild = await import('esbuild')
+  const react = await import('react')
+  const rds = await import('react-dom/server')
+  const repo = fileURLToPath(new URL('..', import.meta.url))
+  const dir = mkdtempSync(join(repo, '.al4c-smoke-'))
+  const out = join(dir, 'm.mjs')
+  try {
+    esbuild.buildSync({
+      entryPoints: [fileURLToPath(new URL('../src/client/' + entry, import.meta.url))],
+      bundle: true, format: 'esm', platform: 'node', outfile: out, logLevel: 'silent',
+      external: ['react', 'react/jsx-runtime', 'react-dom', 'react-dom/server'],
+    })
+    const mod = await import(pathToFileURL(out).href)
+    return await fn({ mod, react, h: rds.renderToStaticMarkup })
+  } finally { rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }) }
+}
+
+test('AL.4c 打分件换代：SSR 可见结果（对齐文案 / 无契合 / 无 tNN / 单输入框 / 提交在 N/A 右）', async () => {
+  await withClientModule('turn-annotate.ts', async ({ mod: ta, react, h }) => {
+    const snap = { nodes: new Map([
+      ['k2', { kind: 'turn-tail', location: { kind: 'turn', turn: { turn: 5 } }, data: { turn: 5, closing: { finalNode: { messageId: 'msg-xyz' } } } }],
+      ['k3', { kind: 'turn-tail', location: { kind: 'turn', turn: { turn: 7 } }, data: { turn: 7, closing: { finalNode: { messageId: 'msg-exempt' } } } }],
+    ]) }
+    const useChat = (sel) => sel(snap)
+    // ① 未标注态 + 浮层展开（defaultOpen 是**测试缝**：renderToStaticMarkup 点不了按钮）
+    const open = h(react.createElement(ta.TurnFitAction, { sessionId: 'sess-abc', messageId: 'msg-xyz', useChat, defaultOpen: true }))
+    assert.ok(open.includes('对齐'), 'B1：按钮文案必须是「对齐」')
+    assert.ok(!open.includes('契合'), 'B1：已废止术语「契合」不得出现')
+    assert.ok(!/>t\d+</.test(open), 'B5：渲染结果不得出现 tNN 轮次角标')
+    assert.equal((open.match(/<input/g) ?? []).length, 1, 'B3：只允许一个输入框')
+    assert.ok(!open.includes('<textarea'), 'B3：textarea 必须撤除')
+    assert.ok(open.includes('>提交<'), 'B4：提交按钮文案 = 「提交」')
+    assert.ok(!open.includes('提交 4'), 'B4：旧文案「提交 4」不得残留')
+    // B6：同一排（row nowrap）内 N/A 在提交左侧；边界行在下一排
+    // 注意：不能用 indexOf('边界') 当右界——主按钮 title 里就有「边界正交」，会切出错区间
+    const rowStart = open.indexOf('row nowrap')
+    const rowEnd = open.indexOf('class="row"', rowStart + 1)
+    const rowSeg = open.slice(rowStart, rowEnd > rowStart ? rowEnd : open.length)
+    assert.ok(rowSeg.includes('N/A') && rowSeg.includes('>提交<'), 'B6：N/A 与提交必须在同一排')
+    assert.ok(rowSeg.indexOf('N/A') < rowSeg.indexOf('>提交<'), 'B6：提交必须在 N/A 右侧')
+    // A3：边界五类 + 正交声明 + 非必填（默认「无」）
+    for (const s of ['边界', '替代', '占有', '强迫', '投射']) assert.ok(open.includes(s), 'A3：边界行缺 ' + s)
+    assert.ok(open.includes('与分数正交'), 'A3：边界必须声明与分数正交')
+    assert.ok(open.includes('title="N/A = 无判断对象'), 'A3：N/A 豁免提示保留')
+    // B2/B7：定位与宽度按加总给定（CSS 级——几何不是 SSR 能断的）
+    const src = readFileSync(join(SRC, 'client', 'turn-annotate.ts'), 'utf8')
+    assert.ok(src.includes('bottom:calc(100% + 6px)'), 'B2：浮层必须置于按钮上方')
+    assert.ok(!src.includes('top:calc(100% + 6px)'), 'B2：旧的「按钮下方」定位不得残留')
+    assert.ok(src.includes('max-height:min(70vh,420px)'), 'B2：贴顶兜底 = 限高可滚')
+    assert.ok(src.includes('min-width:272px'), 'B7：最小宽度按加总定值（5×28 + 40 + ~38 + 24 + 20 = 262 → 272）')
+    assert.ok(src.includes('box-sizing:border-box'), 'B7：控件统一 border-box，宽度才可加总')
+    // ② 读态 join（A2）：stub fetch → human[]（带 align）+ T 系列清单（补豁免）→ 两态都可见
+    const origFetch = globalThis.fetch
+    globalThis.fetch = async (url) => ({
+      ok: true,
+      json: async () => String(url).includes('/m2/alignments')
+        ? {
+          revision: 1,
+          scale: { schemaVersion: 2, rubricVersion: 'al-v1', min: 50, anchors: [{ score: 4, text: '4 = 顺着对方状态把问题推深' }] },
+          coverage: {}, human: [{ session: 'sess-abc', turn: 5, align: 4, boundary: 'possession', exempt: 0, quote: '他引用了我那句', note: null, origin: 'sample', schemaVersion: 2, annotatedAt: 1, updatedAt: 2 }],
+          self: [], consistency: null,
+        }
+        : { revision: 1, annotations: [{ session: 'sess-abc', turn: 7, fit: null, exempt: 1, quote: null, note: null, origin: 'spot' }] },
+    })
+    try {
+      ta.ensureAlignLoaded()
+      await new Promise((r) => setTimeout(r, 1))
+    } finally { globalThis.fetch = origFetch }
+    const marked = h(react.createElement(ta.TurnFitAction, { sessionId: 'sess-abc', messageId: 'msg-xyz', useChat, defaultOpen: true }))
+    assert.ok(marked.includes('data-marked="1"'), 'A2：已标态必须来自 human[] join')
+    assert.ok(marked.includes('>4'), 'A2：按钮显示人工判读档位')
+    assert.ok(marked.includes('样'), 'A2：sample 口径徽标保留（诚实显示）')
+    assert.ok(marked.includes('title="4 · 4 = 顺着对方状态把问题推深"'), 'A1：档位 title 锚文取自契约 scale.anchors')
+    const exempt = h(react.createElement(ta.TurnFitAction, { sessionId: 'sess-abc', messageId: 'msg-exempt', useChat }))
+    assert.ok(exempt.includes('N/A'), 'A2：豁免（N/A）态仍可见——human[] 不含豁免行，故保留 T 系列清单补这一笔')
+    // ③ 轮序解析不到 → 不渲染（宁缺勿错）
+    const none = h(react.createElement(ta.TurnFitAction, { sessionId: 'sess-abc', messageId: 'msg-none', useChat }))
+    assert.equal(none, '', '解析不到轮序时不渲染')
+  })
+})
+
+test('AL.4c 术语守卫（全量）：src/client 五文件不得出现已废止术语「契合」', () => {
+  // A6：上一轮只扫「对齐视图切片」，本轮扩到整个客户端半区（渲染文案 + 注释一并清）。
+  const files = readdirSync(join(SRC, 'client')).filter((f) => f.endsWith('.ts'))
+  assert.ok(files.length >= 5, '客户端半区文件数异常：' + String(files.length))
+  const hits = files.filter((f) => readFileSync(join(SRC, 'client', f), 'utf8').includes('契合'))
+  assert.deepEqual(hits, [], '客户端半区仍有「契合」残留：' + hits.join(', '))
+  // 量表锚文的单点来源 = 契约 scale.anchors（本地 0–4 量表常量必须撤除）
+  const ta = readFileSync(join(SRC, 'client', 'turn-annotate.ts'), 'utf8')
+  assert.ok(!ta.includes('FIT_SCALE'), '本地量表常量 FIT_SCALE 必须撤除')
+  assert.ok(ta.includes('scale') && ta.includes('anchors'), '打分件必须从契约读锚文')
+  assert.ok(!ta.includes('fit: number'), '打分件不得再传 fit 形状（写路径切 align 双形）')
+  // 写路径：带 align / 仅 exempt（双形），不新开端点
+  assert.ok(ta.includes('postHumanAlign'), '写路径必须换成对齐语义的函数')
+  assert.ok(ta.includes('{ exempt: 1 }'), 'N/A 豁免路径保留（仅 exempt → 旧形豁免分支）')
+  assert.ok(!ta.includes('invalid:align='), '不得编造契约外的错误码映射')
 })
 
