@@ -96,7 +96,7 @@
 
 ---
 
-## 3. 信息架构（四视图 + 抽屉 + era 条）
+## 3. 信息架构（五视图 + 抽屉 + era 条）
 
 > **2026-09-28 AL.4a 收敛（UI 线，feat/ui）**：工作台视图由六收敛为**四**（总览 / 告警 / 曲线 / 报告）——
 > 「假设台账」「预言检验表」两视图连同其标注读写层（`GET/POST /m2/annotations`、`PROPHECY_SEED`、标注 UI）整块撤除；
@@ -104,6 +104,15 @@
 > 因此本面板**已无任何写路径**；曲线（未命中率 / 时长 / tps / 累计输入）与白盒 analysis（形态 / τ_e）**全部保留**。
 > `annotation` / `lfield_config` / `session_root` 三表**保留不 drop**（红线 3，历史数据不删）。
 > 下列原型描述保留为设计沿革，落地以 `src/client/workbench.ts` 为准。
+
+> **2026-09-28 AL.4b 增补（UI 线，feat/ui）**：工作台新增**「对齐」视图**（位次：总览之后），视图数四 → 五。
+> 只读消费主线冻结的读侧契约 GET /api/nautilus/m2/alignments，**不自造任何接口**（源码守卫：该视图切片内出现的 /api/ 路径只允许这一个）。
+> 五块内容：**双路台账**（人工 (session,turn) 与自评 (ext_ref,turn_ordinal) 同键并列；列 轮次 / 人工 / 自评 / Δ / 边界 / 引文备注 / 时间；只有一侧有行的也列出）·
+> **分布**（人工与自评各一组 align 1–5 计数柱；legacyFitRows 单列为「旧 0–4 档行（代际，不混算）」）·
+> **边界计数**（无 / 替代 / 占有 / 强迫 / 投射，正交轴，不与分数合并）· **一致性**（pairs / 完全一致率 / 相邻档一致率 / 二次加权 κ；consistency 为 null 时显示「样本不足（<2 对）」而非 0）·
+> **版本面**（schema_version=2 · rubric_version=al-v1；1–5 锚文进 hover title）。pairs < 50 时显式标注「只作观察，不得据此调整 rubric」（决策 §5 纪律）。
+> 术语纪律：视图内**不得出现「契合」**（该词已随量表换代废止，代际行改称「旧 0–4 档行」）。
+> 同步修一条真实回归：面板「自评覆盖」原读 turn_read.clarity（AL.3 起停写，会静默停更）→ 改读 alignments 的 coverage.selfAligned。
 
 ### 3.0 宿主 UI 入口契约（2026-09-13 对 0.1.5-rc.2 安装树实测，slot 声明以 in-box 包 `lib/types` 为权威）
 
@@ -255,7 +264,7 @@
 
 ## 6. 数据契约与 API（对齐 §5 + 现有面）
 
-**现有**（`src/routes.ts`，实现时逐条核对，不凭本文档）：`GET m2/state` · `GET m2/analysis` · `GET m2/turn-text` · `GET/POST m2/turn-annotations` · `POST selfcheck` · pulse 四条（`state`/`series`/`control`/`alerts`）。**演进**：vault 观测腿 2026-09-27 下线删除 `GET state` / `POST action` / `GET+POST vault`；**2026-09-28 AL.4a** 再删 `GET/POST m2/annotations`（预言标注）与 `GET/POST lfield`（工作区指向）——三张相关表保留不 drop。
+**现有**（`src/routes.ts`，实现时逐条核对，不凭本文档）：`GET m2/state` · `GET m2/analysis` · `GET m2/turn-text` · `GET/POST m2/turn-annotations` · `POST selfcheck` · pulse 四条（`state`/`series`/`control`/`alerts`）· **`GET /api/nautilus/m2/alignments`（AL.4b 读侧契约已冻结，由主线实现；UI 已按此写视图）**。**演进**：vault 观测腿 2026-09-27 下线删除 `GET state` / `POST action` / `GET+POST vault`；**2026-09-28 AL.4a** 再删 `GET/POST m2/annotations`（预言标注）与 `GET/POST lfield`（工作区指向）——三张相关表保留不 drop。
 
 **新增提案**（轮次人工标注；命名沿用 `m2` 前缀，路由进 `API_PREFIX` 集中常量）：
 

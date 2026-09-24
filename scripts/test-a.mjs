@@ -679,7 +679,7 @@ test('告警视图 SSR + 徽标纯函数：台账/裁决/报告状态/规则表�
 test('告警视图接线：ViewKey/侧栏标签/取数口与图标徽标（源码级守卫）', () => {
   const wb = readFileSync(join(REPO_DIR, 'src', 'client', 'workbench.ts'), 'utf8')
   assert.ok(wb.includes("alerts: '告警'"), '视图标签必须登记')
-  assert.ok(wb.includes("'overview', 'alerts', 'curve'"), '分段控件必须含告警')
+  assert.ok(wb.includes("'overview', 'alignments', 'alerts', 'curve'"), '分段控件必须含告警（AL.4b：对齐视图插在总览之后）')
   assert.ok(wb.includes("useJson<AlertsState>('/api/nautilus/pulse/alerts?limit=50'"), '工作台取数口')
   assert.ok(wb.includes('useAlertBadge()'), '图标徽标接线（活跃即闪红）')
   assert.ok(wb.includes('nt-icon-alert'), '图标闪红类')

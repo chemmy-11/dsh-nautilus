@@ -12,7 +12,7 @@ import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 
 import { runMigrations, readUserVersion } from '../lib/migrations.js'
 import { openStore } from '../lib/store.js'
@@ -224,4 +224,126 @@ test('AL.4a 保留面守卫：曲线 / 白盒 analysis / 自评 ingest 未被误
   for (const keep of ['/m2/state', '/m2/analysis', '/m2/turn-text', '/selfcheck', '/m2/turn-annotations']) {
     assert.ok(rt.includes(keep), 'routes.ts 丢了保留路由：' + keep)
   }
+})
+
+// ── AL.4b 对齐视图：SSR 渲染 + 源码守卫（契约 = 主线冻结的 /m2/alignments）────────
+
+/** 假数据（fixture 驱动，不依赖真路由存在）：覆盖双路台账 / 分布 / 边界 / 一致性 / 代际隔离。 */
+const AL_FIXTURE = {
+  revision: 1,
+  scale: {
+    schemaVersion: 2,
+    rubricVersion: 'al-v1',
+    anchors: [
+      { score: 1, text: '1 = 没接住（绕开对方状态、答非所问）' },
+      { score: 2, text: '2 = 听到了但只做了字面回应' },
+      { score: 3, text: '3 = 接住了，推进有限' },
+      { score: 4, text: '4 = 顺着对方状态把问题推深' },
+      { score: 5, text: '5 = 推到了改变下一步动作' },
+    ],
+  },
+  coverage: {
+    humanTotal: 7, humanAligned: 6, exempted: 1, legacyFitRows: 3,
+    byAlign: { '1': 1, '2': 0, '3': 2, '4': 2, '5': 1 },
+    byBoundary: { none: 3, substitution: 1, possession: 1, coercion: 0, projection: 1 },
+    selfAligned: 5,
+    selfByAlign: { '1': 0, '2': 1, '3': 1, '4': 2, '5': 1 },
+  },
+  human: [
+    { session: 'session-aaaa1111', turn: 3, align: 4, boundary: 'none', exempt: 0, quote: '把问题推深的那句', note: null, origin: 'spot', schemaVersion: 2, annotatedAt: 1000, updatedAt: 2000 },
+    { session: 'session-bbbb2222', turn: 1, align: null, boundary: 'none', exempt: 1, quote: null, note: '纯操作性轮', origin: 'spot', schemaVersion: 2, annotatedAt: 1500, updatedAt: 1600 },
+    { session: 'session-cccc3333', turn: 2, align: 5, boundary: 'projection', exempt: 0, quote: '他引用了我那句', note: null, origin: 'sample', schemaVersion: 2, annotatedAt: 1700, updatedAt: 1800 },
+  ],
+  self: [
+    { extRef: 'session-aaaa1111', turnOrdinal: 3, align: 3, boundary: 'substitution', declaration: 0, quote: null, evidence: '自评依据', rubricVersion: 'al-v1', tsMs: 2100, agent: 'dsh' },
+    { extRef: 'session-cccc3333', turnOrdinal: 2, align: 5, boundary: 'projection', declaration: 0, quote: null, evidence: null, rubricVersion: 'al-v1', tsMs: 1900, agent: 'dsh' },
+    { extRef: 'session-dddd4444', turnOrdinal: 1, align: 2, boundary: 'possession', declaration: 0, quote: null, evidence: null, rubricVersion: 'al-v1', tsMs: 1200, agent: 'dsh' },
+  ],
+  consistency: { pairs: 2, exact: 0.5, near: 1, kappa: 0.615 },
+}
+
+/** 客户端半区是 TS：按 test.mjs 同款姿势 esbuild 打临时 ESM（react 必须 external，否则两份实例）。 */
+async function withWorkbenchClient(fn) {
+  const esbuild = await import('esbuild')
+  const react = await import('react')
+  const rds = await import('react-dom/server')
+  const repo = fileURLToPath(new URL('..', import.meta.url))
+  const dir = mkdtempSync(join(repo, '.align-smoke-'))
+  const out = join(dir, 'wb.mjs')
+  try {
+    esbuild.buildSync({
+      entryPoints: [fileURLToPath(new URL('../src/client/workbench.ts', import.meta.url))],
+      bundle: true, format: 'esm', platform: 'node', outfile: out, logLevel: 'silent',
+      external: ['react', 'react/jsx-runtime', 'react-dom', 'react-dom/server'],
+    })
+    const wb = await import(pathToFileURL(out).href)
+    return await fn({ wb, react, h: rds.renderToStaticMarkup })
+  } finally { rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }) }
+}
+
+test('AL.4b 对齐视图 SSR：双路台账 / 分布 / 边界 / 一致性 / 版本面（fixture 不依赖真路由）', async () => {
+  await withWorkbenchClient(async ({ wb, react, h }) => {
+    assert.equal(typeof wb.AlignmentsView, 'function', '对齐视图必须导出')
+    const html = h(react.createElement(wb.AlignmentsView, { align: AL_FIXTURE }))
+    // ① 双路台账：同轮并列 + Δ = 自评 − 人工 + 只有一侧也列出（不补齐）
+    for (const s of ['双路台账', 'aaaa1111 · t3', 'cccc3333 · t2', 'dddd4444 · t1', '豁免', '把问题推深的那句']) {
+      assert.ok(html.includes(s), '台账缺内容: ' + s)
+    }
+    assert.ok(html.includes('title="Δ = 自评 − 人工">-1</td>'), 'aaaa1111 t3：Δ = 3 − 4 = −1')
+    assert.ok(html.includes('title="Δ = 自评 − 人工">0</td>'), 'cccc3333 t2：Δ = 5 − 5 = 0')
+    // ② 锚文进 title（来源 scale.anchors）
+    assert.ok(html.includes('title="5 = 推到了改变下一步动作"'), '锚文必须进 hover title')
+    assert.ok(html.includes('title="align 4 · 4 = 顺着对方状态把问题推深"'), '台账分数格的 title 也要带锚文')
+    // ③ 分布：两组独立柱 + 代际行隔离
+    for (const s of ['分布（align 1–5）', '人工（6 行有分）', '自评（5 行有分）', '旧 0–4 档行', '不混算']) {
+      assert.ok(html.includes(s), '分布缺内容: ' + s)
+    }
+    // ④ 边界：五类中文计数（正交轴）
+    for (const s of ['边界计数（正交轴）', '<td>替代</td>', '<td>占有</td>', '<td>强迫</td>', '<td>投射</td>']) {
+      assert.ok(html.includes(s), '边界缺内容: ' + s)
+    }
+    // ⑤ 一致性三指标 + 样本不足纪律（pairs=2 < 50）
+    for (const s of ['<th>对数</th>', '50.0%', '100.0%', '0.615', '只作观察，不得据此调整 rubric']) {
+      assert.ok(html.includes(s), '一致性缺内容: ' + s)
+    }
+    // ⑥ 版本面 + 术语纪律
+    for (const s of ['schema_version=2', 'rubric_version=al-v1']) assert.ok(html.includes(s), '版本面缺内容: ' + s)
+    assert.ok(!html.includes('契合'), '对齐视图不得出现已废止术语「契合」')
+  })
+})
+
+test('AL.4b 对齐视图：consistency=null → 样本不足；接口缺席 → 显式缺席（都不写 0）', async () => {
+  await withWorkbenchClient(async ({ wb, react, h }) => {
+    const none = h(react.createElement(wb.AlignmentsView, { align: { ...AL_FIXTURE, consistency: null } }))
+    // 渲染层：React 会把 '<' 转义成 '&lt;'，故此处断语义文本；字面措辞由下面的源码守卫逐字校验
+    assert.ok(none.includes('样本不足') && none.includes('一致性三指标不可计算'), '对数 <2 必须显示样本不足（而不是 0）')
+    assert.ok(!none.includes('<th>对数</th>'), '不可计算时不得渲染三指标表（否则看起来像 0）')
+    assert.ok(!none.includes('只作观察'), '无对数时不该出现采纳纪律提示（避免暗示有样本）')
+    assert.ok(none.includes('双路台账'), '一致性缺席不影响台账照常呈现')
+    const absent = h(react.createElement(wb.AlignmentsView, { align: null }))
+    assert.ok(absent.includes('对齐接口不可用'), '接口缺席必须显式（不静默空白）')
+    assert.ok(absent.includes('不写 0 假读数'), '缺席态口径')
+  })
+})
+
+test('AL.4b 源码守卫：视图不自造接口 / 术语零残留 / 自评覆盖口径已换', () => {
+  const wb = readFileSync(join(SRC, 'client', 'workbench.ts'), 'utf8')
+  const start = wb.indexOf('// ── 视图：对齐台账')
+  const end = wb.indexOf('// ── 根组件')
+  assert.ok(start > 0 && end > start, '对齐视图切片锚点必须存在（注释被改名？）')
+  const view = wb.slice(start, end)
+  assert.ok(view.includes('export function AlignmentsView'), '切片必须含视图本体')
+  assert.ok(!view.includes('契合'), '对齐视图不得出现已废止术语「契合」（代际行改称「旧 0–4 档行」）')
+  const apis = [...new Set([...view.matchAll(/\/api\/[A-Za-z0-9/_-]+/g)].map((m) => m[0]))]
+  assert.deepEqual(apis, ['/api/nautilus/m2/alignments'], '视图不得自造别的 API（读侧契约冻结）')
+  // 接线：ViewKey 登记 / 总览之后 / 唯一取数口 / 视图分派
+  assert.ok(wb.includes("alignments: '对齐'"), 'VIEW_LABEL 必须登记对齐')
+  assert.ok(wb.includes("'overview', 'alignments', 'alerts'"), '顶栏 seg 位置：总览之后')
+  assert.ok(wb.includes("useJson<AlignmentsState>('/api/nautilus/m2/alignments'"), '工作台取数口')
+  assert.ok(wb.includes('createElement(AlignmentsView, { align: alignments })'), '视图分派')
+  // 自评覆盖口径已换（真实回归：turn_read.clarity 自 AL.3 起停写，旧口径会静默停更）
+  assert.ok(wb.includes('props.align.coverage.selfAligned'), '自评覆盖必须改读 alignments 的 self 计数')
+  assert.ok(!wb.includes('selfcheck.checked'), '不得再读旧口径 selfcheck.checked')
+  // 契约措辞逐字在场：pairs<2 时显示「样本不足（<2 对）」，不是 0
+  assert.ok(wb.includes('样本不足（<2 对）'), '必须逐字显示「样本不足（<2 对）」')
 })
