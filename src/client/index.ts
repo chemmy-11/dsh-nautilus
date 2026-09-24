@@ -16,6 +16,8 @@ import type { MainPanelId } from '@deepseek-ai/dsh-client-ui-layout/client' // �
 import type {} from '@deepseek-ai/dsh-client-ui-sidebar/client' // 拉 sidebar.panellist SlotMap 类型
 // 工作台（全局面板）：五视图 + 抽屉 + era 条，规格见 docs/2-dev/nautilus-dev-02-ui-workbench.md
 import { Workbench, WorkbenchIcon, WORKBENCH_ID, WORKBENCH_LABEL } from './workbench'
+// 令牌层（U2：--nt-* 亮暗双主题跟随 DSH）——在 apply() 就注入：侧栏图标在 .nt-wb 之外也要吃到令牌
+import { ensureNautilusTheme } from './theme'
 // 流内契合打分件（T 系列 D-T5）：conversation.chat.turnTail 链槽，契约见 dev-05 §3
 import { registerTurnFit } from './turn-annotate'
 
@@ -38,6 +40,7 @@ export function apply(ctx: {
   }
   layout: { selectPanel(id: unknown): void }
 }): void {
+  ensureNautilusTheme()
   // 会话名解析（dsh 工作区名）：sessions 为可选服务（dsh-api-session-controller），按 AGENTS.md 用 ctx.get。
   // 读取面（0.1.5-rc.2 实证，task-board 同款）：sessions.list.getSnapshot() → SessionListState
   //   { ids, byId: Record<sessionId, SessionSummary>, current, phase }；

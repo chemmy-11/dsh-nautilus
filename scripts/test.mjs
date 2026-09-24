@@ -6,7 +6,7 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, utimesSync, readFileSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, utimesSync, readFileSync, readdirSync } from 'node:fs'
 import vm from 'node:vm'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -495,9 +495,12 @@ test('workbench 渲染冒烟：真实 react SSR 渲染五视图 + L 场面板并
     for (const s of ['导出 JSON 快照', '四、白盒分析', '人工标注']) assert.ok(rp.includes(s), '报告缺内容: ' + s)
     // ④ 根组件：数据全缺席也不得抛错（首帧渲染路径）
     const root = h(el(wb.Workbench, { onExitToConversation: noop }))
-    for (const s of ['NAUTILUS', '总览', '曲线', '假设', '预言', '报告', '心跳', '返回会话']) {
+    for (const s of ['NAUTILUS', '总览', '曲线', '假设', '预言', '报告', '心跳', '返回会话', '主题', '跟随', '浅色', '深色']) {
       assert.ok(root.includes(s), '根组件缺内容: ' + s)
     }
+    // U2 主题档位：根属性是覆盖把手（host 档不落覆盖块 → 走 body 级跟随块）
+    assert.ok(root.includes('data-nt-theme="host"'), '工作台根必须带 data-nt-theme（手动档覆盖把手）')
+    assert.ok(root.includes('nt-sch-l') && root.includes('nt-sch-d'), '跟随档必须同时给出浅/暗两版标签（纯 CSS 切换）')
     // ⑤ 错误隔离：SSR 不执行错误边界（React 限制），故按「静态派生 + 状态级」校验回退 UI
     const boundary = new wb.ViewBoundary({ label: 'X' })
     assert.deepEqual(wb.ViewBoundary.getDerivedStateFromError(new Error('boom')), { error: 'Error: boom' })
@@ -858,4 +861,95 @@ test('charts 原语纪律：无 hooks（可像 Stat/Spark 一样直调）+ --nt-
   const stripped = src.replace(/var\(--nt-[a-z0-9-]+\s*,[^)]*\)/gi, '')
   const hex = stripped.match(/#[0-9a-fA-F]{3,8}\b/g)
   assert.deepEqual(hex, null, 'charts.ts 在 --nt-* 令牌 fallback 之外出现硬编码色: ' + JSON.stringify(hex))
+})
+
+// ── U2 令牌层：--nt-* 亮暗双主题跟随 DSH（2026-10-02 落地）──────────────────────
+// 背景：令牌层此前**只有引用没有定义**（153 处 var(--nt-*, 浅色兜底) 全部吃兜底），插件恒为浅色。
+// 这一组测试守的是「四态齐全 + 亮暗确实分叉 + 手动档不泄漏宿主别名 + 零硬编码色」。
+
+test('主题令牌层：四块齐全 / 亮暗分叉 / 覆盖档不吃宿主别名 / 令牌表无死条目', async () => {
+  const esbuild = await import('esbuild')
+  const repo = fileURLToPath(new URL('..', import.meta.url))
+  const dir = mkdtempSync(join(repo, '.theme-smoke-'))
+  const out = join(dir, 'theme.mjs')
+  let th
+  try {
+    // react 必须 external（两份实例会让 JSX/hooks 崩），platform=node 以便直接 import
+    esbuild.buildSync({
+      entryPoints: [fileURLToPath(new URL('../src/client/theme.ts', import.meta.url))],
+      bundle: true, format: 'esm', platform: 'node', outfile: out, logLevel: 'silent',
+      external: ['react', 'react/jsx-runtime', 'react-dom'],
+    })
+    th = await import(pathToFileURL(out).href)
+  } finally {
+    rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
+  }
+
+  const css = th.ntThemeCss()
+  // 四块：①②跟随（亮/暗）由宿主 body 属性驱动，③④覆盖（浅/深）由工作台根属性驱动
+  const blocks = new Map()
+  for (const m of css.matchAll(/([^{}\n]+)\{([^{}]*)\}/g)) blocks.set(m[1].trim(), m[2])
+  const light = blocks.get('body')
+  const dark = blocks.get('body[data-ds-dark-theme]')
+  const ovLight = blocks.get('.nt-wb[data-nt-theme="light"]')
+  const ovDark = blocks.get('.nt-wb[data-nt-theme="dark"]')
+  for (const [name, b] of [['body（跟随·浅）', light], ['body[data-ds-dark-theme]（跟随·暗）', dark], ['.nt-wb[data-nt-theme="light"]', ovLight], ['.nt-wb[data-nt-theme="dark"]', ovDark]]) {
+    assert.ok(typeof b === 'string' && b.length > 0, '令牌层缺块: ' + name)
+  }
+  const namesOf = (b) => [...b.matchAll(/(--nt-[a-z0-9-]+)\s*:/g)].map((m) => m[1])
+  const names = namesOf(light)
+  assert.ok(names.length >= 14, '令牌数异常（表被删空？）: ' + names.length)
+  for (const [label, b] of [['跟随·暗', dark], ['覆盖·浅', ovLight], ['覆盖·暗', ovDark]]) {
+    assert.deepEqual(namesOf(b), names, label + ' 块令牌集合与跟随·浅不一致（漏一个 = 该态下组件吃硬编码兜底）')
+  }
+
+  const val = (b, n) => (b.match(new RegExp(n + ':([^;]+)')) || [])[1]
+  // 暗色必须真的分叉：只允许静态朱红与字体栈同值（否则「暗色主题」是假的）
+  const same = names.filter((n) => val(light, n) === val(dark, n))
+  assert.deepEqual(same.sort(), ['--nt-accent', '--nt-font'], '亮暗同值令牌只允许静态朱红与字体栈，实得: ' + same.join(','))
+
+  // 跟随档：有宿主别名的必须走 var(--dsw-alias-*, S4 兜底)；自持令牌不得引用宿主别名
+  for (const t of th.NT_TOKENS) {
+    const d = val(light, t.name)
+    assert.ok(typeof d === 'string' && d.length > 0, '令牌未声明: ' + t.name)
+    if (t.dsh === undefined) assert.ok(!d.includes('--dsw-alias-'), t.name + ' 无宿主别名却引用了宿主令牌')
+    else assert.ok(d.startsWith('var(' + t.dsh + ','), t.name + ' 未绑定宿主别名 ' + t.dsh + '，实得 ' + d)
+  }
+  // 覆盖档：一律字面值——手动档的语义就是「不听宿主的」（混入别名会被宿主值反压、手动档失效）
+  for (const [label, b] of [['覆盖·浅', ovLight], ['覆盖·暗', ovDark]]) {
+    assert.ok(!b.includes('--dsw-alias-'), label + ' 块混入宿主别名')
+  }
+  // 覆盖档值必须逐条等于令牌表的 S4 定版值（手动档 = 原型视觉，不受宿主 palette 漂移影响）
+  for (const t of th.NT_TOKENS) {
+    assert.equal(val(ovLight, t.name), t.light, '覆盖·浅与表值不符: ' + t.name)
+    assert.equal(val(ovDark, t.name), t.dark, '覆盖·暗与表值不符: ' + t.name)
+  }
+  // 宿主暗色属性名是硬契约（@deepseek-ai/dsh-client-ui-layout theme-presenter: DARK_ATTRIBUTE）
+  assert.ok(css.includes('body[data-ds-dark-theme]'), '跟随暗块必须以宿主投影的 body 属性为选择器')
+  assert.ok(css.indexOf('body[data-ds-dark-theme]') > css.indexOf('body{'), '暗块必须在亮块之后（同选择器层序决定胜出）')
+})
+
+test('客户端取色纪律：theme.ts 是唯一硬编码色处 + 令牌表无死令牌 + 产物内含令牌层', () => {
+  const dir = fileURLToPath(new URL('../src/client', import.meta.url))
+  const files = readdirSync(dir).filter((f) => f.endsWith('.ts') && f !== 'theme.ts')
+  assert.ok(files.length >= 4, '客户端半区文件清单异常: ' + files.join(','))
+  const srcOf = new Map(files.map((f) => [f, readFileSync(join(dir, f), 'utf8')]))
+  const strip = (s) => s.replace(/var\(--(?:nt|dsw-alias)-[a-z0-9-]+\s*,[^)]*\)/gi, '')
+  for (const [f, src] of srcOf) {
+    const bad = strip(src).match(/#[0-9a-fA-F]{3,8}\b|rgba?\(|hsla?\(/g)
+    assert.deepEqual(bad, null, f + ' 在 --nt-* 令牌 fallback 之外出现硬编码色: ' + JSON.stringify(bad))
+  }
+  // 反向守卫：令牌表里声明了却无人消费的条目 = 死令牌（会漂移成假规格）
+  const thSrc = readFileSync(join(dir, 'theme.ts'), 'utf8')
+  const consumed = [...srcOf.values()].join('\n')
+  const declared = [...thSrc.matchAll(/name: '(--nt-[a-z0-9-]+)'/g)].map((m) => m[1])
+  assert.ok(declared.length >= 14, '令牌表解析异常: ' + declared.length)
+  const dead = declared.filter((n) => !consumed.includes('var(' + n))
+  assert.deepEqual(dead, [], '死令牌（声明了但客户端无人消费）: ' + dead.join(','))
+
+  // 产物面：令牌层与主题档位真的进了 bundle（构建漏挂新模块时，本行是唯一哨兵）
+  const bundle = readFileSync(new URL('../lib/client.js', import.meta.url), 'utf8')
+  for (const s of ['body[data-ds-dark-theme]', '--dsw-alias-border-l2', 'data-nt-theme', 'nt-theme-style']) {
+    assert.ok(bundle.includes(s), 'lib/client.js 缺令牌层标记: ' + s)
+  }
 })

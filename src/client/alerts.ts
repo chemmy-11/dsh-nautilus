@@ -166,6 +166,8 @@ const ALERT_CSS = [
   '.nt-al-chip{border:1px solid var(--nt-border,#d9d9d5);padding:1px 6px;font-size:10px;letter-spacing:1px}',
   '.nt-al-chip.red{border-color:var(--nt-accent,#e6321e);color:var(--nt-accent,#e6321e)}',
   '.nt-al-chip.grey{color:var(--nt-faint,#9a9a95)}',
+  // 正常 / 成功态走 --nt-ok（S4 纪律：需要人工注意才用朱红；固定深绿在暗色下不可读，故令牌化）
+  '.nt-tag.ok{border-color:var(--nt-ok,#1a7f37);color:var(--nt-ok,#1a7f37)}',
   '.nt-al-state{font-variant-numeric:tabular-nums}',
   '.nt-al-state.hot{color:var(--nt-accent,#e6321e)}',
   '.nt-al-verdict{display:flex;gap:4px;align-items:center;flex-wrap:wrap}',
@@ -245,7 +247,7 @@ export function AlertsView(props: AlertsViewProps): ReactNode {
             createElement('td', null, ruleText(r)),
             createElement('td', null, createElement('span', { className: 'nt-al-state' + (hot ? ' hot' : '') }, fmtNum(st?.lastValue ?? null))),
             createElement('td', null, r.enabled
-              ? createElement('span', { className: 'nt-tag' + (hot ? ' red' : '') }, hot ? '活跃' : (st?.exceeding === true ? '越线计时中' : '正常'))
+              ? createElement('span', { className: 'nt-tag' + (hot ? ' red' : (st?.exceeding === true ? '' : ' ok')) }, hot ? '活跃' : (st?.exceeding === true ? '越线计时中' : '正常'))
               : createElement('span', { className: 'nt-tag' }, '已停用')),
             createElement('td', null, st?.firstExceededAt === null || st === null ? '—' : fmtTime(st.firstExceededAt)))
         })),

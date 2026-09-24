@@ -5,12 +5,15 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Nautilus 工作台 · S4 瑞士制图 · 交互原型</title>
 <style>
-/* ================= 令牌层（--nt-*：默认值映射宿主 --dsw-alias-*，亮暗双主题） ================= */
+/* ================= 令牌层（--nt-*：墨/线绑宿主 --dsw-alias-*，面层自持；亮暗双主题） ================= */
+/* 本块与实现同源：src/client/theme.ts 的 NT_TOKENS（2026-09-24 对齐）。 */
+/* 实现里 --nt-gray 暂不入表（无消费者），原型保留给自己图例用；--nt-shadow 是原型专有的卡片静置影。 */
 :root{
   --nt-bg:#f2f2f0; --nt-panel:#ffffff; --nt-panel2:#f7f7f5; --nt-border:#d9d9d5; --nt-border2:#c8c8c3;
   --nt-text:#101010; --nt-dim:#5f5f5c; --nt-faint:#9a9a95;
   --nt-accent:#e6321e; --nt-ok:#1a7f37;
   --nt-ink:#101010; --nt-gray:#9a9a95;
+  --nt-hover:rgba(20,20,18,.05); --nt-mask:rgba(0,0,0,.28); --nt-shadow-color:rgba(0,0,0,.16);
   --nt-font:'Helvetica Neue',Helvetica,Arial,'Segoe UI','Microsoft YaHei',sans-serif;
   --nt-shadow:0 1px 2px rgba(20,20,18,.05);
 }
@@ -19,6 +22,7 @@ body.dark{
   --nt-text:#f2f2f0; --nt-dim:#a9a9a4; --nt-faint:#70706b;
   --nt-ok:#3fb950;
   --nt-ink:#f2f2f0; --nt-gray:#70706b;
+  --nt-hover:rgba(255,255,255,.08); --nt-mask:rgba(0,0,0,.5); --nt-shadow-color:rgba(0,0,0,.55);
   --nt-shadow:none;
 }
 *{box-sizing:border-box}
@@ -167,7 +171,7 @@ button,input,select{font-family:inherit}
 #drawer .d-head .x{margin-left:auto}
 #drawer .d-body{flex:1;overflow:auto;padding:14px 16px}
 #drawer h5{font-size:10px;letter-spacing:2px;color:var(--nt-faint);margin:16px 0 6px;text-transform:uppercase}
-#scrim{position:fixed;inset:0;background:rgba(10,10,10,.32);z-index:50;display:none}
+#scrim{position:fixed;inset:0;background:var(--nt-mask);z-index:50;display:none}
 #scrim.show{display:block}
 
 /* era 弹层 */
