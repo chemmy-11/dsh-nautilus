@@ -6,12 +6,14 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync, mkdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
+import { gunzipSync } from 'node:zlib'
 
 import { AlertEngine, DEFAULT_ALERT_RULES, alertIdFor, alertMetricExpr, validateAlertRules } from '../lib/pulse/alerts.js'
+import { computeCoverage, freezeSnapshot, pruneSnapshots, samplesToJsonl, snapshotStats } from '../lib/pulse/snapshot.js'
 import { openPulseStore } from '../lib/pulse/store.js'
 import { openStore } from '../lib/store.js'
 
@@ -272,10 +274,121 @@ test('pulse/alerts 路由：403 同源门 + 规则/运行态/台账结构 + 真�
     assert.ok(ev.peakValue >= mem.threshold, '峰值与阈值同口径')
     assert.ok(String(ev.id).startsWith('a-'), '台账 id = a-<base36>-<ruleId>')
     assert.equal(snap.active.length, 1, '未解除告警出现在 active')
+    // A.2：确认那一刻必须真的冻结证据（不是「状态里有、磁盘上没有」）
+    const snapDir = join(tmp, 'alerts', ev.id)
+    assert.equal(existsSync(join(snapDir, 'samples.jsonl.gz')), true, '快照 gz 必须落盘')
+    const meta = JSON.parse(readFileSync(join(snapDir, 'meta.json'), 'utf8'))
+    assert.ok(meta.rows > 0, '真库里必然有窗口内采样')
+    assert.equal(meta.ruleId, 'mem-occupancy')
+    assert.equal(meta.op, 'gte')
+    assert.equal(meta.alertId, ev.id)
+    assert.ok(String(ev.snapshotHash).length === 64, 'sha256 指纹落台账')
+    assert.equal(ev.snapshotPath, join(snapDir, 'samples.jsonl.gz'))
+    const ledgerText = readFileSync(join(tmp, 'alerts', 'ledger.md'), 'utf8')
+    assert.ok(ledgerText.includes('确认') && ledgerText.includes('冻结'), '台账人读日志含确认与冻结两行')
+    assert.ok(snap.evidence !== null && snap.evidence.dirs >= 1, '证据目录现状随快照一起可见')
     await fiber.dispose()
   } finally {
     if (prevHome === undefined) delete process.env.DSH_HOME
     else process.env.DSH_HOME = prevHome
+    try { rmSync(tmp, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }) } catch { /* 容忍残留 */ }
+  }
+})
+
+// ── A.2 证据冻结：覆盖率口径 / 指纹确定性 / 独立保留期 ───────────────────────
+
+test('computeCoverage：以**去重时间戳**算采样档与空洞（同 tick 15 条指标不得把间隔算成 0）', () => {
+  // 回归位：同一时刻写多条指标——若用原始行算间隔，cadence 恒为 0、空洞永远检不出（2026-09-21 真 bug）
+  const dupHeavy = []
+  for (let t = 0; t <= 40; t += 10) for (let m = 0; m < 15; m++) dupHeavy.push(t)   // 5 个 tick × 15 指标
+  const ok = computeCoverage(dupHeavy, 40)
+  assert.equal(ok.distinctTicks, 5, '去重后只剩 5 个真实 tick')
+  assert.equal(ok.cadenceMs, 10, '采样档 = 相邻间隔中位数，不是 0')
+  assert.equal(ok.gaps.length, 0)
+  assert.equal(ok.coverage, 1)
+  // 一个 100ms 的空洞（阈值 3×cadence）：missingMs = 100 − 10 = 90，span 200 → 覆盖 55%
+  const withGap = [0, 10, 20, 120, 130, 140, 150, 160, 170, 180, 190, 200]
+  const g = computeCoverage(withGap, 200)
+  assert.equal(g.cadenceMs, 10)
+  assert.equal(g.gaps.length, 1)
+  assert.equal(g.gaps[0].from, 20)
+  assert.equal(g.gaps[0].to, 120)
+  assert.equal(g.gaps[0].gapMs, 100)
+  assert.equal(g.missingMs, 90)
+  assert.equal(g.coverage, 1 - 90 / 200, 'coverage = 1 − missingMs/span（可复算）')
+  // 极端：0 / 1 个 tick 不除零
+  assert.equal(computeCoverage([], 1000).coverage, 0)
+  assert.equal(computeCoverage([5], 1000).coverage, 1)
+  // 定序：JSONL 与输入顺序无关（指纹可复算）
+  const a = samplesToJsonl([{ ts: 2, metric: 'b', value: 1, tags: '{}' }, { ts: 1, metric: 'a', value: 1, tags: '{}' }])
+  const b = samplesToJsonl([{ ts: 1, metric: 'a', value: 1, tags: '{}' }, { ts: 2, metric: 'b', value: 1, tags: '{}' }])
+  assert.equal(a, b, '同样内容必得同样字节')
+  assert.equal(a.split('\n')[0].includes('"ts":1'), true)
+})
+
+test('freezeSnapshot：写 gz + meta，指纹对内容确定；meta 覆盖覆盖率/空洞/活跃会话/era', () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'nautilus-snap-'))
+  try {
+    const rows = []
+    for (const ts of [0, 5000, 10000, 15000]) for (const m of ['pulse.mem.used', 'pulse.mem.total']) rows.push({ ts, metric: m, value: 1, tags: '{}' })
+    const opt = {
+      root: tmp, alertId: 'a-test-1-mem-occupancy', ruleId: 'mem-occupancy',
+      metric: 'pulse.mem.used / pulse.mem.total', op: 'gte', threshold: 0.9, clear: 0.85,
+      from: 0, to: 15000, rows, activeSessions: 3, now: 1790000000000,
+    }
+    const r1 = freezeSnapshot(opt)
+    const r2 = freezeSnapshot({ ...opt, rows: [...rows].reverse() })   // 乱序输入
+    assert.equal(r1.snapshotHash, r2.snapshotHash, '指纹只认内容，不认输入顺序')
+    assert.equal(r1.snapshotHash.length, 64, 'sha256 hex')
+    const gz = readFileSync(r1.samplesPath)
+    const text = gunzipSync(gz).toString('utf8')
+    assert.equal(text.trim().split('\n').length, rows.length, '原始行不丢不重')
+    const meta = JSON.parse(readFileSync(r1.metaPath, 'utf8'))
+    assert.equal(meta.rows, 8)
+    assert.equal(meta.distinctTicks, 4)
+    assert.equal(meta.cadenceMs, 5000)
+    assert.equal(meta.coverage, 1)
+    assert.equal(meta.gapCount, 0)
+    assert.equal(meta.activeSessions, 3)
+    assert.equal(meta.era, 'api', 'era 缺省 api（措辞分级：只作对照）')
+    assert.deepEqual(meta.metrics, ['pulse.mem.total', 'pulse.mem.used'])
+    assert.equal(meta.lookbackMs, 15000)
+    assert.equal(meta.generator.startsWith('nautilus/pulse/snapshot@'), true)
+    // 空窗口也能冻结（如实记 0 行，不抛错、不编数据）
+    const empty = freezeSnapshot({ ...opt, alertId: 'a-empty-r', rows: [], from: 0, to: 1000 })
+    assert.equal(JSON.parse(readFileSync(empty.metaPath, 'utf8')).rows, 0)
+    assert.equal(JSON.parse(readFileSync(empty.metaPath, 'utf8')).coverage, 0)
+    // 目录统计
+    const st = snapshotStats(tmp)
+    assert.equal(st.dirs, 2)
+    assert.ok(st.bytes > 0)
+  } finally {
+    try { rmSync(tmp, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }) } catch { /* 容忍残留 */ }
+  }
+})
+
+test('pruneSnapshots：只清理过期 a-* 快照与对应报告，不动新目录、不动外来目录', () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'nautilus-prune-'))
+  try {
+    const now = 1790000000000
+    const oldId = alertIdFor(now - 90 * 86400000, 'mem-occupancy')   // 90 天前
+    const newId = alertIdFor(now - 1 * 86400000, 'mem-occupancy')    // 1 天前
+    for (const id of [oldId, newId]) {
+      mkdirSync(join(tmp, id), { recursive: true })
+      writeFileSync(join(tmp, id, 'samples.jsonl.gz'), 'x')
+    }
+    mkdirSync(join(tmp, 'reports'), { recursive: true })
+    writeFileSync(join(tmp, 'reports', oldId + '.md'), '# old')
+    writeFileSync(join(tmp, 'reports', newId + '.md'), '# new')
+    mkdirSync(join(tmp, 'someone-elses-dir'), { recursive: true })   // 非本插件命名 → 不碰
+    const removed = pruneSnapshots(tmp, now - 30 * 86400000)
+    assert.deepEqual(removed, [oldId])
+    assert.equal(existsSync(join(tmp, oldId)), false)
+    assert.equal(existsSync(join(tmp, 'reports', oldId + '.md')), false, '报告随快照一起清')
+    assert.equal(existsSync(join(tmp, newId)), true, '保留期内不动')
+    assert.equal(existsSync(join(tmp, 'someone-elses-dir')), true, '只碰自己命名的 a-* 目录（红线 3）')
+    assert.equal(pruneSnapshots(join(tmp, 'nope'), now).length, 0, '目录不存在 = 无操作')
+  } finally {
     try { rmSync(tmp, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }) } catch { /* 容忍残留 */ }
   }
 })

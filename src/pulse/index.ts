@@ -14,8 +14,8 @@
  */
 import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-host-webserver' // 拉声明合并：ctx.webServer 类型
-import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { homedir, tmpdir } from 'node:os'
+import { dirname, join } from 'node:path'
 import z from '@deepseek-ai/schemastery'
 import { resolveDataDir } from '../home.js'
 import { LAYER, collectGpu, collectLocal, cpuTimes, type Exec, type ExecResult, type Sample } from './collect.js'
@@ -23,6 +23,7 @@ import { CountersSession, type ChildLike, type ChildSpawner } from './counters.j
 import { openPulseStore, type PulseStore } from './store.js'
 import { registerPulseRoutes, type PulseControl } from './routes.js'
 import { AlertEngine, DEFAULT_ALERT_RULES, alertMetricExpr, type AlertRule } from './alerts.js'
+import { appendLedger, freezeSnapshot, pruneSnapshots, snapshotStats } from './snapshot.js'
 
 export const name = 'pulse'
 /** webServer 必需（校验路由）；subprocess 可选，经 ctx.get 取（AGENTS.md §2）。 */
@@ -52,6 +53,12 @@ export interface Config {
   alertEnabled: boolean
   /** A 系列：告警规则表（可扩展；默认四个主要对象 + dsh-rss 关闭）。 */
   alertRules: AlertRule[]
+  /** A 系列：证据目录（空 = <库目录>/alerts）。快照/报告/台账都落在这里。 */
+  alertsDir: string
+  /** A 系列：证据回看窗口（确认时刻往前抽多久的原始采样）。 */
+  alertLookbackMs: number
+  /** A 系列：快照独立保留期（天；与 metric_sample 的 retentionDays 无关）。 */
+  alertSnapshotRetentionDays: number
 }
 
 export const Config = z.object({
@@ -83,6 +90,9 @@ export const Config = z.object({
     forMs: z.number().min(0).default(30000),
     cooldownMs: z.number().min(0).default(0),
   })).default(DEFAULT_ALERT_RULES.map((r) => ({ ...r }))),
+  alertsDir: z.string().default(''),
+  alertLookbackMs: z.number().min(60_000).default(2 * 3600_000),
+  alertSnapshotRetentionDays: z.number().min(1).default(30),
 })
 
 export interface PulseCollectorStatus {
@@ -168,10 +178,22 @@ export function apply(ctx: Context, config: Config): void {
 
   // A 系列：告警检测内核（构造即校验——非法规则在这里响亮失败，不留到运行时静默失效）
   const engine = config.alertEnabled ? new AlertEngine(config.alertRules) : null
+  // A 系列：证据目录（快照 / 报告 / 台账）。默认落库目录旁的 alerts/；
+  // ':memory:' 这种无目录库退到系统临时目录，绝不往仓库/当前工作目录写垃圾。
+  const alertsRoot = config.alertsDir !== ''
+    ? config.alertsDir
+    : (dbFile === ':memory:' ? join(tmpdir(), 'nautilus-alerts-mem-' + String(process.pid)) : join(dirname(dbFile), 'alerts'))
+  const ledgerPath = join(alertsRoot, 'ledger.md')
   if (engine !== null) {
     // 启动自愈：上个进程遗留的未解除行收口（重启后连续段与峰值都不可考，不装「还活着」）
     const stale = store.closeStaleAlerts(Date.now())
     if (stale.length > 0) console.warn('[pulse] 告警启动自愈：收口 ' + stale.length + ' 条遗留未解除告警（' + stale.join(', ') + '）')
+  }
+  /** 台账人读日志一行（结构化数据仍以 alert_event 为准）。 */
+  const ledger = (text: string): void => {
+    try { appendLedger(ledgerPath, '- `' + new Date().toISOString() + '` ' + text) } catch (err) {
+      console.warn('[pulse] 台账日志追加失败（不影响结构化台账）：' + (err instanceof Error ? err.message : String(err)))
+    }
   }
 
   const exec = makeExecFrom(ctx)
@@ -251,9 +273,15 @@ export function apply(ctx: Context, config: Config): void {
             })
             console.warn('[pulse] 告警确认 ' + t.alertId + '（' + t.rule.label + ' ' + alertMetricExpr(t.rule) +
               ' ' + t.rule.op + ' ' + String(t.rule.threshold) + '，连续 ' + String(Math.round((t.confirmedAt - t.firstExceededAt) / 1000)) + 's）· 台账 ' + ins)
+            ledger('**确认** `' + t.alertId + '` · ' + t.rule.label + ' · ' + alertMetricExpr(t.rule) + ' ' + t.rule.op + ' ' +
+              String(t.rule.threshold) + ' · 峰值 ' + String(t.peak) + ' · 连续 ' + String(Math.round((t.confirmedAt - t.firstExceededAt) / 1000)) + 's')
+            // A.2：证据冻结（抽取确认时刻往前 lookback 的原生采样 → gz + 覆盖率 + 指纹）
+            freezeEvidence(t)
           } else {
             const closed = store.closeAlert(t.alertId, t.ts)
             console.info('[pulse] 告警解除 ' + t.alertId + '（持续 ' + String(Math.round(t.durationMs / 1000)) + 's' + (closed ? '' : '，台账行已收口') + '）')
+            ledger('**解除** `' + t.alertId + '` · 值 ' + String(t.value) + ' · 持续 ' + String(Math.round(t.durationMs / 1000)) + 's' +
+              (closed ? '' : '（台账行本已收口）'))
           }
         }
       }
@@ -267,6 +295,13 @@ export function apply(ctx: Context, config: Config): void {
       if (Date.now() - lastPruneTs >= config.pruneIntervalMs) {
         lastPruneTs = Date.now()
         try { store.prune(Date.now() - config.retentionDays * 86400000) } catch (err) { status.lastError = err instanceof Error ? err.message : String(err) }
+        // A.2：快照独立保留期（不受原始采样 14 天影响——证据是给人回查的，留得更久）
+        if (engine !== null) {
+          try {
+            const gone = pruneSnapshots(alertsRoot, Date.now() - config.alertSnapshotRetentionDays * 86400000)
+            if (gone.length > 0) console.info('[pulse] 快照保留期清理：删除 ' + String(gone.length) + ' 份过期证据（保留 ' + String(config.alertSnapshotRetentionDays) + ' 天）')
+          } catch (err) { status.lastError = err instanceof Error ? err.message : String(err) }
+        }
       }
       // 手动排队优先；否则按当前档位重排（manual 档不会排下一次）
       if (pendingManual) { pendingManual = false; void tick() } else reschedule()
@@ -293,6 +328,7 @@ export function apply(ctx: Context, config: Config): void {
       enabled: config.alertEnabled,
       rules: engine === null ? config.alertRules.map((r) => ({ ...r })) : engine.rulesView(),
       states: engine === null ? [] : engine.statesView(),
+      evidence: engine === null ? undefined : snapshotStats(alertsRoot),
     }),
   })
 
@@ -304,6 +340,37 @@ export function apply(ctx: Context, config: Config): void {
 
   console.info('[pulse] 告警' + (engine === null ? '已停用（pulse.alertEnabled=false，不做检测也不收口台账）' : '就绪：规则 ' + String(engine.rulesView().filter((r) => r.enabled).length) + '/' + String(engine.rulesView().length) + ' 启用'))
   console.info('[pulse] 采集启动：mode=' + status.mode + ' interval=' + status.intervalMs + 'ms counters=' + config.countersIntervalMs + 'ms gpu=' + config.gpuIntervalMs + 'ms exec=' + (exec !== null ? 'ctx.subprocess' : '不可用（只采本地族）') + ' db=' + dbFile)
+
+  /**
+   * A.2：冻结越线证据。冻结失败**不改判定结果**（告警已确认、已落台账），只把报告态标 failed
+   * 并留一条警告——「证据没冻上」本身是必须被看见的事实，不能静默吞掉。
+   */
+  function freezeEvidence(t: { rule: AlertRule; alertId: string; confirmedAt: number }): void {
+    const from = t.confirmedAt - config.alertLookbackMs
+    try {
+      const rows = store.windowRows(from, t.confirmedAt)
+      const res = freezeSnapshot({
+        root: alertsRoot, alertId: t.alertId, ruleId: t.rule.id,
+        metric: alertMetricExpr(t.rule), op: t.rule.op,
+        threshold: t.rule.threshold, clear: t.rule.clear,
+        from, to: t.confirmedAt, rows,
+        activeSessions: store.activeSessions(from, t.confirmedAt),
+        now: Date.now(),
+      })
+      store.setAlertSnapshot(t.alertId, res.samplesPath, res.snapshotHash)
+      const pct = (res.meta.coverage * 100).toFixed(1)
+      const gaps = res.meta.gapCount > 0 ? '（最大 ' + String(Math.round(res.meta.maxGapMs / 60000)) + 'min）' : ''
+      console.info('[pulse] 证据冻结 ' + t.alertId + '：' + String(res.meta.rows) + ' 行 / ' + String(res.meta.metrics.length) +
+        ' 指标 / 覆盖 ' + pct + '% / 空洞 ' + String(res.meta.gapCount) + gaps + ' / sha256 ' + res.snapshotHash.slice(0, 12))
+      ledger('**冻结** `' + t.alertId + '` · 回看 ' + String(Math.round(config.alertLookbackMs / 3600000)) + 'h · ' +
+        String(res.meta.rows) + ' 行 · 覆盖 ' + pct + '% · 空洞 ' + String(res.meta.gapCount) + ' · sha256 `' + res.snapshotHash.slice(0, 16) + '`')
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      try { store.setAlertReport(t.alertId, 'failed', null, null) } catch { /* 连标记都失败：下面还有日志 */ }
+      console.error('[pulse] 证据冻结失败 ' + t.alertId + '：' + msg)
+      ledger('**冻结失败** `' + t.alertId + '` · ' + msg)
+    }
+  }
 
   /** 计数器助手用的常驻子进程 spawner（stdin/stdout 双管道；宿主 seam 缺席 → null）。 */
   function makeSessionSpawnerFrom(c: Context): ChildSpawner | null {

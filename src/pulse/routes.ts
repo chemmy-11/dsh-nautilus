@@ -38,6 +38,8 @@ export interface PulseAlertsView {
   enabled: boolean
   rules: AlertRule[]
   states: AlertRuntimeState[]
+  /** 证据目录现状（A.2 快照；只读诊断，缺席则前端不显示）。 */
+  evidence?: { dirs: number; bytes: number; oldestTs: number | null; newestTs: number | null }
 }
 
 export interface PulseRouteDeps {
@@ -176,6 +178,7 @@ export function registerPulseRoutes(ctx: { webServer: { register(route: WebRoute
           op: r.op, threshold: r.threshold, clear: r.clear, forMs: r.forMs, cooldownMs: r.cooldownMs,
           state: byRule.get(r.id) ?? null,
         })),
+        evidence: view.evidence ?? null,
         active: deps.store.openAlerts(),
         recent: deps.store.recentAlerts(limit),
       })

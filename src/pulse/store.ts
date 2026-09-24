@@ -237,6 +237,38 @@ export class PulseStore {
     return r === undefined ? null : mapAlertRow(r)
   }
 
+  /**
+   * 窗口内的原始采样（A.2 冻结用；只读，按 ts 升序）。**不重采样**——原生节奏原样取出。
+   * @param from 含 / @param to 含
+   */
+  windowRows(from: number, to: number): Array<{ ts: number; metric: string; value: number | null; tags: string }> {
+    return this.db.prepare('SELECT ts, metric, value, tags FROM metric_sample WHERE ts >= ? AND ts <= ? ORDER BY ts ASC, metric ASC')
+      .all(from, to) as Array<{ ts: number; metric: string; value: number | null; tags: string }>
+  }
+
+  /** 窗口内有过读数的会话数（同一库的 turn_read 只读查询；表缺席 → null，不编造 0）。 */
+  activeSessions(from: number, to: number): number | null {
+    try {
+      const r = this.db.prepare('SELECT COUNT(DISTINCT session) AS n FROM turn_read WHERE ts >= ? AND ts <= ?').get(from, to) as { n: number } | undefined
+      return Number(r?.n ?? 0)
+    } catch { return null }
+  }
+
+  /** 记快照落点与指纹（A.2），并把报告态推进到 pending（证据已冻结 → 报告可做）。 */
+  setAlertSnapshot(id: string, path: string, hash: string): void {
+    this.db.prepare('UPDATE alert_event SET snapshot_path = ?, snapshot_hash = ?, report_status = ? WHERE id = ?')
+      .run(path, hash, 'pending', id)
+  }
+
+  /**
+   * 记报告态（A.3 的落点，也是 A.2 冻结失败时的终态）。
+   * 枚举：pending（证据已冻结、报告待做）→ done / skipped（门禁关或模型不可用）/ failed。
+   */
+  setAlertReport(id: string, status: 'pending' | 'done' | 'skipped' | 'failed', model: string | null, promptVersion: string | null): void {
+    this.db.prepare('UPDATE alert_event SET report_status = ?, report_model = ?, prompt_version = ? WHERE id = ?')
+      .run(status, model, promptVersion, id)
+  }
+
   /** 最近台账（默认 50 行；UI 与证据归档用）。 */
   recentAlerts(limit = 50): AlertEventRow[] {
     return this.rowsToAlerts(this.db.prepare('SELECT * FROM alert_event ORDER BY confirmed_at DESC LIMIT ?').all(limit))
