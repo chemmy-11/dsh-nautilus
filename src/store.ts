@@ -678,6 +678,34 @@ export class NautilusStore {
     return Number((r as { n: number } | undefined)?.n ?? 0)
   }
 
+  /**
+   * AL.4b 读侧：自评**对齐**行清单（`align` 非空；默认只取 `dsh_tool` 通道 = 产出该轮的 agent 自评）。
+   *
+   * 代际分层（决策 §9.3）：按 `align IS NOT NULL` 过滤——旧三行（clarity/defense）`align` 为 NULL，
+   * 天然进不来，不会与新 1–5 量表混算；`rubricVersion` 原样带出（进化闭环要知道每行是哪版 rubric 打的）。
+   * @param sourceKind 通道过滤（默认 dsh_tool；http/backfill/mcp 属历史对照，不进当期读数）。
+   */
+  listSelfAlignments(sourceKind: 'dsh_tool' | 'http' | 'backfill' | 'mcp' = 'dsh_tool'): Array<{
+    extRef: string; turnOrdinal: number; align: number; boundary: string
+    declaration: 0 | 1; quote: string | null; evidence: string | null
+    rubricVersion: string | null; tsMs: number; agent: string
+  }> {
+    const rows = this.db.prepare(`
+      SELECT ext_ref, turn_ordinal, align, boundary, declaration, quote, evidence, rubric_version, ts_ms, agent
+      FROM selfcheck_record WHERE align IS NOT NULL AND source_kind = ?
+      ORDER BY ts_ms DESC, ext_ref ASC, turn_ordinal ASC
+    `).all(sourceKind) as Array<Record<string, unknown>>
+    return rows.map((r) => ({
+      extRef: String(r.ext_ref), turnOrdinal: Number(r.turn_ordinal), align: Number(r.align),
+      boundary: String(r.boundary ?? 'none'),
+      declaration: (Number(r.declaration ?? 0) === 1 ? 1 : 0) as 0 | 1,
+      quote: r.quote == null ? null : String(r.quote),
+      evidence: r.evidence == null ? null : String(r.evidence),
+      rubricVersion: r.rubric_version == null ? null : String(r.rubric_version),
+      tsMs: Number(r.ts_ms), agent: String(r.agent),
+    }))
+  }
+
   /** 该会话的历史工作区归属（session_root；'' = 未归属 → 返回 null，不存空串）。 */
   selfcheckWorkspaceOf(session: string): string | null {
     const r = this.db.prepare('SELECT root FROM session_root WHERE session = ?').get(session) as { root: string } | undefined

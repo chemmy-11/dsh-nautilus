@@ -5,6 +5,8 @@
  *  · AL.6 边界守卫：`src/nexus/**` 自包含、只在 src/nexus 下、两腿互不 import（决策 §7.2）。
  *  · AL.2 迁移账本与 v8 迁移：按序应用 / 跳号如实记录 / 幂等 / 旧契合行一个不丢 / 1–5 与边界 CHECK。
  *  · AL.3 自评通道换 al-v1 对齐量表：工具面 = rubric 注入面 / 硬门零写入 / 双形 ingest / 覆盖语义。
+ *  · AL.4a 收敛守卫：假设/预言/工作区指向零残留（源码级）+ 抽样生成器不再查已删的 store.lfieldRoot。
+ *  · AL.4b 对齐读侧：GET /m2/alignments 契约形状 / 同源门与方法门 / 覆盖与一致性数字 / 口径单点守卫。
  * 已知例外（记在案）：`../store.js` 允许 nexus import——数据核心仍共享，真正抽离属 OQ-AL4。
  */
 import { test } from 'node:test'
@@ -12,6 +14,7 @@ import assert from 'node:assert/strict'
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { Readable } from 'node:stream'
 import { DatabaseSync } from 'node:sqlite'
 import { fileURLToPath } from 'node:url'
 
@@ -22,7 +25,7 @@ import { ingestSelfCheck, QUOTE_MAX, EVIDENCE_MAX, RUBRIC_VERSION } from '../lib
 
 const REPO = fileURLToPath(new URL('..', import.meta.url))
 const SRC = join(REPO, 'src')
-const NEXUS_MODULES = ['analysis.ts', 'selfcheck-ingest.ts', 'selfcheck.ts', 'turns.ts']
+const NEXUS_MODULES = ['analysis.ts', 'consistency.ts', 'selfcheck-ingest.ts', 'selfcheck.ts', 'turns.ts']
 const tmpDir = (p) => mkdtempSync(join(tmpdir(), p))
 const cleanup = (d) => { try { rmSync(d, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }) } catch { /* Windows 句柄 GC 滞后 */ } }
 
@@ -359,6 +362,27 @@ test('AL.4a store 守卫：标注与指向的读写方法已删，表名与迁�
   }
 })
 
+test('AL.4a 回归：抽样生成器不再查已删的 store.lfieldRoot——默认入参（CLI 不传 --root）必须可跑', async () => {
+  // 回归根因：AL.4a 删了 store.lfieldRoot()，而 buildPool 的默认分支（旧 rootMode='pointed'）还在查它
+  // → 不带 --root=all 直接 TypeError。此例打的就是「默认入参」这条 CLI 真实路径。
+  const { buildPool } = await import('./annotation-sample.mjs')
+  const store = openStore(':memory:')
+  try {
+    assert.equal(typeof store.lfieldRoot, 'undefined', '前置：store.lfieldRoot 已删（回归的根因）')
+    store.upsertTurnRead({ session: 's-1', turn: 1, ts: Date.now(), question: 'q', tokenIn: 1, tokenOut: 1, cacheRead: 0, durationMs: 10 })
+    store.upsertUserText('s-1', 1, '问')
+    store.appendAssistantText('s-1', 1, '答')
+    const { pool, root } = buildPool(store, { kind: 'sample' })
+    assert.equal(pool.length, 1, '默认入参必须取到全局池（旧代码在此 TypeError）')
+    assert.equal(root, undefined, 'root 恒 undefined = 全局口径')
+    assert.equal(buildPool(store, { kind: 'recheck' }).pool.length, 0, 'recheck 默认入参同样可跑')
+  } finally { store.close() }
+  // 源码守卫：不查已删方法、不再有「指向 / 全局」分支（rootMode 仅作 --root 的取值变量，走响亮失败）
+  const text = readFileSync(join(REPO, 'scripts', 'annotation-sample.mjs'), 'utf8')
+  assert.ok(!text.includes('lfieldRoot'), '生成器仍查已删的 store.lfieldRoot')
+  assert.ok(!/rootMode === 'all' \?/.test(text), '生成器仍有指向/全局分支（root 必须恒 undefined）')
+})
+
 test('AL.4a 保留面守卫：曲线 / 白盒 analysis / 自评 ingest 未被误删', () => {
   // 「只做减法」的反向保险：撤两项时最容易顺手删掉共享的 analysis 与曲线取数
   const wb = readFileSync(join(SRC, 'client', 'workbench.ts'), 'utf8')
@@ -370,3 +394,191 @@ test('AL.4a 保留面守卫：曲线 / 白盒 analysis / 自评 ingest 未被误
     assert.ok(rt.includes(keep), 'routes.ts 丢了保留路由：' + keep)
   }
 })
+// ── AL.4b 对齐读侧（GET /m2/alignments：契约形状 / 覆盖与一致性数字 / 路径安全）──────────
+
+const ALIGN_PATH = '/api/nautilus/m2/alignments'
+const TOP_KEYS = ['consistency', 'coverage', 'human', 'revision', 'scale', 'self']
+const HUMAN_KEYS = ['align', 'annotatedAt', 'boundary', 'exempt', 'note', 'origin', 'quote', 'schemaVersion', 'session', 'turn', 'updatedAt']
+const SELF_KEYS = ['agent', 'align', 'boundary', 'declaration', 'evidence', 'extRef', 'quote', 'rubricVersion', 'tsMs', 'turnOrdinal']
+
+/**
+ * 真实装配：临时 DSH_HOME + 真 ctx.plugin（不手挂路由——手动挂载绕过的正是 postmortem 0001 崩掉的那条路径）。
+ * seed 在装配前落库（apply 自己会开同一个库文件）。
+ */
+async function mountAlignRoutes(seed) {
+  const { Context } = await import('@deepseek-ai/cordis')
+  const tmp = tmpDir('nautilus-al4b-')
+  const prevHome = process.env.DSH_HOME
+  process.env.DSH_HOME = tmp
+  const file = join(tmp, 'nautilus', 'nautilus.db')
+  if (seed !== undefined) { const s = openStore(file); seed(s, file); s.close() }
+  const mod = await import(new URL('../lib/index.js', import.meta.url).href)
+  const routes = new Map()
+  const ctx = new Context()
+  ctx.provide('webServer', { register(route) { routes.set(route.path, route); return () => {} } })
+  ctx.provide('tools', { register() {} })
+  const fiber = ctx.plugin(mod, { pulse: { enabled: false } })
+  const deadline = Date.now() + 5000
+  while (Date.now() < deadline && !routes.has(ALIGN_PATH)) await new Promise((r) => setTimeout(r, 25))
+  const route = routes.get(ALIGN_PATH)
+  assert.equal(typeof route?.handler, 'function', 'AL.4b 路由必须注册：' + ALIGN_PATH)
+  const call = async (method, { sameOrigin = true, url = ALIGN_PATH } = {}) => {
+    const h = routes.get(ALIGN_PATH).handler
+    const r = new Readable({ read() {} })
+    r.method = method
+    r.url = url
+    r.headers = sameOrigin ? { 'sec-fetch-site': 'same-origin' } : {}
+    r.push(null)
+    const res = { statusCode: 0, body: null, writeHead(s) { this.statusCode = s }, end(t) { this.body = JSON.parse(String(t ?? '{}')) } }
+    h(r, res)
+    const dl = Date.now() + 3000
+    while (Date.now() < dl && res.statusCode === 0) await new Promise((x) => setTimeout(x, 10))
+    assert.notEqual(res.statusCode, 0, '路由未在 3s 内响应（挂起）')
+    return res
+  }
+  const close = async () => {
+    await fiber.dispose()
+    if (prevHome === undefined) delete process.env.DSH_HOME
+    else process.env.DSH_HOME = prevHome
+    cleanup(tmp)
+  }
+  return { call, close, routes, route, file }
+}
+
+test('AL.4b 路由门与空库：同源 403 / 非 GET 405 / 空库结构齐备（consistency=null）', async () => {
+  const m = await mountAlignRoutes()
+  try {
+    assert.equal(m.route.kind, 'exact', 'AL.4b 路由必须是 exact（不做前缀匹配）')
+    assert.equal(m.routes.has(ALIGN_PATH + '/extra'), false, '子路径不得命中——路径安全')
+    const noOrigin = await m.call('GET', { sameOrigin: false })
+    assert.equal(noOrigin.statusCode, 403, '非同源必须 403')
+    assert.equal(noOrigin.body.error, 'forbidden')
+    for (const method of ['POST', 'PUT', 'DELETE', 'HEAD']) {
+      const r = await m.call(method)
+      assert.equal(r.statusCode, 405, method + ' 必须 405（只 GET）')
+      assert.equal(r.body.error, 'method-not-allowed')
+    }
+    // 异常 url：本路由不解析 url，但**绝不许** 500（fail 路径收敛为结构化响应，不是抛异常）
+    for (const url of [ALIGN_PATH + '?session=../../../../etc/passwd', ALIGN_PATH + '?%', 'http://evil.example' + ALIGN_PATH, '']) {
+      const r = await m.call('GET', { url })
+      assert.equal(r.statusCode, 200, '异常 url 不得 500：' + url)
+      assert.deepEqual(Object.keys(r.body).sort(), TOP_KEYS)
+    }
+    const g = await m.call('GET')
+    assert.equal(g.statusCode, 200)
+    assert.deepEqual(Object.keys(g.body).sort(), TOP_KEYS, '顶层契约形状')
+    assert.equal(typeof g.body.revision, 'number')
+    assert.deepEqual(Object.keys(g.body.scale).sort(), ['anchors', 'rubricVersion', 'schemaVersion'])
+    assert.equal(g.body.scale.schemaVersion, 2)
+    assert.equal(g.body.scale.rubricVersion, 'al-v1')
+    assert.deepEqual(g.body.scale.anchors.map((a) => a.score), [1, 2, 3, 4, 5], '锚文 1–5 齐备')
+    assert.deepEqual(Object.keys(g.body.scale.anchors[0]).sort(), ['score', 'text'])
+    // 同源守卫：面板显示的锚文 = agent 看到的注入面（逐字同源，不各写一份）
+    const tool = buildSelfCheckTool(openStore(':memory:'))
+    for (const a of g.body.scale.anchors) {
+      assert.ok(tool.description.includes(a.score + ' = ' + a.text), '锚文与工具注入面不一致：' + String(a.score))
+    }
+    assert.deepEqual(g.body.human, [])
+    assert.deepEqual(g.body.self, [])
+    assert.equal(g.body.consistency, null, '空库：配对 0 → consistency null（不给假读数）')
+    assert.deepEqual({ ...g.body.coverage }, {
+      humanTotal: 0, humanAligned: 0, exempted: 0, legacyFitRows: 0,
+      byAlign: { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 },
+      byBoundary: { none: 0, substitution: 0, possession: 0, coercion: 0, projection: 0 },
+      selfAligned: 0, selfByAlign: { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 },
+    })
+  } finally { await m.close() }
+})
+
+test('AL.4b 预置双路样本：覆盖数字正确（legacyFitRows 分层不混算）+ consistency 与手算一致', async () => {
+  const m = await mountAlignRoutes((s, file) => {
+    // 人工（新量表）：2 / 3 / 4 / 5 各一行（4、5 必附引文——CHECK 门）
+    s.upsertTurnAlignment({ session: 's-1', turn: 1, align: 2, exempt: 0, boundary: 'none', quote: null, note: '接住无增量', origin: 'spot' })
+    s.upsertTurnAlignment({ session: 's-1', turn: 2, align: 3, exempt: 0, boundary: 'substitution', quote: null, note: null, origin: 'sample' })
+    s.upsertTurnAlignment({ session: 's-2', turn: 1, align: 4, exempt: 0, boundary: 'none', quote: '「这句我抄进笔记了」', note: null, origin: 'spot' })
+    s.upsertTurnAlignment({ session: 's-2', turn: 2, align: 5, exempt: 0, boundary: 'possession', quote: '「他改道去查了那条引文」', note: null, origin: 'sample' })
+    // 豁免行（N/A：不进 byAlign，也不进 self 台账）
+    s.upsertTurnAlignment({ session: 's-3', turn: 2, align: null, exempt: 1, boundary: 'none', quote: null, note: '纯操作性指令轮', origin: 'spot' })
+    // 旧契合行（0–4 代际）：只能直插；schema_version=1 + fit 才是合法旧行（红线 3：旧数据不删）
+    const raw = new DatabaseSync(file)
+    raw.prepare(`INSERT INTO turn_annotation
+      (session, turn, fit, exempt, quote, note, origin, boundary, schema_version, annotated_at, updated_at)
+      VALUES ('s-3', 1, 4, 0, '「旧尺子的引文」', NULL, 'spot', 'none', 1, 1, 1)`).run()
+    raw.close()
+    // 自评（dsh_tool，产出该轮的 agent）：与人工同键四行——2↔3 / 3↔3 / 4↔4 / 5↔5
+    ingestSelfCheck(s, { sourceKind: 'dsh_tool', agent: 's-1', extRef: 's-1', turnOrdinal: 1, align: 3, declaration: 0 })
+    ingestSelfCheck(s, { sourceKind: 'dsh_tool', agent: 's-1', extRef: 's-1', turnOrdinal: 2, align: 3, declaration: 0 })
+    ingestSelfCheck(s, { sourceKind: 'dsh_tool', agent: 's-2', extRef: 's-2', turnOrdinal: 1, align: 4, quote: '「我引用了他的判断」', declaration: 0 })
+    ingestSelfCheck(s, { sourceKind: 'dsh_tool', agent: 's-2', extRef: 's-2', turnOrdinal: 2, align: 5, quote: '「下一步动作改了」', declaration: 0 })
+    // 干扰行（必须不进 self 台账）：① http 通道新形；② dsh_tool 旧三行（align NULL，代际分层）
+    ingestSelfCheck(s, { sourceKind: 'http', agent: 'harness', extRef: 's-1', turnOrdinal: 1, align: 1, declaration: 0 })
+    ingestSelfCheck(s, { sourceKind: 'dsh_tool', agent: 's-9', extRef: 's-9', turnOrdinal: 1, clarity: 0.5, defense: 'none', declaration: 0 })
+  })
+  try {
+    const g = await m.call('GET')
+    assert.equal(g.statusCode, 200)
+    const cov = g.body.coverage
+    // humanTotal = **新量表**人工行数（有分 + 豁免，v8 CHECK 保证恰好二分）；旧契合行不进它、
+    // 也不进 byAlign/byBoundary/humanAligned——只由 legacyFitRows 单列（分层不混算，§9.3）。
+    assert.equal(cov.humanTotal, 5)
+    assert.equal(cov.humanAligned, 4)
+    assert.equal(cov.exempted, 1)
+    assert.equal(cov.legacyFitRows, 1, '旧契合行单独成层')
+    assert.equal(cov.humanTotal, cov.humanAligned + cov.exempted, 'humanTotal 恒等于 有分 + 豁免（旧行不混入）')
+    assert.deepEqual(cov.byAlign, { 1: 0, 2: 1, 3: 1, 4: 1, 5: 1 })
+    assert.deepEqual(cov.byBoundary, { none: 3, substitution: 1, possession: 1, coercion: 0, projection: 0 })
+    assert.equal(cov.selfAligned, 4, 'self 只认 dsh_tool × align 非空（http 行与旧三行均排除）')
+    assert.deepEqual(cov.selfByAlign, { 1: 0, 2: 0, 3: 2, 4: 1, 5: 1 })
+    // 双路台账
+    assert.equal(g.body.human.length, 4, 'human 只出 align 非空行（豁免行与旧行不出）')
+    assert.deepEqual(Object.keys(g.body.human[0]).sort(), HUMAN_KEYS, 'human 行契约形状')
+    assert.equal(g.body.self.length, 4)
+    assert.deepEqual(Object.keys(g.body.self[0]).sort(), SELF_KEYS, 'self 行契约形状')
+    assert.deepEqual(g.body.self.map((x) => x.align).sort(), [3, 3, 4, 5])
+    assert.ok(g.body.self.every((x) => x.rubricVersion === RUBRIC_VERSION), 'rubric_version 原样带出')
+    assert.equal(g.body.self.filter((x) => x.turnOrdinal === 1).length, 2)
+    // 一致性：4 对 (2,3)(3,3)(4,4)(5,5) → exact 3/4 · near 4/4 · κ = 1 − (1/16)/0.5 = 0.875
+    assert.deepEqual(Object.keys(g.body.consistency).sort(), ['exact', 'kappa', 'near', 'pairs'])
+    assert.equal(g.body.consistency.pairs, 4)
+    assert.equal(g.body.consistency.exact, 0.75)
+    assert.equal(g.body.consistency.near, 1)
+    assert.ok(Math.abs(g.body.consistency.kappa - 0.875) < 1e-12, '二次加权 κ = 0.875，实得 ' + String(g.body.consistency.kappa))
+  } finally { await m.close() }
+})
+
+test('AL.4b 单对样本：pairs<2 → consistency null（一对恒「完全一致」，报出来是假读数）', async () => {
+  const m = await mountAlignRoutes((s) => {
+    s.upsertTurnAlignment({ session: 's-1', turn: 1, align: 3, exempt: 0, boundary: 'none', quote: null, note: null, origin: 'spot' })
+    ingestSelfCheck(s, { sourceKind: 'dsh_tool', agent: 's-1', extRef: 's-1', turnOrdinal: 1, align: 3, declaration: 0 })
+  })
+  try {
+    const g = await m.call('GET')
+    assert.equal(g.statusCode, 200)
+    assert.equal(g.body.coverage.humanTotal, 1)
+    assert.equal(g.body.coverage.humanAligned, 1)
+    assert.equal(g.body.coverage.selfAligned, 1)
+    assert.equal(g.body.human.length, 1)
+    assert.equal(g.body.self.length, 1)
+    assert.equal(g.body.consistency, null)
+  } finally { await m.close() }
+})
+
+test('AL.4b 口径守卫：一致性只有一份实现——脚本 import 共享模块，不得内联第二套', () => {
+  const text = readFileSync(join(REPO, 'scripts', 'alignment-consistency.mjs'), 'utf8')
+  assert.ok(text.includes("from '../lib/nexus/consistency.js'"), '脚本必须 import 构建产物 lib/nexus/consistency.js')
+  for (const fn of ['pairAlignments(', 'metrics(', 'splitHoldout(']) {
+    assert.ok(text.includes(fn), '脚本必须走共享模块入口：' + fn)
+  }
+  for (const bad of ['function metrics', 'function bucketOf', 'Math.pow(i - j, 2)']) {
+    assert.ok(!text.includes(bad), '脚本仍内联了第二套口径：' + bad)
+  }
+  // 适配层必须在：SQL 行是 snake_case，共享模块要 camelCase——漏映射会静默配出 0 对（实测踩到）
+  for (const need of ['extRef: String(r.ext_ref)', 'turnOrdinal: Number(r.turn_ordinal)']) {
+    assert.ok(text.includes(need), '脚本缺 SQL→领域形状的映射：' + need)
+  }
+  // 路由侧同样只用共享模块（不自己算 κ）
+  const rt = readFileSync(join(SRC, 'routes.ts'), 'utf8')
+  assert.ok(rt.includes("from './nexus/consistency.js'"), '路由必须 import 共享一致性模块')
+  assert.ok(!rt.includes('Math.pow('), 'routes.ts 不得自己算 κ')
+})
+

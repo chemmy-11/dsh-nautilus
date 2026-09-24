@@ -11,13 +11,16 @@
  *                                      旧形 clarity/defense/declaration 与新形 align/boundary 同门，硬门与校验在共享 ingest）
  * GET  /api/nautilus/m2/turn-annotations   → T 系列逐轮人工标注清单 + spot/sample 双口径覆盖
  * POST /api/nautilus/m2/turn-annotations   → 标注 upsert（origin 服务端判定；fit=4 必附引文；无原文拒）
+ * GET  /api/nautilus/m2/alignments   → AL.4b 对齐读侧：双路台账（人工 align + 自评 align）+ 覆盖 + 一致性（只 GET）
  * Same-origin marker guard; registered as effect.（/selfcheck 例外：调用方非浏览器，以 token 为门。）
  */
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { WebRoute } from '@deepseek-ai/dsh-host-webserver'
 import type { NautilusStore } from './store.js'
 import { analyze } from './nexus/analysis.js'
-import { ingestSelfCheck, QUOTE_MAX } from './nexus/selfcheck-ingest.js'
+import { ALIGN_ANCHORS } from './nexus/selfcheck.js'
+import { ingestSelfCheck, QUOTE_MAX, RUBRIC_VERSION, SCHEMA_VERSION_ALIGN } from './nexus/selfcheck-ingest.js'
+import { pairAlignments, consistencyOf } from './nexus/consistency.js'
 
 /** 集中常量：路由前缀（AGENTS.md §1-4）。 */
 const API_PREFIX = '/api/nautilus'
@@ -218,6 +221,58 @@ export function registerNautilusRoutes(ctx: { webServer: { register(route: WebRo
     },
   }
 
-  for (const route of [m2State, turnText, analysis, selfcheck, turnAnnotations]) disposers.push(ctx.webServer.register(route))
+  // AL.4b：对齐读侧（双路台账 = 人工 turn_annotation.align + 自评 selfcheck_record.align）。
+  // 契约（UI 线并行按此写视图，**形状不得改**）：
+  //   { revision, scale:{schemaVersion,rubricVersion,anchors[{score,text}]},
+  //     coverage:{humanTotal,humanAligned,exempted,legacyFitRows,byAlign{1..5},byBoundary{5 枚举},selfAligned,selfByAlign{1..5}},
+  //     human:[{session,turn,align,boundary,exempt,quote,note,origin,schemaVersion,annotatedAt,updatedAt}],
+  //     self:[{extRef,turnOrdinal,align,boundary,declaration,quote,evidence,rubricVersion,tsMs,agent}],
+  //     consistency:{pairs,exact,near,kappa} | null }
+  // 口径纪律：
+  //   · human 只出 align 非空行；self 只出 align 非空且 source_kind=dsh_tool 的行（旧代际 align NULL，天然分层，§9.3）；
+  //   · humanTotal = **新量表**人工行数（有分 + 豁免；v8 CHECK 保证二者恰好二分）= aligned + exempted；
+  //     旧契合行不进它、也不进 byAlign/byBoundary/humanAligned，只由 legacyFitRows 单列（分层不混算，§9.3）——
+  //     与 UI 线已落地的 AlignmentsView fixture 读法一致（humanTotal 7 = humanAligned 6 + exempted 1，旧行 3 另计）；
+  //   · exact/near 是 **0–1 的率**（非百分数）；kappa = 二次加权 κ（K=5）；
+  //   · consistency 用**全部配对**（不分留出集；留出集只在 scripts/alignment-consistency.mjs 侧用于采纳判定）；
+  //     pairs < 2 → null（一对样本恒「完全一致」，报出来是假读数）；
+  //   · 口径单点：三指标与配对走 src/nexus/consistency.ts（与 AL.5 脚本**同一份**，禁止第二套实现）。
+  const alignments: WebRoute = {
+    kind: 'exact',
+    path: `${API_PREFIX}/m2/alignments`,
+    handler: (req, res): void => {
+      if (req.method !== 'GET') return json(res, 405, { ok: false, error: 'method-not-allowed' })
+      if (!browserSameOriginMarker(req)) return json(res, 403, { ok: false, error: 'forbidden' })
+      const cov = deps.store.turnAlignmentCoverage()
+      const human = deps.store.listTurnAlignments().filter((a): a is typeof a & { align: number } => a.align !== null)
+      const self = deps.store.listSelfAlignments()
+      const selfByAlign: Record<string, number> = { '1': 0, '2': 0, '3': 0, '4': 0, '5': 0 }
+      for (const s of self) selfByAlign[String(s.align)] = (selfByAlign[String(s.align)] ?? 0) + 1
+      const consistency = consistencyOf(pairAlignments(human, self))
+      json(res, 200, {
+        revision: Date.now(),
+        scale: { schemaVersion: SCHEMA_VERSION_ALIGN, rubricVersion: RUBRIC_VERSION, anchors: ALIGN_ANCHORS },
+        coverage: {
+          humanTotal: cov.total - cov.legacyFitRows,
+          humanAligned: cov.aligned,
+          exempted: cov.exempted,
+          legacyFitRows: cov.legacyFitRows,
+          byAlign: cov.byAlign,
+          byBoundary: cov.byBoundary,
+          selfAligned: self.length,
+          selfByAlign,
+        },
+        human: human.map((a) => ({
+          session: a.session, turn: a.turn, align: a.align, boundary: a.boundary, exempt: a.exempt,
+          quote: a.quote, note: a.note, origin: a.origin, schemaVersion: a.schemaVersion,
+          annotatedAt: a.annotatedAt, updatedAt: a.updatedAt,
+        })),
+        self,
+        consistency,
+      })
+    },
+  }
+
+  for (const route of [m2State, turnText, analysis, selfcheck, turnAnnotations, alignments]) disposers.push(ctx.webServer.register(route))
   return () => { for (const d of disposers.reverse()) { try { d() } catch { /* 幂等清理 */ } } }
 }

@@ -586,24 +586,28 @@ test('host bundle 单入口：pulse 作为子插件挂载并注册自身路由',
     const fiber = ctx.plugin(mod, {
       pulse: { enabled: true, enableCounters: false, enableGpu: false, intervalMs: 60000, dbFile: ':memory:' },
     })
-    const deadline = Date.now() + 5000
-    while (Date.now() < deadline && !routes.includes('/api/nautilus/pulse/state')) await new Promise((r) => setTimeout(r, 25))
-    // vault 观测腿下线（2026-09-27）后：无 /state · /vault · /action 三条；S1.1 新增 /selfcheck
-    assert.deepEqual([...routes].sort(), [
-      '/api/nautilus/m2/analysis',
-      '/api/nautilus/m2/state',
-      '/api/nautilus/m2/turn-annotations',
-      '/api/nautilus/m2/turn-text',
-      '/api/nautilus/pulse/alerts',
-      '/api/nautilus/pulse/alerts/report',
-      '/api/nautilus/pulse/alerts/verdict',
-      '/api/nautilus/pulse/control',
-      '/api/nautilus/pulse/series',
-      '/api/nautilus/pulse/state',
-      '/api/nautilus/selfcheck',
-    ])
-    assert.deepEqual([...tools], ['record_turn_selfcheck'])
-    await fiber.dispose()
+    // 断言一律包在 try 里：断言失败也必须拆 fiber——pulse 采集定时器不会自己停，fiber 漏拆 =
+    // 子进程不退出、npm test 整体挂死且**没有任何报错输出**（2026-09-28 实测：路由清单漏一项即复现）。
+    try {
+      const deadline = Date.now() + 5000
+      while (Date.now() < deadline && !routes.includes('/api/nautilus/pulse/state')) await new Promise((r) => setTimeout(r, 25))
+      // vault 观测腿下线（2026-09-27）后：无 /state · /vault · /action 三条；S1.1 新增 /selfcheck；AL.4b 新增 /m2/alignments
+      assert.deepEqual([...routes].sort(), [
+        '/api/nautilus/m2/alignments',
+        '/api/nautilus/m2/analysis',
+        '/api/nautilus/m2/state',
+        '/api/nautilus/m2/turn-annotations',
+        '/api/nautilus/m2/turn-text',
+        '/api/nautilus/pulse/alerts',
+        '/api/nautilus/pulse/alerts/report',
+        '/api/nautilus/pulse/alerts/verdict',
+        '/api/nautilus/pulse/control',
+        '/api/nautilus/pulse/series',
+        '/api/nautilus/pulse/state',
+        '/api/nautilus/selfcheck',
+      ])
+      assert.deepEqual([...tools], ['record_turn_selfcheck'])
+    } finally { await fiber.dispose() }
   } finally {
     if (prevHome === undefined) delete process.env.DSH_HOME
     else process.env.DSH_HOME = prevHome

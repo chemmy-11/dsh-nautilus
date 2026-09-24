@@ -11,12 +11,17 @@
  * 本脚本按 ext_ref === session、turn_ordinal === turn 连接。若两侧都有行而配对数 = 0，
  * 会大声提示去核对 ext_ref 语义（不静默给 0 分）。
  *
+ * **口径单点（AL.4b 起）**：三指标与留出集分桶只在 `src/nexus/consistency.ts` 实现一份，
+ * 本脚本 import 构建产物 `lib/nexus/consistency.js`——路由 `GET /api/nautilus/m2/alignments` 用的是同一份。
+ * 本文件只留「读库 + 取哪几行 + 怎么印」；禁止在此再写一套指标（同一样本两个 κ = 两套口径，本仓库明令禁止）。
+ *
  * 用法：node scripts/alignment-consistency.mjs [--db <path>] [--holdout 5] [--min 50] [--json]
  */
 import { existsSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
+import { metrics, pairAlignments, splitHoldout } from '../lib/nexus/consistency.js'
 
 function parseArgs(argv) {
   const out = { db: '', holdout: 5, min: 50, json: false }
@@ -33,40 +38,6 @@ function parseArgs(argv) {
   return out
 }
 
-/** 确定性分桶（FNV-1a 32 位；同 key 永远同桶——留出集可复现，不靠随机）。 */
-function bucketOf(key) {
-  let h = 0x811c9dc5
-  for (let i = 0; i < key.length; i++) { h ^= key.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0 }
-  return h
-}
-
-function metrics(pairs) {
-  const n = pairs.length
-  if (n === 0) return { n: 0, exact: null, near: null, kappa: null, confusion: {} }
-  let exact = 0, near = 0
-  const confusion = {}
-  for (const p of pairs) {
-    if (p.human === p.self) exact += 1
-    if (Math.abs(p.human - p.self) <= 1) near += 1
-    const k = p.human + '->' + p.self
-    confusion[k] = (confusion[k] || 0) + 1
-  }
-  // 二次加权 κ（K=5 档）
-  const K = 5
-  const obs = [], exp = []
-  for (let i = 1; i <= K; i++) { obs.push([0,0,0,0,0]); exp.push([0,0,0,0,0]) }
-  const hc = [0,0,0,0,0], sc = [0,0,0,0,0]
-  for (const p of pairs) { obs[p.human-1][p.self-1] += 1; hc[p.human-1] += 1; sc[p.self-1] += 1 }
-  for (let i = 0; i < K; i++) for (let j = 0; j < K; j++) exp[i][j] = (hc[i] * sc[j]) / n
-  let num = 0, den = 0
-  for (let i = 0; i < K; i++) for (let j = 0; j < K; j++) {
-    const w = Math.pow(i - j, 2) / Math.pow(K - 1, 2)
-    num += w * obs[i][j]; den += w * exp[i][j]
-  }
-  const kappa = den === 0 ? null : 1 - num / den
-  return { n, exact: exact / n, near: near / n, kappa, confusion }
-}
-
 function fmt(x) { return x === null ? '—' : (x * 100).toFixed(1) + '%' }
 
 function main() {
@@ -75,20 +46,15 @@ function main() {
   const dbFile = args.db !== '' ? args.db : join(home, 'nautilus', 'nautilus.db')
   if (!existsSync(dbFile)) { console.error('库不存在：' + dbFile); process.exit(2) }
   const db = new DatabaseSync(dbFile, { readOnly: true })
+  // 读库（SQL 列是 snake_case）→ 共享模块的领域形状（camelCase）：**这层映射必须显式写**，
+  // 否则 pairAlignments 收到 ext_ref/turn_ordinal 取不到值、静默配出 0 对（实测踩到：两侧各 4 行却配对 0）。
   const human = db.prepare('SELECT session, turn, align FROM turn_annotation WHERE align IS NOT NULL AND schema_version >= 2').all()
-  const self = db.prepare("SELECT ext_ref, turn_ordinal AS turn, align, rubric_version FROM selfcheck_record WHERE align IS NOT NULL AND source_kind = 'dsh_tool'").all()
-  const selfMap = new Map()
-  for (const s of self) selfMap.set(String(s.ext_ref) + ':' + String(s.turn), s)
-  const pairs = [], holdout = [], evolution = [], legacySelf = []
-  for (const s of self) if (s.rubric_version !== 'al-v1') legacySelf.push(s)
-  for (const h of human) {
-    const key = String(h.session) + ':' + String(h.turn)
-    const s = selfMap.get(key)
-    if (s === undefined) continue
-    const p = { key, session: String(h.session), turn: Number(h.turn), human: Number(h.align), self: Number(s.align) }
-    pairs.push(p)
-    if (bucketOf(key) % args.holdout === 0) holdout.push(p); else evolution.push(p)
-  }
+  const self = db.prepare("SELECT ext_ref, turn_ordinal, align, rubric_version FROM selfcheck_record WHERE align IS NOT NULL AND source_kind = 'dsh_tool'").all()
+    .map((r) => ({ extRef: String(r.ext_ref), turnOrdinal: Number(r.turn_ordinal), align: r.align === null ? null : Number(r.align), rubricVersion: r.rubric_version === null ? null : String(r.rubric_version) }))
+  const legacySelf = self.filter((s) => s.rubricVersion !== 'al-v1')
+  // 配对键 = (session, turn) ↔ (ext_ref, turn_ordinal)；切分确定性（同 key 永远同侧）——口径都在共享模块里
+  const pairs = pairAlignments(human, self)
+  const { holdout, evolution } = splitHoldout(pairs, args.holdout)
   db.close()
   const all = metrics(pairs), ev = metrics(evolution), ho = metrics(holdout)
   const result = { db: dbFile, humanRows: human.length, selfRows: self.length, pairs: all.n, evolution: ev, holdout: ho, holdoutEvery: args.holdout, min: args.min }

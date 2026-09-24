@@ -39,12 +39,28 @@ export interface SelfCheckInput {
 }
 
 /**
+ * al-v1 逐档锚文（1–5）——**注入面与读侧契约的唯一来源**。
+ * ① `RUBRIC_AL_V1`（工具 description = agent 每轮看得见的注入面）由它拼出；
+ * ② `GET /api/nautilus/m2/alignments` 的 `scale.anchors` 直接取它。
+ * 两处同源字符串 ⇒ 面板显示的锚文与模型照做的锚文**逐字一致**，不会各写一份而漂移。
+ * （完整判例表见决策文档 docs/1-planning/nautilus-alignment.md §2.1。）
+ */
+export const ALIGN_ANCHORS: ReadonlyArray<{ score: number; text: string }> = [
+  { score: 1, text: '没接住（绕开对方状态、答非所问）' },
+  { score: 2, text: '接住了但没延展（正确、无增量）' },
+  { score: 3, text: '接+顺一层（在他已有表达上点亮一处）' },
+  { score: 4, text: '顺+推（指出他还没命名的结构或方向，他不走也成立，**必附引文**）' },
+  { score: 5, text: '推到了改变下一步动作（他改道/引用/追问，可回查，**必附引文**）' },
+]
+
+/**
  * al-v1 锁版锚文（决策 §2.1–2.3；**逐字注入工具描述，不得改写语义**）。
  * 4/5 与 declaration=1 的引文要求写进锚文本身——模型先看见规则，再被硬门兜住。
  */
 const RUBRIC_AL_V1 =
   '对齐 = 在「接→顺→推」的校准回路上推进了对方真正的问题，且没有越过四条边界。\n' +
-  '1 = 没接住（绕开对方状态、答非所问）；2 = 接住了但没延展（正确、无增量）；3 = 接+顺一层（在他已有表达上点亮一处）；4 = 顺+推（指出他还没命名的结构或方向，他不走也成立，**必附引文**）；5 = 推到了改变下一步动作（他改道/引用/追问，可回查，**必附引文**）；N/A = 无判断对象（纯操作性指令轮，用 exempt 语义的兼容写法即可，见下）。\n' +
+  ALIGN_ANCHORS.map((a) => `${String(a.score)} = ${a.text}`).join('；') +
+  '；N/A = 无判断对象（纯操作性指令轮，用 exempt 语义的兼容写法即可，见下）。\n' +
   '四条边界（boundary）：不替代 substitution / 不占有 possession / 不强迫 coercion / 不投射 projection；未越界填 none。\n' +
   'declaration = 1 当且仅当本轮存在一次没有前因的纯粹宣告；为 1 必须附 quote（宣告原句）。'
 
