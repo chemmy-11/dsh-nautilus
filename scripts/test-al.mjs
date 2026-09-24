@@ -174,3 +174,54 @@ test('AL.2 v8 CHECK 三门：align 1–5 越界拒 / 4 与 5 无引文拒 / exem
     raw.close()
   } finally { cleanup(tmp) }
 })
+
+// ── AL.4a 收敛守卫：假设 / 预言 / 工作区指向零残留 ────────────────────────────
+
+test('AL.4a 源码守卫：假设/预言/工作区指向在 src/client/** 与 src/routes.ts 零残留', () => {
+  // 作用域（守谷人 2026-09-28 裁决，逐条写明理由）：
+  //  · src/client/** + src/routes.ts：断「零残留」，无例外；
+  //  · src/store.ts：只断方法已删——表名与迁移体字符串**必须保留**（红线 3：表一律不 drop），故不 grep 字符串；
+  //  · src/index.ts：**显式豁免**。那里的 `lField` 是 Config 公开字段名（lField.enabled / lField.historyDays），
+  //    删或改名等于改破坏性配置面（需同步 schema / README 双语 / 部署侧 cordis.yml），
+  //    且该文件当时由主线 AL.3 执行者并行编辑——列为独立改动，由主线收敛时统一改名。
+  const FORBIDDEN = ['PROPHECY_SEED', 'lfield', 'Lfield', '/m2/annotations', 'L 场', 'HypothesesView', 'ProphecyView', 'AnnotationsState', 'prophecy']
+  const walk = (dir) => readdirSync(dir, { withFileTypes: true }).flatMap((d) =>
+    d.isDirectory() ? walk(join(dir, d.name)) : (d.name.endsWith('.ts') ? [join(dir, d.name)] : []))
+  const files = [...walk(join(SRC, 'client')), join(SRC, 'routes.ts')]
+  assert.ok(files.length >= 3, '守卫样本太少，路径可能写错：' + String(files.length))
+  const hits = []
+  for (const f of files) {
+    const text = readFileSync(f, 'utf8')
+    for (const token of FORBIDDEN) {
+      if (text.includes(token)) hits.push(f.replace(REPO, '') + ' 命中 ' + token)
+    }
+  }
+  assert.deepEqual(hits, [], '假设/预言/工作区指向残留：\n' + hits.join('\n'))
+})
+
+test('AL.4a store 守卫：标注与指向的读写方法已删，表名与迁移体仍保留', () => {
+  const text = readFileSync(join(SRC, 'store.ts'), 'utf8')
+  for (const m of ['listAnnotations', 'upsertAnnotation', 'lfieldRoot', 'setLfieldRoot', 'sessionRootCounts']) {
+    assert.ok(!text.includes(m), 'store.ts 仍残留已删方法：' + m)
+  }
+  // 反向守卫：撤方法不等于删表——DDL 与迁移体必须原样在场（红线 3，历史数据不删）
+  for (const keep of [
+    'CREATE TABLE IF NOT EXISTS lfield_config',
+    'CREATE TABLE IF NOT EXISTS session_root',
+    'INSERT OR IGNORE INTO lfield_config',
+  ]) {
+    assert.ok(text.includes(keep), 'store.ts 丢了必须保留的 DDL/迁移体：' + keep)
+  }
+})
+
+test('AL.4a 保留面守卫：曲线 / 白盒 analysis / 自评 ingest 未被误删', () => {
+  // 「只做减法」的反向保险：撤两项时最容易顺手删掉共享的 analysis 与曲线取数
+  const wb = readFileSync(join(SRC, 'client', 'workbench.ts'), 'utf8')
+  for (const keep of ['CurveView', 'curveValue', 'curveLabel', 'SHAPE_LABEL', 'AnalysisRow', 'selfcheck']) {
+    assert.ok(wb.includes(keep), 'workbench.ts 丢了保留面：' + keep)
+  }
+  const rt = readFileSync(join(SRC, 'routes.ts'), 'utf8')
+  for (const keep of ['/m2/state', '/m2/analysis', '/m2/turn-text', '/selfcheck', '/m2/turn-annotations']) {
+    assert.ok(rt.includes(keep), 'routes.ts 丢了保留路由：' + keep)
+  }
+})

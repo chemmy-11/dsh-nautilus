@@ -1,10 +1,10 @@
 /**
  * @dsh-external/dsh-nautilus — Nautilus 工作台（全局面板，S4「瑞士制图」）。
  *
- * 规格：docs/2-dev/nautilus-dev-02-ui-workbench.md（§2 令牌 / §3 五视图+抽屉+era 条 / §4 组件 / §5 人工标注 / §6 数据契约）
+ * 规格：docs/2-dev/nautilus-dev-02-ui-workbench.md（§2 令牌 / §3 四视图+抽屉+era 条 / §4 组件 / §6 数据契约）
  * 入口：sidebar.panellist 图标（root）+ main keyed 面板（root），两者 id 同值 = MainPanelId（§3.0 实测契约）。
  *
- * 数据口径（只读；唯一写操作是预言标注 POST /m2/annotations）：
+ * 数据口径（只读：AL.4a 撤除标注层与工作区指向抽象后，本面板无任何写路径）：
  *   · NEXUS 层：/api/nautilus/m2/state（逐轮读数/曲线/自评覆盖）· /api/nautilus/m2/analysis（白盒）
  *   · PULSE 层：/api/nautilus/pulse/state（每指标最新值 + 采集器健康度）
  *   · INFER 层：Phase 2a 才落库（TTFT/provider）——当前所有视图显示缺席态，不编造、不写 0 假读数
@@ -243,28 +243,12 @@ export type PulseState = {
 }
 export type M2Point = { session: string; turn: number; ts: number; tokenIn: number; tokenOut: number; cacheRead: number; durationMs: number | null; tps: number | null; missToken?: number | null; question?: string | null; clarity?: number | null; defense?: string | null; declaration?: number | null }
 export type M2State = {
-  pointing: string
   totals: { turns: number; tokenIn: number; tokenOut: number; cacheRead: number; missToken: number; hitRate: number | null }
   curve: M2Point[]
   recent: M2Point[]
   selfcheck: { checked: number; total: number; bySession?: Record<string, { checked: number; total: number; missing: number[] }> }
   sessionMeta: Record<string, { startTs: number; turns: number }>
 }
-export type Annotation = { prophecy: string; status: string; note: string | null; updatedAt: number }
-export type AnnotationsState = { annotations: Annotation[] }
-
-export const PROPHECY_SEED: Array<[string, string]> = [
-  ['P1', '缓存未命中率随知识库会话推进下降（S 形）'],
-  ['P2', '纯粹宣告轮次在自评 declaration 上可辨'],
-  ['P3', '防御强度与未命中率同向变化'],
-  ['P4', 'τ_e 在知识型会话中显著大于闲聊会话'],
-  ['P5', 'TPS 与未命中率负相关（上下文越长解码越慢）'],
-  ['P6', '指向工作区的会话未命中率高于非指向工作区'],
-  ['P7', '同窗 CPU 尖峰与未命中率上升共存'],
-  ['P8', 'GPU 显存占用与本地推理无关（api 时代）'],
-  ['P9', '自评覆盖率提升不改变读数分布'],
-]
-export const STATUS_LABEL: Record<string, string> = { pending: '待标注', doing: '进行中', checked: '已检验' }
 
 export const fmtBytes = (n: number): string => {
   if (!Number.isFinite(n)) return '—'
@@ -852,7 +836,7 @@ export function PulseChart(props: { metric: string; points: Array<{ ts: number; 
 
 // ── 视图 1：总览 ──────────────────────────────────────────────────────────────
 
-export function OverviewView(props: { m2: M2State | null; pulse: PulseState | null; lfield: LfieldInfo | null; viewMode: 'pointed' | 'all'; onViewMode: (m: 'pointed' | 'all') => void; newRoot: string; onNewRoot: (v: string) => void; switching: boolean; onSwitchLfield: (root: string) => void; onOpenTurn: (s: string, t: number) => void; paused?: boolean; sessionNameOf?: (id: string) => { name: string; title: string } | null; nonce?: number }): ReactNode {
+export function OverviewView(props: { m2: M2State | null; pulse: PulseState | null; onOpenTurn: (s: string, t: number) => void; paused?: boolean; sessionNameOf?: (id: string) => { name: string; title: string } | null; nonce?: number }): ReactNode {
   const { m2, pulse } = props
   const n = m2?.totals
   const hr = n?.hitRate
@@ -878,11 +862,10 @@ export function OverviewView(props: { m2: M2State | null; pulse: PulseState | nu
   }
   const rows: Array<{ layer: string; label: string; value: string; note?: string; warn?: boolean; spark?: Array<number | null> }> = [
     { layer: 'PULSE', label: '采集器心跳', value: last === null ? '未采样' : fmtTime(last), note: pulse === null ? 'pulse 未装配' : 'tick ' + String(pulse.collector.ticks) + ' · 库内 ' + String(pulse.db.rows) + ' 行 · shell=' + String(pulse.collector.shellPath === null ? '无' : pulse.collector.shellPath), warn: stale },
-    { layer: 'NEXUS', label: '读数规模', value: n === undefined ? '—' : String(n.turns) + ' 轮', note: '窗口内落库读数 · 归属由 L 场指向决定（vault 观测腿已下线）', spark: cumTok },
+    { layer: 'NEXUS', label: '读数规模', value: n === undefined ? '—' : String(n.turns) + ' 轮', note: '窗口内落库读数 · 全局口径（vault 观测腿已下线）', spark: cumTok },
     { layer: 'NEXUS', label: '窗口缓存命中率', value: hr === null || hr === undefined ? '—' : (hr * 100).toFixed(1) + '%', note: n === undefined ? '—' : '读 ' + String(n.cacheRead) + ' / 未命中 ' + String(n.missToken) + ' 令牌 · ' + String(n.turns) + ' 轮', warn: hr !== null && hr !== undefined && hr < 0.5, spark: missPct },
     { layer: 'INFER', label: '推理时延 TTFT', value: '—', note: 'Phase 2a 采集（provider 侧未接入）', warn: false },
     { layer: 'INFER', label: '层间对齐度', value: '—', note: '需 INFER 落地后方可计算 τ_e', warn: false },
-    { layer: 'M5', label: '预言命中', value: '—', note: 'call_p 未落库（迁移至 schema v5）', warn: false },
     { layer: 'SELF', label: '自评覆盖率', value: m2 === null ? '—' : String(m2.selfcheck.checked) + ' / ' + String(m2.selfcheck.total), note: '每轮 record_turn_selfcheck 落盘比例' },
   ]
   const HEADLINE = ['pulse.cpu.utilization', 'pulse.mem.used', 'pulse.gpu.util', 'pulse.proc.dsh.rss']
@@ -1013,38 +996,6 @@ export function OverviewView(props: { m2: M2State | null; pulse: PulseState | nu
             : StateBand({ domain: sessionDomain, lanes: ranked.slice(0, 6).map(([sid, e]) => ({ label: nameOf(sid), spans: [{ from: e.from, to: e.to }] })), xTick: fmtDayTime }),
         ),
     }),
-    Panel({
-      title: 'L 场读数（独立指向）', fig: 'FIG.08', collapsible: true, defaultCollapsed: true,
-      note: 'M4-L：L 场读数按会话发起时的工作区（cwd）归属，每根计数独立（跨根不混算）。「视图」切换决定取数口径（全局 = 全部工作区；指向 = 当前指向工作区）；切换指向只影响**新会话**的归属，既有归属不变。',
-      children: props.lfield === null
-        ? Empty({ text: 'L 场接口不可用（/api/nautilus/lfield）' })
-        : createElement('div', null,
-          createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 10 } },
-            createElement('span', { style: { fontSize: 10, letterSpacing: 2, color: 'var(--nt-faint,#9a9a95)' } }, '视图'),
-            createElement('div', { className: 'nt-wb-seg' },
-              ...([['pointed', '指向'], ['all', '全局']] as Array<['pointed' | 'all', string]>).map(([m, lab]) =>
-                createElement('button', { key: m, className: props.viewMode === m ? 'on' : '', onClick: () => props.onViewMode(m) }, lab)),
-            ),
-            createElement('span', { style: { fontSize: 10, color: 'var(--nt-faint,#9a9a95)' } }, '取数口径随视图切换（曲线/假设/报告同步）'),
-          ),
-          createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 10 } },
-            createElement('span', { style: { fontSize: 10, letterSpacing: 2, color: 'var(--nt-faint,#9a9a95)' } }, '切换指向'),
-            createElement('input', {
-              className: 'nt-input', style: { flex: '1 1 260px', minWidth: 200 },
-              placeholder: '工作区绝对路径（如 L:\\L_workspace\\...）',
-              value: props.newRoot, onChange: (e: { target: { value: string } }) => props.onNewRoot(e.target.value),
-            }),
-            createElement('button', { className: 'nt-btn', disabled: props.switching || props.newRoot.trim() === '', onClick: () => props.onSwitchLfield(props.newRoot) }, props.switching ? '切换中…' : '确认切换'),
-          ),
-          createElement('table', { className: 'nt-tbl' },
-            createElement('thead', null, createElement('tr', null, ...['归属根', '读数条数'].map((h) => createElement('th', { key: h }, h)))),
-            createElement('tbody', null, ...Object.entries(props.lfield.counts).map(([root, n]) => createElement('tr', { key: root === '' ? '(未归属)' : root },
-              createElement('td', null, root === '' ? '（未归属：会话无 workspace）' : (props.lfield === null ? root : (props.lfield.known.find((k) => k.root === root)?.displayName ?? shortRoot(root)))),
-              createElement('td', null, String(n)),
-            )))),
-          createElement('p', { className: 'nt-note' }, '当前 L 场指向：' + (props.lfield.known.find((k) => k.root === (props.lfield === null ? '' : props.lfield.active))?.displayName ?? shortRoot(props.lfield.active)) + ' · 已知根 ' + String(props.lfield.known.length) + ' 个'),
-        ),
-    }),
   )
 }
 
@@ -1068,18 +1019,6 @@ export function curveLabel(key: CurveKey): string { return key === 'miss' ? '未
 export type AnalysisRow = { session: string; shape: string; tauE: number | null; burst: { fromTurn: number; toTurn: number; direction: string } | null }
 export const SHAPE_LABEL: Record<string, string> = { sigmoid: 'S 形', 'inverse-sigmoid': '反 S 形', rising: '上升', falling: '下降', unknown: '形态未定' }
 
-/** M4-L L 场读数指向与计数（GET /api/nautilus/lfield）。 */
-export type LfieldInfo = {
-  revision: number
-  active: string
-  counts: Record<string, number>
-  known: Array<{ root: string; displayName: string | null; active: number; confirmedAt: number | null }>
-}
-/** 路径末段（指向短名的兜底；displayName 优先）。 */
-export function shortRoot(root: string): string {
-  const parts = root.split(/[\\/]/).filter((s) => s !== '')
-  return parts.length === 0 ? '未指向' : parts[parts.length - 1]
-}
 /** 会话 id → 可读短名（不改动任何读数，仅呈现层截断）。 */
 export function shortSession(id: string): string {
   return id.startsWith('session-') ? id.slice(8, 16) : id.slice(0, 8)
@@ -1111,7 +1050,7 @@ export function CurveView(props: {
   // 时间档位（1 周 / 1 月）；全屏：绝对定位占满工作台面板（fixed 会被宿主布局的 transform 基改名空间劫持）、Esc 退出
   const [range, setRange] = useState<7 | 30>(7)
   const [full, setFull] = useState(false)
-  // 轴口径（轮次轴 / 日期轴）与尾窗裁剪——沿旧 L 场 tab 的两态（axis），便于跨会话对齐轮序
+  // 轴口径（轮次轴 / 日期轴）与尾窗裁剪——两态（axis）便于跨会话对齐轮序
   const [axis, setAxis] = useState<'date' | 'turn'>('date')
   // 数据源：NEXUS 轮次（事件驱动，非等间隔）/ PULSE 采样（等间隔，斜率可读）
   const [source, setSource] = useState<'nautilus' | 'pulse'>('nautilus')
@@ -1206,7 +1145,7 @@ export function CurveView(props: {
     createElement('span', { style: { width: 12 } }),
     ...(['date', 'turn'] as Array<'date' | 'turn'>).map((a) => createElement('button', { key: a, className: axis === a ? 'on' : '', onClick: () => setAxis(a) }, a === 'date' ? '日期轴' : '轮次轴')),
   )
-  // M4-B：自评覆盖（当前视图口径；选中会话时带缺口轮号）——原 L 场 tab 的这条信息搬进工作台
+  // M4-B：自评覆盖（当前视图口径；选中会话时带缺口轮号）
   const sc = props.m2?.selfcheck
   const scSel = scope === 'all' ? undefined : sc?.bySession?.[scope]
   const coverageLine = createElement('span', { className: 'nt-label' },
@@ -1331,130 +1270,15 @@ export function CurveView(props: {
   )
 }
 
-// ── 视图 3：假设 ──────────────────────────────────────────────────────────────
-
-export function HypothesesView(props: { m2: M2State | null; ann: AnnotationsState | null; analysis: AnalysisRow[] | null; onProphecy: (id: string) => void }): ReactNode {
-  const status = (id: string): string => {
-    const hit = props.ann?.annotations.find((a) => a.prophecy === id)
-    return hit === undefined ? 'pending' : hit.status
-  }
-  const n = props.m2?.totals
-  // M3-F.3 白盒分析的产出直接当证据位：形态分布 / τ_e 可算性 / 爆发段——不再写「需 Phase 2a」这类过期占位
-  const rows = props.analysis ?? []
-  const shapeCount = rows.reduce((acc: Record<string, number>, r) => { acc[r.shape] = (acc[r.shape] ?? 0) + 1; return acc }, {})
-  const shapeText = Object.entries(shapeCount).sort((a, b) => b[1] - a[1]).map(([k, v]) => (SHAPE_LABEL[k] ?? k) + ' ' + String(v)).join(' · ')
-  const taus = rows.map((r) => r.tauE).filter((v): v is number => v !== null && Number.isFinite(v)).sort((a, b) => a - b)
-  const tauMedian = taus.length === 0 ? null : taus[Math.floor(taus.length / 2)]
-  const evidence: Record<string, string> = {
-    P1: n === undefined ? '待窗口读数' : '窗口命中率 ' + (n.hitRate === null ? '—' : (n.hitRate * 100).toFixed(1) + '%') + '（' + String(n.turns) + ' 轮）· 白盒形态 ' + (shapeText === '' ? '未检出' : shapeText),
-    P2: props.m2 === null ? '待自评落盘' : '自评 ' + String(props.m2.selfcheck.checked) + '/' + String(props.m2.selfcheck.total),
-    P3: '需逐轮自评与未命中率同轮对齐（自评覆盖 ' + String(props.m2 === null ? 0 : props.m2.selfcheck.checked) + ' 轮）',
-    P4: tauMedian === null ? 'τ_e 暂不可算（需 ≥4 轮且检出形态）' : 'τ_e 可算 ' + String(taus.length) + '/' + String(rows.length) + ' 会话 · 中位 ' + String(tauMedian) + ' turn',
-    P5: n === undefined || n.turns === 0 ? '待读数' : 'TPS 与未命中率的相关性待逐轮配对（当前 ' + String(n.turns) + ' 轮）',
-    P6: '需跨工作区对照（L 场指向可切换；会话按启动工作区归属，两边读数不混算）',
-    P7: '需 PULSE 同窗采样（间隔不同步，只能邻近对照）',
-    P8: 'era=api 下显存与推理无因果通路',
-    P9: '需自评覆盖率提升前后两窗口',
-  }
-  const analysed = rows.slice().sort((a, b) => (b.tauE ?? -1) - (a.tauE ?? -1)).slice(0, 12)
-  return createElement('div', null,
-    createElement('div', { className: 'nt-note', style: { marginTop: 0 } },
-      '假设是待检验命题，不是结论。每条假设的状态由人工标注（预言视图）决定；读数只提供证据位，不自动判定。'),
-    ...PROPHECY_SEED.map(([id, text]) => {
-      const st = status(id)
-      return createElement('div', { key: id, className: 'nt-card', onClick: () => props.onProphecy(id), style: { cursor: 'pointer' } },
-        createElement('div', { className: 'hd' },
-          createElement('b', null, id),
-          createElement('span', { className: 'st' + (st === 'checked' ? ' on' : '') }, STATUS_LABEL[st] ?? st),
-        ),
-        createElement('p', null, text),
-        createElement('p', { style: { color: 'var(--nt-faint,#9a9a95)', fontSize: 10.5 } }, '证据位：' + (evidence[id] ?? '—')),
-      )
-    }),
-    Panel({
-      title: '白盒分析（/m2/analysis）', fig: 'FIG.09',
-      note: 'M3-F.3 白盒：形态由未命中率序列的拐点与单调性**检出**，τ_e 是探索段长度（turn）。检出不是判定——假设成立与否仍由人工标注决定（见预言视图）。',
-      children: rows.length === 0
-        ? Empty({ text: '分析接口无结果（窗口内会话不足 4 轮，或接口不可达）' })
-        : createElement('div', null,
-          createElement('table', { className: 'nt-tbl' },
-            createElement('thead', null, createElement('tr', null, ...['会话', '形态', '爆发段', 'τ_e'].map((h) => createElement('th', { key: h }, h)))),
-            createElement('tbody', null, ...analysed.map((r) => createElement('tr', { key: r.session },
-              createElement('td', null, shortSession(r.session)),
-              createElement('td', null, SHAPE_LABEL[r.shape] ?? r.shape),
-              createElement('td', null, r.burst === null ? '—' : 't' + String(r.burst.fromTurn) + '→' + String(r.burst.toTurn) + '（' + (r.burst.direction === 'down' ? '降' : '升') + '）'),
-              createElement('td', null, r.tauE === null ? '—' : String(r.tauE) + ' turn'),
-            )))),
-          createElement('p', { className: 'nt-note' }, '检出会话 ' + String(rows.length) + ' 个 · 形态分布 ' + (shapeText === '' ? '—' : shapeText) + ' · τ_e 中位 ' + (tauMedian === null ? '—' : String(tauMedian) + ' turn')),
-        ),
-    }),
-  )
-}
-
-// ── 视图 4：预言 ──────────────────────────────────────────────────────────────
-
-export function ProphecyView(props: { ann: AnnotationsState | null; m2: M2State | null; toast: (m: string) => void; reload: () => void }): ReactNode {
-  const [busy, setBusy] = useState<string | null>(null)
-  const [note, setNote] = useState<string>('')
-  const [cur, setCur] = useState<string>('P1')
-  const mine = props.ann?.annotations.find((a) => a.prophecy === cur)
-  const save = async (status: string): Promise<void> => {
-    setBusy(cur)
-    try {
-      const r = await fetch('/api/nautilus/m2/annotations', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ prophecy: cur, status, note: note === '' ? (mine?.note ?? null) : note }),
-      })
-      if (!r.ok) { props.toast('标注失败：HTTP ' + String(r.status)); return }
-      props.toast(cur + ' → ' + (STATUS_LABEL[status] ?? status))
-      props.reload()
-    } catch (e) { props.toast('标注失败：' + String(e)) } finally { setBusy(null) }
-  }
-  return createElement('div', null,
-    createElement('div', { className: 'nt-note', style: { marginTop: 0 } },
-      '标注是解释层：它记录人对读数的解读，永不写回读数本身（读数不可变）。标注表与 pulse 表同库，POST 是唯一写路径。'),
-    Panel({
-      title: '预言标注', fig: 'FIG.05',
-      note: 'P1–P9 为登记在案的预言清单；状态与备注存于 annotation。',
-      children: createElement('div', null,
-        createElement('div', { style: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' } },
-          createElement('select', { className: 'nt-select', value: cur, onChange: (e: { target: { value: string } }) => { setCur(e.target.value); setNote('') } },
-            ...PROPHECY_SEED.map(([id, text]) => createElement('option', { key: id, value: id }, id + ' · ' + text.slice(0, 22)))),
-          createElement('span', { className: 'st', style: { fontSize: 10 } }, STATUS_LABEL[mine?.status ?? 'pending'] ?? '待标注'),
-          ...['pending', 'doing', 'checked'].map((s) => createElement('button', { key: s, className: 'nt-btn', disabled: busy !== null, onClick: () => { void save(s) } }, STATUS_LABEL[s] ?? s)),
-        ),
-        createElement('div', { style: { marginTop: 8 } },
-          createElement('textarea', {
-            className: 'nt-input', style: { width: '100%', minHeight: 56, fontFamily: 'inherit' },
-            placeholder: mine?.note ?? '备注（证据、反例、边界条件）',
-            value: note, onChange: (e: { target: { value: string } }) => setNote(e.target.value),
-          })),
-        createElement('p', { className: 'nt-note' }, mine === undefined ? '当前预言尚无标注记录。' : '最近更新 ' + fmtTime(mine.updatedAt) + '：' + (mine.note ?? '（无备注）')),
-      ),
-    }),
-    Panel({
-      title: '自评证据', fig: 'FIG.06',
-      note: 'record_turn_selfcheck 是每轮推理态自评（clarity/defense/declaration）；覆盖率低时 P2/P3 不可检验——此时结论只能停在「样本不足」。',
-      children: props.m2 === null
-        ? Empty({ text: 'M2 读数接口读取中或不可用' })
-        : createElement('div', { style: { fontSize: 11.5, lineHeight: 1.7 } },
-          '自评覆盖率 ' + String(props.m2.selfcheck.checked) + ' / ' + String(props.m2.selfcheck.total) + ' 轮（' +
-          (props.m2.selfcheck.total === 0 ? '0' : ((props.m2.selfcheck.checked / props.m2.selfcheck.total) * 100).toFixed(0)) + '%）——' +
-          (props.m2.selfcheck.total === 0 ? '窗口内无轮次，无从检验。' : props.m2.selfcheck.checked === 0 ? '尚未落盘任何自评，P2/P3 停在样本不足。' : '已可做初步配对，样本量仍小。')),
-    }),
-  )
-}
 // ── 视图 5：报告 ──────────────────────────────────────────────────────────────
 
-export function ReportView(props: { m2: M2State | null; pulse: PulseState | null; era: Era; ann: AnnotationsState | null; analysis: AnalysisRow[] | null }): ReactNode {
+export function ReportView(props: { m2: M2State | null; pulse: PulseState | null; era: Era; analysis: AnalysisRow[] | null }): ReactNode {
   const { m2, pulse, era } = props
   const n = m2?.totals
   const curve = m2?.curve ?? []
   const from = curve.length === 0 ? null : curve[0].ts
   const to = curve.length === 0 ? null : curve[curve.length - 1].ts
   const win = from === null || to === null ? '窗口内无轮次' : new Date(from).toLocaleString('zh-CN', { hour12: false }) + ' → ' + new Date(to).toLocaleString('zh-CN', { hour12: false })
-  const marked = props.ann === null ? 0 : props.ann.annotations.filter((a) => a.status === 'checked').length
   const rows = props.analysis ?? []
   const shapeCount = rows.reduce((acc: Record<string, number>, r) => { acc[r.shape] = (acc[r.shape] ?? 0) + 1; return acc }, {})
   const shapeText = Object.entries(shapeCount).sort((a, b) => b[1] - a[1]).map(([k, v]) => (SHAPE_LABEL[k] ?? k) + ' ' + String(v)).join(' · ')
@@ -1473,7 +1297,7 @@ export function ReportView(props: { m2: M2State | null; pulse: PulseState | null
     a.remove()
     setTimeout(() => URL.revokeObjectURL(url), 0)
   }
-  const snapshot = { generatedAt: new Date().toISOString(), era, claiming: eraWord(era), m2, pulse, annotations: props.ann, analysis: props.analysis }
+  const snapshot = { generatedAt: new Date().toISOString(), era, claiming: eraWord(era), m2, pulse, analysis: props.analysis }
   const md = [
     '# Nautilus 观测报告（中间报告）',
     '',
@@ -1488,7 +1312,6 @@ export function ReportView(props: { m2: M2State | null; pulse: PulseState | null
     '1. 命中率绝对值受会话口径影响，偏高；它衡量的是「同窗口内被缓存复用的输入占比」，不是「知识利用率」。',
     '2. NEXUS 与 PULSE 采样不同步（轮次事件 vs 定时采样），跨层陈述只能取邻近对照，不构成同窗归因。',
     '3. 本报告的 τ_e 是白盒轮次级探索段长度（/m2/analysis 检出）；端到端时延与探索率的耦合仍需 INFER 层，故报告不含任何时延结论。',
-    '4. 人工标注 ' + String(marked) + ' 条已检验；未标注项一律视为未检验，不并入结论。',
     '',
   ].join(String.fromCharCode(10))
   const gateOk = m2 !== null && pulse !== null
@@ -1500,19 +1323,18 @@ export function ReportView(props: { m2: M2State | null; pulse: PulseState | null
         ['观测窗口', win],
         ['读数样本', String(curve.length) + ' 轮 / ' + String(props.m2 === null ? 0 : Object.keys(props.m2.sessionMeta).length) + ' 会话'],
         ['层在场', 'NEXUS ' + (m2 === null ? '缺席' : '在场') + ' · PULSE ' + (pulse === null ? '缺席' : '在场') + ' · INFER 缺席'],
-        ['人工标注', String(marked) + ' 条已检验'],
         ['白盒分析', rows.length === 0 ? '无检出' : String(rows.length) + ' 会话 · ' + (shapeText === '' ? '形态未定' : shapeText) + ' · τ_e 中位 ' + (tauMedian === null ? '—' : String(tauMedian) + ' turn')],
       ] as Array<[string, string]>).flatMap(([k, v]) => [createElement('b', { key: k }, k), createElement('span', { key: k + ':v' }, v)])),
     createElement('div', { className: 'prose' },
       createElement('p', null, '一、样本与窗口。本报告覆盖 ' + String(curve.length) + ' 轮读数，来自 ' + String(props.m2 === null ? 0 : Object.keys(props.m2.sessionMeta).length) + ' 个会话；窗口自 ' + win + '。窗口由落库轮次决定，不是人工划定的实验区间——因此任何「前后对比」都要先确认两侧样本量是否可比。'),
       createElement('p', null, '二、缓存结构。窗口内缓存命中率 ' + (n === undefined || n.hitRate === null ? '暂无读数' : (n.hitRate * 100).toFixed(1) + '%') + '（读 ' + String(n?.cacheRead ?? 0) + ' / 未命中 ' + String(n?.missToken ?? 0) + ' 令牌）。这一列最能说明「上下文是否被复用」，但它同时受长上下文与话题切换混杂；把它当作探索率的投影，而不是结论。'),
       createElement('p', null, '三、本机侧。PULSE 采集器 tick ' + String(pulse?.collector.ticks ?? 0) + ' 次，库内 ' + String(pulse?.db.rows ?? 0) + ' 行 ' + String(pulse === null ? 0 : pulse.latest.length) + ' 指标；shell=' + String(pulse?.collector.shellPath ?? '无') + '，GPU 通道 ' + (pulse?.collector.gpuOk === true ? '可用' : '不可用') + '。本机读数与云端缓存之间在 era=' + era + ' 下' + (era === 'api' ? '没有因果通路' : '存在因果通路') + '，故报告中二者只作对照。'),
-      createElement('p', null, '四、白盒分析。M3-F.3 在本窗口检出 ' + String(rows.length) + ' 个会话的形态（' + (shapeText === '' ? '无' : shapeText) + '）；探索段长度 τ_e 可算 ' + String(taus.length) + ' 个，中位 ' + (tauMedian === null ? '—' : String(tauMedian) + ' turn') + '。形态与 τ_e 是**检出**，不是判定：它们只说明「曲线长这样」，是否支持某条假设仍由人工标注决定。'),
-      createElement('p', null, '五、缺席与上限。读数按会话启动工作区归属，跨根不混算；vault 观测腿已于 2026-09-27 下线，报告不含 vault 维度。INFER 层（TTFT/provider）尚未接入，**端到端时延与探索率的耦合**无法计算；本报告的 τ_e 是白盒的轮次级探索段长度，与 INFER 条件下的时延耦合不是同一个量。据此最高结论强度为「' + eraWord(era) + '」，且限于单层内部。'),
+      createElement('p', null, '四、白盒分析。M3-F.3 在本窗口检出 ' + String(rows.length) + ' 个会话的形态（' + (shapeText === '' ? '无' : shapeText) + '）；探索段长度 τ_e 可算 ' + String(taus.length) + ' 个，中位 ' + (tauMedian === null ? '—' : String(tauMedian) + ' turn') + '。形态与 τ_e 是**检出**，不是判定：它们只说明「曲线长这样」，不构成对任何命题的确认。'),
+      createElement('p', null, '五、缺席与上限。读数取全局口径（不再按工作区归属切分）；vault 观测腿已于 2026-09-27 下线，报告不含 vault 维度。INFER 层（TTFT/provider）尚未接入，**端到端时延与探索率的耦合**无法计算；本报告的 τ_e 是白盒的轮次级探索段长度，与 INFER 条件下的时延耦合不是同一个量。据此最高结论强度为「' + eraWord(era) + '」，且限于单层内部。'),
     ),
     createElement('div', { className: 'gate' },
       createElement('span', { className: 'nt-tag' + (gateOk ? '' : ' red') }, gateOk ? '读数层齐备' : '读数层缺口'),
-      createElement('span', null, '交付门：' + (gateOk ? 'NEXUS 与 PULSE 均在场，报告可作为中间报告交付；升级为正式报告需补 INFER 层与人工检验标注。' : 'NEXUS 或 PULSE 缺席，本报告仅为现场快照，不可作为阶段交付。')),
+      createElement('span', null, '交付门：' + (gateOk ? 'NEXUS 与 PULSE 均在场，报告可作为中间报告交付；升级为正式报告需补 INFER 层。' : 'NEXUS 或 PULSE 缺席，本报告仅为现场快照，不可作为阶段交付。')),
     ),
     createElement('div', { style: { marginTop: 12, display: 'flex', gap: 8 } },
       createElement('button', { className: 'nt-btn', onClick: () => save('nautilus-report.json', JSON.stringify(snapshot, null, 2), 'application/json') }, '导出 JSON 快照'),
@@ -1573,7 +1395,7 @@ export function Drawer(props: { target: DrawerTarget; point: M2Point | null; onC
           : createElement('table', { className: 'nt-tbl' }, createElement('tbody', null, ...rows.map(([k, v]) => createElement('tr', { key: k }, createElement('td', { style: { width: '42%', color: 'var(--nt-faint,#9a9a95)' } }, k), createElement('td', null, v))))),
         createElement('h5', null, '推理态自评（record_turn_selfcheck）'),
         selfRows.every(([, v]) => v === '未落盘')
-          ? Empty({ text: '该轮未落盘自评 → P2/P3 在此轮不可检验' })
+          ? Empty({ text: '该轮未落盘自评 → 该轮推理态自评缺席' })
           : createElement('table', { className: 'nt-tbl' }, createElement('tbody', null, ...selfRows.map(([k, v]) => createElement('tr', { key: k }, createElement('td', { style: { width: '42%', color: 'var(--nt-faint,#9a9a95)' } }, k), createElement('td', null, v))))),
         createElement('h5', null, '完整问答（turn_text）'),
         loading
@@ -1595,8 +1417,8 @@ export function Drawer(props: { target: DrawerTarget; point: M2Point | null; onC
 
 // ── 根组件 ────────────────────────────────────────────────────────────────────
 
-export type ViewKey = 'overview' | 'alerts' | 'curve' | 'hypotheses' | 'prophecy' | 'report'
-export const VIEW_LABEL: Record<ViewKey, string> = { overview: '总览', alerts: '告警', curve: '曲线', hypotheses: '假设', prophecy: '预言', report: '报告' }
+export type ViewKey = 'overview' | 'alerts' | 'curve' | 'report'
+export const VIEW_LABEL: Record<ViewKey, string> = { overview: '总览', alerts: '告警', curve: '曲线', report: '报告' }
 export const WORKBENCH_LABEL = 'Nautilus 工作台'
 
 /** 工作台根组件。onExitToConversation 由宿主半区注入（ctx.layout.selectPanel(null)），用于回到会话。 */
@@ -1612,35 +1434,16 @@ export function Workbench(props: { onExitToConversation?: () => void; sessionNam
   const [toast, setToast] = useState<string | null>(null)
   const [nonce, setNonce] = useState(0)
   const paused = drawer !== null
-  // L 场视图两态（原 L 场 tab 的全局/指向）：默认全局（?root=all），可切到当前 L 场指向
-  const [viewMode, setViewMode] = useState<'pointed' | 'all'>('all')
-  const [newRoot, setNewRoot] = useState('')
-  const [switching, setSwitching] = useState(false)
-  const m2 = useJson<M2State>('/api/nautilus/m2/state' + (viewMode === 'all' ? '?root=all' : ''), paused, 120000, nonce)
+  const m2 = useJson<M2State>('/api/nautilus/m2/state', paused, 120000, nonce)
   // 实时读数：OS 层每 1s 重取最新值（/pulse/state 只查 15 行 latest，代价可忽略）；
   // 手动档下值不会变，但重取同样廉价，故不额外分支。
   const pulse = useJson<PulseState>('/api/nautilus/pulse/state', paused, 1000, nonce)
   // A 系列：告警台账（5s 一取——确认/解除是分钟级事件，不必跟 1s 心跳）
   const alerts = useJson<AlertsState>('/api/nautilus/pulse/alerts?limit=50', paused, 5000, nonce)
-  const ann = useJson<AnnotationsState>('/api/nautilus/m2/annotations', paused, 120000, nonce)
-  // L 场接入（M4-L / M3-F.3）：每根会话计数 + 白盒分析（vault 观测腿 2026-09-27 下线，不再有 vault 取数）
-  const lfield = useJson<LfieldInfo>('/api/nautilus/lfield', paused, 120000, nonce)
-  const analysisRaw = useJson<{ results?: AnalysisRow[] } | AnalysisRow[]>('/api/nautilus/m2/analysis' + (viewMode === 'all' ? '?root=all' : ''), paused, 600000, nonce)
-  // L 场指向切换（原 L 场 tab 的能力）：切换只改「新会话」的归属，既有归属不变
-  const switchLfield = (root: string): void => {
-    if (root.trim() === '' || switching) return
-    setSwitching(true)
-    fetch('/api/nautilus/lfield', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', 'sec-fetch-site': 'same-origin' },
-      body: JSON.stringify({ root: root.trim() }),
-    })
-      .then((r) => { setToast(r.ok ? 'L 场指向已切换（新会话自此归入）' : '切换失败：HTTP ' + String(r.status)); if (r.ok) { setNewRoot(''); setNonce((v) => v + 1) } })
-      .catch((e) => setToast('切换失败：' + String(e)))
-      .finally(() => setSwitching(false))
-  }
+  // 白盒分析（M3-F.3）：全局口径（vault 观测腿 2026-09-27 下线，不再有 vault 取数）
+  const analysisRaw = useJson<{ results?: AnalysisRow[] } | AnalysisRow[]>('/api/nautilus/m2/analysis', paused, 600000, nonce)
   // /m2/analysis 返回 { revision, results }（routes.ts）——归一化为数组，兼容直接数组形态；
-  // 未归一化时 rows.reduce 对对象调用会抛错（假设/报告视图渲染失败的根因）
+  // 未归一化时 rows.reduce 对对象调用会抛错（报告视图渲染失败的根因）
   const analysis = Array.isArray(analysisRaw) ? analysisRaw : (analysisRaw?.results ?? null)
   useEffect(() => {
     if (toast === null) return
@@ -1651,19 +1454,17 @@ export function Workbench(props: { onExitToConversation?: () => void; sessionNam
   const ok = (v: unknown): string => (v === null ? '缺席' : '在场')
   // 用 createElement 渲染视图组件（**不可**写成 OverviewView({...}) 直接调用）：
   // 直接调用会把子组件的 hooks 算进父组件，切换视图时 hooks 数量变化 → React 抛错、整页渲染失败。
-  const body = view === 'overview' ? createElement(OverviewView, { m2, pulse, lfield, viewMode, onViewMode: setViewMode, newRoot, onNewRoot: setNewRoot, switching, onSwitchLfield: switchLfield, onOpenTurn: (s: string, t: number) => setDrawer({ session: s, turn: t }), paused, sessionNameOf: props.sessionNameOf, nonce })
+  const body = view === 'overview' ? createElement(OverviewView, { m2, pulse, onOpenTurn: (s: string, t: number) => setDrawer({ session: s, turn: t }), paused, sessionNameOf: props.sessionNameOf, nonce })
     : view === 'curve' ? createElement(CurveView, { m2, era, pulse, paused, analysis, sessionNameOf: props.sessionNameOf, onOpenTurn: (s: string, t: number) => setDrawer({ session: s, turn: t }), nonce })
-    : view === 'hypotheses' ? createElement(HypothesesView, { m2, ann, analysis, onProphecy: (id: string) => { setView('prophecy'); setToast('已跳到预言标注：' + id) } })
     : view === 'alerts' ? createElement(AlertsView, { state: alerts, toast: setToast, reload: () => setNonce((v) => v + 1), collectorMode: pulse === null ? 'auto' : pulse.collector.mode })
-    : view === 'prophecy' ? createElement(ProphecyView, { ann, m2, toast: setToast, reload: () => setNonce((v) => v + 1) })
-    : createElement(ReportView, { m2, pulse, era, ann, analysis })
+    : createElement(ReportView, { m2, pulse, era, analysis })
   return createElement('div', { className: 'nt-wb', 'data-nt-theme': theme },
     createElement('div', { className: 'nt-wb-top' },
       props.onExitToConversation !== undefined
         ? createElement('button', { className: 'nt-btn', style: { marginRight: 2 }, onClick: () => { if (props.onExitToConversation !== undefined) props.onExitToConversation() } }, '← 返回会话')
         : null,
       createElement('div', { className: 'nt-wb-brand' }, 'NAUTILUS', createElement('small', null, 'Observation Workbench')),
-      createElement('div', { className: 'nt-wb-seg' }, ...(['overview', 'alerts', 'curve', 'hypotheses', 'prophecy', 'report'] as ViewKey[]).map((k) => createElement('button', { key: k, className: k === view ? 'on' : '', onClick: () => setView(k) }, VIEW_LABEL[k]))),
+      createElement('div', { className: 'nt-wb-seg' }, ...(['overview', 'alerts', 'curve', 'report'] as ViewKey[]).map((k) => createElement('button', { key: k, className: k === view ? 'on' : '', onClick: () => setView(k) }, VIEW_LABEL[k]))),
       createElement('div', { className: 'nt-wb-right' },
         createElement('span', null, 'NEXUS ' + ok(m2) + ' · PULSE ' + ok(pulse)),
         createElement('button', {

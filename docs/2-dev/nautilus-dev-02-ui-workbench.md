@@ -96,7 +96,14 @@
 
 ---
 
-## 3. 信息架构（六视图 + 抽屉 + era 条）
+## 3. 信息架构（四视图 + 抽屉 + era 条）
+
+> **2026-09-28 AL.4a 收敛（UI 线，feat/ui）**：工作台视图由六收敛为**四**（总览 / 告警 / 曲线 / 报告）——
+> 「假设台账」「预言检验表」两视图连同其标注读写层（`GET/POST /m2/annotations`、`PROPHECY_SEED`、标注 UI）整块撤除；
+> 「工作区指向」抽象（视图两态 pointed/all、指向切换、总览 FIG.08 面板、`GET/POST /lfield`）同步撤除。
+> 因此本面板**已无任何写路径**；曲线（未命中率 / 时长 / tps / 累计输入）与白盒 analysis（形态 / τ_e）**全部保留**。
+> `annotation` / `lfield_config` / `session_root` 三表**保留不 drop**（红线 3，历史数据不删）。
+> 下列原型描述保留为设计沿革，落地以 `src/client/workbench.ts` 为准。
 
 ### 3.0 宿主 UI 入口契约（2026-09-13 对 0.1.5-rc.2 安装树实测，slot 声明以 in-box 包 `lib/types` 为权威）
 
@@ -211,7 +218,7 @@
 ### 5.1 定位与边界
 
 - 标注是 nexus 层读数之上的**人工判读层**：记录「这轮发生了什么 / 为何异常 / 如何处置」，**不修改、不删除任何原始读数**（红线：采集数据不可变）。
-- 与既有两套标注的关系：**预言标注**（`m2/annotations`，prophecy 维度，已有）不动；**自评**（clarity/defense/declaration，agent 侧产出）不动；本节新增的是**轮次维度的人工标注**。
+- 与既有两套标注的关系：**预言标注**（`m2/annotations`，prophecy 维度）已于 2026-09-28 AL.4a 撤除；**自评**（clarity/defense/declaration，agent 侧产出）不动；本节新增的是**轮次维度的人工标注**。
 
 ### 5.2 交互流
 
@@ -248,7 +255,7 @@
 
 ## 6. 数据契约与 API（对齐 §5 + 现有面）
 
-**现有**（`src/routes.ts`，实现时逐条核对，不凭本文档）：`GET m2/state` · `GET m2/analysis` · `GET m2/turn-text` · `GET/POST m2/annotations`（预言）· `GET/POST lfield` · pulse 三条（`state`/`series`/`control`）。**vault 观测腿 2026-09-27 下线后** `GET state` / `POST action` / `GET+POST vault` 已删除；原文保留如下：`GET state` · `POST action` · `GET/POST m2/annotations`（预言）· `GET m2/state` · `GET m2/analysis` · `GET m2/turn-text` · `GET/POST lfield` · `GET/POST vault`。
+**现有**（`src/routes.ts`，实现时逐条核对，不凭本文档）：`GET m2/state` · `GET m2/analysis` · `GET m2/turn-text` · `GET/POST m2/turn-annotations` · `POST selfcheck` · pulse 四条（`state`/`series`/`control`/`alerts`）。**演进**：vault 观测腿 2026-09-27 下线删除 `GET state` / `POST action` / `GET+POST vault`；**2026-09-28 AL.4a** 再删 `GET/POST m2/annotations`（预言标注）与 `GET/POST lfield`（工作区指向）——三张相关表保留不 drop。
 
 **新增提案**（轮次人工标注；命名沿用 `m2` 前缀，路由进 `API_PREFIX` 集中常量）：
 
@@ -284,8 +291,8 @@
 | 逐会话双 tab | ~~同文件，`conversation.view` ×2~~ **2026-09-27 收敛**：vault 观测 tab 随观测腿下线删除、L 场读数 tab 能力搬进工作台后删除——客户端半区只剩工作台一个入口面（`client/index.ts` 仅 inject + sessionNameOf + 工作台双注册），`conversation.view` 不再注册 | ✅ 已收敛 |
 | 图表语法升级（§4.5） | `src/client/charts.ts`（Sparkline/MiniChart/BarGauge/StackedBars/StateBand/TopList，全部无 hooks）+ 总览 FIG.01 网格化（USE 分区/同步十字线/gauge/健康带）+ FIG.10 会话活跃与排行 + 曲线视图「输入构成」堆叠柱档 | ✅ 2026-09-20 落地（六件套 30/30；端上验收待 dsh-next 刷新，稳定版 dsh 不动） |
 | `fmtK` 缺失修复 | `curveLabel('cum')` 的 y 轴格式引用了未定义的 `fmtK`（客户端半区无 tsc 把关漏网）——切「累计输入」档会 ReferenceError | ✅ 顺手修复 |
-| 取数口径 | §6 现成只读 API：`/state` · `/m2/state?root=all` · `/m2/annotations` · `/m2/turn-text` · `/pulse/state` | ✅ 未命中率对齐 `routes.ts:167`（`tokenIn/(tokenIn+cacheRead)`） |
-| 唯一写路径 | `POST /api/nautilus/m2/annotations`（预言标注） | ✅ 失败 toast 不静默 |
+| 取数口径 | §6 现成只读 API：`/m2/state`（全局口径）· `/m2/turn-text` · `/m2/turn-annotations` · `/pulse/state` | ✅ 未命中率对齐 `tokenIn/(tokenIn+cacheRead)` |
+| 唯一写路径 | 无——2026-09-28 AL.4a 后本面板只读（原 `POST /api/nautilus/m2/annotations` 随假设/预言视图撤除） | —（写路径已撤，判定更新） |
 | 缺席态 | INFER 层未接入 / 无数据 → 缺席文案与诚实边界，不写 0 | ✅ 全视图覆盖 |
 | 浏览器渲染确认 | 既有页面刷新后人工确认（device-auth 门，无自动化） | ⏳ 待守谷人 |
 | `dsh.client.inject` 新值生效 | 重启后已生效（启动图行含 layout/sidebar 两条边，§E12） | ✅ 收敛 |

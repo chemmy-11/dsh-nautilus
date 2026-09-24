@@ -1,9 +1,9 @@
 /**
  * @dsh-external/dsh-nautilus — client entry（只剩工作台：全局面板 + 侧栏图标）。
  *
- * 沿革：2026-09-27 vault 观测腿下线（Vault 观测 tab 删除）；同日 L 场读数能力**搬进工作台**
- * （视图两态 / 指向切换 / 累计输入 / 轮次轴 / 自评覆盖，见 workbench.ts），故逐会话的
- * 「L 场读数」tab 一并删除——客户端半区只保留工作台这一个入口面。
+ * 沿革：2026-09-27 vault 观测腿下线（Vault 观测 tab 删除），逐会话读数 tab 一并删除，
+ * 读数能力搬进工作台（累计输入 / 轮次轴 / 自评覆盖，见 workbench.ts）；
+ * 2026-09-28 AL.4a 收敛：标注层与工作区指向抽象撤除——客户端半区只保留工作台这一个入口面。
  *
  * dsh 客户端入口契约：
  *  - 客户端插件就是普通 Cordis 插件（Context 来自 @deepseek-ai/cordis）；
@@ -14,7 +14,7 @@
 import { createElement, type ReactNode } from 'react'
 import type { MainPanelId } from '@deepseek-ai/dsh-client-ui-layout/client' // 主区面板 id 的 branded 类型（main keyed）
 import type {} from '@deepseek-ai/dsh-client-ui-sidebar/client' // 拉 sidebar.panellist SlotMap 类型
-// 工作台（全局面板）：五视图 + 抽屉 + era 条，规格见 docs/2-dev/nautilus-dev-02-ui-workbench.md
+// 工作台（全局面板）：四视图 + 抽屉 + era 条，规格见 docs/2-dev/nautilus-dev-02-ui-workbench.md
 import { Workbench, WorkbenchIcon, WORKBENCH_ID, WORKBENCH_LABEL } from './workbench'
 // 令牌层（U2：--nt-* 亮暗双主题跟随 DSH）——在 apply() 就注入：侧栏图标在 .nt-wb 之外也要吃到令牌
 import { ensureNautilusTheme } from './theme'
