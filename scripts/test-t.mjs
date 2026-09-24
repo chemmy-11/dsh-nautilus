@@ -17,7 +17,7 @@ import { buildPool, selectFromPool, nextBatchId } from './annotation-sample.mjs'
 
 // ── 迁移与 CHECK 双门 ─────────────────────────────────────────────────────────
 
-test('migrateV6: v5 存库升级幂等、turn_read 数字不变、新库直达最新（v7）', () => {
+test('migrateV6: v5 存库升级幂等、turn_read 数字不变、新库直达最新（v8）', () => {
   const tmp = mkdtempSync(join(tmpdir(), 'nautilus-v6-'))
   try {
     const file = join(tmp, 'n.db')
@@ -37,21 +37,24 @@ test('migrateV6: v5 存库升级幂等、turn_read 数字不变、新库直达�
       raw.close()
     }
     const s1 = openStore(file)
-    assert.equal(s1.schemaVersion(), 7, 'v5 存库经 v6(T 系列)+v7(A 系列) 后到最新')
+    assert.equal(s1.schemaVersion(), 9, 'v5 存库经 v6(T)+v7(A)+v8(AL) 后到最新')
     assert.deepEqual(s1.turnTotals(), { turns: 3, tokenIn: 0, tokenOut: 0, cacheRead: 0 }, 'turn_read 数字不变')
     assert.deepEqual({ ...s1.turnAnnotationCoverage() }.total, 0)
     s1.close()
     const s2 = openStore(file)
-    assert.equal(s2.schemaVersion(), 7, '重开不回退不重复')
+    assert.equal(s2.schemaVersion(), 9, '重开不回退不重复')
     s2.close()
     const fresh = openStore(join(tmp, 'fresh.db'))
-    assert.equal(fresh.schemaVersion(), 7)
+    assert.equal(fresh.schemaVersion(), 9)
     fresh.close()
-    // CHECK 双门：fit=4 无引文直插必须炸；合法对照（fit 档、exempt 档）直插必须成
+    // CHECK 双门：fit=4 无引文直插必须炸；合法对照（fit 档、exempt 档）直插必须成。
+    // AL.2/v8 起：旧 fit 行必须显式声明 schema_version=1（新表的 CHECK 用它把两代量表分层）——
+    // 所以下面三条都带上 schema_version，让断言打在**它本来要验的那道门**上（引文门/形态门），
+    // 而不是被「代际门」抢先拒掉。
     const raw = new DatabaseSync(file)
-    assert.throws(() => raw.prepare('INSERT INTO turn_annotation (session, turn, fit, quote, origin, annotated_at, updated_at) VALUES (?,?,?,NULL,?,?,?)')
+    assert.throws(() => raw.prepare('INSERT INTO turn_annotation (session, turn, fit, quote, origin, schema_version, annotated_at, updated_at) VALUES (?,?,?,NULL,?,1,?,?)')
       .run('x', 1, 4, 'sample', 1, 1), /CHECK/i, 'fit=4 缺引文必须被 CHECK 拒')
-    raw.prepare('INSERT INTO turn_annotation (session, turn, fit, exempt, origin, annotated_at, updated_at) VALUES (?,?,1,0,?,?,?)')
+    raw.prepare('INSERT INTO turn_annotation (session, turn, fit, exempt, origin, schema_version, annotated_at, updated_at) VALUES (?,?,1,0,?,1,?,?)')
       .run('x', 2, 'spot', 1, 1)
     raw.prepare('INSERT INTO turn_annotation (session, turn, fit, exempt, origin, annotated_at, updated_at) VALUES (?,?,NULL,1,?,?,?)')
       .run('x', 3, 'spot', 1, 1)

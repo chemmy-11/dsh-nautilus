@@ -21,8 +21,8 @@ import type { WebRoute } from '@deepseek-ai/dsh-host-webserver'
 import type { NautilusStore } from './store.js'
 import { statSync, accessSync, constants } from 'node:fs'
 import { isAbsolute, resolve } from 'node:path'
-import { analyze } from './analysis.js'
-import { ingestSelfCheck, QUOTE_MAX } from './selfcheck-ingest.js'
+import { analyze } from './nexus/analysis.js'
+import { ingestSelfCheck, QUOTE_MAX } from './nexus/selfcheck-ingest.js'
 
 /** 集中常量：路由前缀（AGENTS.md §1-4）。 */
 const API_PREFIX = '/api/nautilus'

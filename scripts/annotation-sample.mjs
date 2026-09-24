@@ -16,7 +16,7 @@ import { pathToFileURL } from 'node:url'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
-import { analyze } from '../lib/analysis.js'
+import { analyze } from '../lib/nexus/analysis.js'
 
 /** 确定性 PRNG（mulberry32）。 */
 export function mulberry32(s) {

@@ -16,8 +16,8 @@ import z from '@deepseek-ai/schemastery'
 import { resolveDataDir } from './home.js'
 import { openStore } from './store.js'
 import { registerNautilusRoutes } from './routes.js'
-import { TurnsCollector, type TurnEventLike } from './turns.js'
-import { registerSelfCheckTool } from './selfcheck.js'
+import { TurnsCollector, type TurnEventLike } from './nexus/turns.js'
+import { registerSelfCheckTool } from './nexus/selfcheck.js'
 // Phase 1：pulse（OS/GPU 层）以**子插件**挂载——本包带客户端半区，只允许一个 Loader 条目
 // （双条目 → client-modules: resolves from multiple active Loader sources → dsh web 起不来）。
 import * as pulse from './pulse/index.js'

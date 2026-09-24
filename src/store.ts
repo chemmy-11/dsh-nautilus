@@ -13,6 +13,8 @@ import { mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
 // v7 告警台账的 DDL 只有一份（本库迁移与 pulse 存储层共用），见 ALERT_EVENT_DDL 注释
 import { ALERT_EVENT_DDL } from './pulse/store.js'
+// AL.2：迁移账本（注册 + 顺序执行 + 回读校验），拆包甲的技术前提
+import { runMigrations, type Migration, type MigrationRunResult } from './migrations.js'
 /** M2/M3 turn 读数行（官方会话事件聚合；与团队底座零耦合）。 */
 export interface TurnReadRow {
   session: string
@@ -129,12 +131,27 @@ export class NautilusStore {
    * 该步已删除（新库不再建这三张表；老库的既有表保留为残留，不 drop）。
    */
   private migrate(): void {
-    const v = (this.db.prepare('PRAGMA user_version').get() as { user_version: number })?.user_version ?? 0
-    if (v < 2) this.migrateV2()
-    if (v < 3) this.migrateV3()
-    if (v < 5) this.migrateV5()
-    if (v < 6) this.migrateV6()
-    if (v < 7) this.migrateV7()
+    this.lastMigrationRun = runMigrations({ db: this.db, list: this.migrations() })
+  }
+
+  /** 本腿注册的迁移账本（顺序由版本号决定；v1/v4 属他腿或已废弃，见 migrations.ts 文件头）。 */
+  private migrations(): Migration[] {
+    return [
+      { version: 2, owner: 'nautilus', name: 'L 场指向 + 会话归属', apply: () => this.migrateV2() },
+      { version: 3, owner: 'nautilus', name: 'lfield 基线列', apply: () => this.migrateV3() },
+      { version: 5, owner: 'nautilus', name: 'S1.1 selfcheck_record', apply: () => this.migrateV5() },
+      { version: 6, owner: 'nautilus', name: 'T 系列 turn_annotation', apply: () => this.migrateV6() },
+      { version: 7, owner: 'nautilus', name: 'A 系列 alert_event', apply: () => this.migrateV7() },
+      { version: 8, owner: 'nautilus', name: 'AL 对齐量表 1–5（turn_annotation 重建 + selfcheck_record 追加）', apply: () => this.migrateV8() },
+      { version: 9, owner: 'nautilus', name: 'AL.3 selfcheck_record 重建（clarity/defense 转可空）', apply: () => this.migrateV9() },
+    ]
+  }
+
+  /** 最近一次迁移账本运行结果（诊断与测试用；null = 尚未运行）。 */
+  private lastMigrationRun: MigrationRunResult | null = null
+
+  migrationLog(): MigrationRunResult | null {
+    return this.lastMigrationRun
   }
 
 
@@ -282,6 +299,146 @@ export class NautilusStore {
     try {
       this.db.exec(ALERT_EVENT_DDL)
       this.db.exec('PRAGMA user_version = 7')
+      this.db.exec('COMMIT')
+    } catch (e) {
+      this.db.exec('ROLLBACK')
+      throw e
+    }
+  }
+
+  /**
+   * AL 迁移（user_version 7→8，决策 §3.2，守谷人 6 签已核）：
+   *  ① `turn_annotation` **重建**——加 `align` 1–5 / `align_prev` / `boundary`，CHECK 改写成三态：
+   *     豁免 / 旧 fit 行（schema_version=1，保留可查） / 新 align 行（schema_version≥2）。SQLite 改不了 CHECK，
+   *     故走「建新表 → 搬数据 → 换名」；**旧行一个不丢、字段一个不改**（红线 3）。
+   *  ② `selfcheck_record` 追加 `align/boundary/self_align/evidence/rubric_version/receive`（逐列判存在，幂等）。
+   * `align` 4 与 5 均须引文（签-2）：CHECK `align IS NULL OR align < 4 OR quote IS NOT NULL`。
+   * 旧 `fit` 列**保留不写**（术语已废止，但历史数据不动）。
+   */
+  private migrateV8(): void {
+    this.db.exec('BEGIN')
+    try {
+      // 表可能在（手工置版 / 半迁移的库）——缺席则跳过并如实告警，绝不硬崩（启动挡住比静默更重要的前提是「库本身可用」）
+      const hasTa = this.db.prepare("SELECT 1 AS x FROM sqlite_master WHERE type='table' AND name='turn_annotation'").get() !== undefined
+      const taCols = hasTa ? (this.db.prepare('PRAGMA table_info(turn_annotation)').all() as Array<{ name: string }>) : []
+      if (!hasTa) {
+        console.warn('[nautilus] migrateV8：turn_annotation 缺席——跳过重建（该表由 v6 创建；本库的版本号与表结构不一致，请人工核对）')
+      } else if (!taCols.some((c) => c.name === 'align')) {
+        this.db.exec(`
+          CREATE TABLE turn_annotation_v8 (
+            session        TEXT NOT NULL,
+            turn           INTEGER NOT NULL,
+            align          INTEGER CHECK (align BETWEEN 1 AND 5),
+            fit            INTEGER CHECK (fit BETWEEN 0 AND 4),
+            exempt         INTEGER NOT NULL DEFAULT 0 CHECK (exempt IN (0,1)),
+            quote          TEXT,
+            note           TEXT,
+            origin         TEXT NOT NULL CHECK (origin IN ('spot','sample')),
+            boundary       TEXT NOT NULL DEFAULT 'none'
+                           CHECK (boundary IN ('none','substitution','possession','coercion','projection')),
+            schema_version INTEGER NOT NULL DEFAULT 2,
+            align_prev     INTEGER CHECK (align_prev BETWEEN 1 AND 5),
+            fit_prev       INTEGER,
+            quote_prev     TEXT,
+            annotated_at   INTEGER NOT NULL,
+            updated_at     INTEGER NOT NULL,
+            PRIMARY KEY (session, turn),
+            CHECK (
+              (exempt = 1 AND fit IS NULL AND align IS NULL)
+              OR (exempt = 0 AND schema_version = 1 AND fit IS NOT NULL AND align IS NULL)
+              OR (exempt = 0 AND schema_version >= 2 AND align IS NOT NULL AND fit IS NULL)
+            ),
+            CHECK ((fit IS NULL OR fit <> 4 OR quote IS NOT NULL)
+               AND (align IS NULL OR align < 4 OR quote IS NOT NULL))
+          );
+          INSERT INTO turn_annotation_v8
+            (session, turn, align, fit, exempt, quote, note, origin, boundary, schema_version,
+             align_prev, fit_prev, quote_prev, annotated_at, updated_at)
+          SELECT session, turn, NULL, fit, exempt, quote, note, origin, 'none', 1,
+                 NULL, fit_prev, quote_prev, annotated_at, updated_at
+          FROM turn_annotation;
+          DROP TABLE turn_annotation;
+          ALTER TABLE turn_annotation_v8 RENAME TO turn_annotation;
+          CREATE INDEX IF NOT EXISTS ix_ta_ts ON turn_annotation(updated_at);
+        `)
+      }
+      const hasSc = this.db.prepare("SELECT 1 AS x FROM sqlite_master WHERE type='table' AND name='selfcheck_record'").get() !== undefined
+      const scCols = new Set(hasSc ? (this.db.prepare('PRAGMA table_info(selfcheck_record)').all() as Array<{ name: string }>).map((c) => c.name) : [])
+      if (!hasSc) console.warn('[nautilus] migrateV8：selfcheck_record 缺席——跳过追加列（该表由 v5 创建；版本号与表结构不一致，请人工核对）')
+      const addCol = (name: string, ddl: string): void => { if (hasSc && !scCols.has(name)) this.db.exec('ALTER TABLE selfcheck_record ADD COLUMN ' + ddl) }
+      addCol('align', 'align INTEGER CHECK (align BETWEEN 1 AND 5)')
+      addCol('boundary', "boundary TEXT CHECK (boundary IN ('none','substitution','possession','coercion','projection'))")
+      addCol('self_align', 'self_align INTEGER CHECK (self_align BETWEEN 1 AND 5)')
+      addCol('evidence', 'evidence TEXT')
+      addCol('rubric_version', 'rubric_version TEXT')
+      // receive 语义未定（OQ-AL1）——列留位但**不写入**，见决策文档 §10
+      addCol('receive', 'receive INTEGER CHECK (receive IN (0,1,2))')
+      this.db.exec('PRAGMA user_version = 8')
+      this.db.exec('COMMIT')
+    } catch (e) {
+      this.db.exec('ROLLBACK')
+      throw e
+    }
+  }
+
+  /**
+   * AL.3 迁移（user_version 8→9）：`selfcheck_record` **重建**——`clarity`/`defense` 转为**可空**。
+   *
+   * 理由：AL 把自评收成一维 `align` 1–5；新行的旧三行维度**没有值可填**，而 v5 建表时两列是 NOT NULL——
+   * 继续塞 0/'none' 等于造假数据。SQLite 改不了 NOT NULL → 「建新表 → 搬数据 → 换名」（同 v8 手法）。
+   * 旧行一个不丢、字段一个不改；CHECK 保留（NULL 不触发 BETWEEN/枚举约束，天然兼容新旧两代）。
+   */
+  private migrateV9(): void {
+    this.db.exec('BEGIN')
+    try {
+      const hasSc = this.db.prepare("SELECT 1 AS x FROM sqlite_master WHERE type='table' AND name='selfcheck_record'").get() !== undefined
+      if (!hasSc) {
+        console.warn('[nautilus] migrateV9：selfcheck_record 缺席——跳过重建（该表由 v5 创建；版本号与表结构不一致，请人工核对）')
+      } else {
+        const cols = this.db.prepare('PRAGMA table_info(selfcheck_record)').all() as Array<{ name: string; notnull: number }>
+        const clarityStrict = cols.find((c) => c.name === 'clarity')?.notnull === 1
+        const hasAlign = cols.some((c) => c.name === 'align')
+        if (clarityStrict && hasAlign) {
+          this.db.exec(`
+            CREATE TABLE selfcheck_record_v9 (
+              id             INTEGER PRIMARY KEY AUTOINCREMENT,
+              ts_ms          INTEGER NOT NULL,
+              ts_client      INTEGER,
+              schema_version INTEGER NOT NULL DEFAULT 1,
+              source_kind    TEXT    NOT NULL CHECK (source_kind IN ('dsh_tool','http','backfill','mcp')),
+              agent          TEXT    NOT NULL,
+              model          TEXT,
+              workspace      TEXT,
+              ext_ref        TEXT    NOT NULL,
+              turn_ordinal   INTEGER NOT NULL,
+              clarity        REAL    CHECK (clarity IS NULL OR clarity BETWEEN 0 AND 1),
+              defense        TEXT    CHECK (defense IS NULL OR defense IN ('none','light','heavy')),
+              declaration    INTEGER NOT NULL CHECK (declaration IN (0,1)),
+              quote          TEXT,
+              align          INTEGER CHECK (align BETWEEN 1 AND 5),
+              boundary       TEXT    CHECK (boundary IS NULL OR boundary IN ('none','substitution','possession','coercion','projection')),
+              self_align     INTEGER CHECK (self_align BETWEEN 1 AND 5),
+              evidence       TEXT,
+              rubric_version TEXT,
+              receive        INTEGER CHECK (receive IN (0,1,2)),
+              CHECK (declaration = 0 OR quote IS NOT NULL)
+            );
+            INSERT INTO selfcheck_record_v9
+              (id, ts_ms, ts_client, schema_version, source_kind, agent, model, workspace, ext_ref, turn_ordinal,
+               clarity, defense, declaration, quote, align, boundary, self_align, evidence, rubric_version, receive)
+            SELECT id, ts_ms, ts_client, schema_version, source_kind, agent, model, workspace, ext_ref, turn_ordinal,
+                   clarity, defense, declaration, quote, align, boundary, self_align, evidence, rubric_version, receive
+            FROM selfcheck_record;
+            DROP TABLE selfcheck_record;
+            ALTER TABLE selfcheck_record_v9 RENAME TO selfcheck_record;
+            CREATE UNIQUE INDEX IF NOT EXISTS ux_sc_key ON selfcheck_record (source_kind, ext_ref, turn_ordinal);
+            CREATE INDEX IF NOT EXISTS ix_sc_ts ON selfcheck_record(ts_ms);
+          `)
+        } else if (!hasAlign) {
+          console.warn('[nautilus] migrateV9：selfcheck_record 缺 align 列（v8 未生效？）——跳过重建')
+        }
+      }
+      this.db.exec('PRAGMA user_version = 9')
       this.db.exec('COMMIT')
     } catch (e) {
       this.db.exec('ROLLBACK')
@@ -643,6 +800,97 @@ export class NautilusStore {
       this.db.exec('COMMIT')
     } catch (e) { this.db.exec('ROLLBACK'); throw e }
     return n
+  }
+
+  // ── AL 系列：对齐程度标注（align 1–5 + boundary；口径 = 决策文档 §2，守谷人 6 签）──
+
+  /**
+   * upsert 一条**对齐**标注（一行一轮、最新覆盖）。人工与自评同形——两路用同一把尺子。
+   * 覆盖时旧 `align` 挪入 `align_prev`（一致性/噪声地板的成对数据）；`annotated_at` 保持首标时刻。
+   * `align=4|5` 无引文由 CHECK 拒（签-2）；`exempt=1` 与 `align` 互斥。
+   * @returns 'inserted' | 'overwritten'
+   */
+  upsertTurnAlignment(row: {
+    session: string; turn: number
+    align: number | null; exempt: 0 | 1
+    boundary: 'none' | 'substitution' | 'possession' | 'coercion' | 'projection'
+    quote: string | null; note: string | null; origin: 'spot' | 'sample'
+  }): 'inserted' | 'overwritten' {
+    const now = Date.now()
+    const prev = this.db.prepare('SELECT align, quote, annotated_at FROM turn_annotation WHERE session = ? AND turn = ?')
+      .get(row.session, row.turn) as { align: number | null; quote: string | null; annotated_at: number } | undefined
+    if (prev === undefined) {
+      this.db.prepare(`
+        INSERT INTO turn_annotation
+          (session, turn, align, fit, exempt, quote, note, origin, boundary, schema_version, align_prev, fit_prev, quote_prev, annotated_at, updated_at)
+        VALUES (?, ?, ?, NULL, ?, ?, ?, ?, ?, 2, NULL, NULL, NULL, ?, ?)
+      `).run(row.session, row.turn, row.align, row.exempt, row.quote, row.note, row.origin, row.boundary, now, now)
+      return 'inserted'
+    }
+    // 覆盖：新行的 CHECK 要求 align 行**不得携带 fit**（代际分层）——所以旧 fit 挪进 fit_prev 后清空，
+    // 旧 align/quote 同理进 *_prev（AL.5 的成对数据靠它）。SQLite 的 SET 右侧一律读旧值，故可同句搬移。
+    this.db.prepare(`
+      UPDATE turn_annotation
+      SET align = ?, exempt = ?, quote = ?, note = ?, origin = ?, boundary = ?, schema_version = 2,
+          fit = NULL,
+          fit_prev = COALESCE(fit_prev, fit),
+          align_prev = COALESCE(align_prev, ?),
+          quote_prev = COALESCE(quote_prev, quote),
+          updated_at = ?
+      WHERE session = ? AND turn = ?
+    `).run(row.align, row.exempt, row.quote, row.note, row.origin, row.boundary,
+      prev.align ?? null, now, row.session, row.turn)
+    return 'overwritten'
+  }
+
+  /** 读侧：对齐标注清单（含旧 fit 行——它们 `align` 为 null、`schemaVersion=1`）。 */
+  listTurnAlignments(): Array<{
+    session: string; turn: number; align: number | null; alignPrev: number | null
+    boundary: string; exempt: 0 | 1; quote: string | null; note: string | null
+    origin: 'spot' | 'sample'; schemaVersion: number; annotatedAt: number; updatedAt: number
+  }> {
+    const rows = this.db.prepare('SELECT * FROM turn_annotation ORDER BY updated_at DESC').all() as Array<Record<string, unknown>>
+    return rows.map((r) => ({
+      session: String(r.session), turn: Number(r.turn),
+      align: r.align === null || r.align === undefined ? null : Number(r.align),
+      alignPrev: r.align_prev === null || r.align_prev === undefined ? null : Number(r.align_prev),
+      boundary: String(r.boundary ?? 'none'),
+      exempt: Number(r.exempt ?? 0) as 0 | 1,
+      quote: r.quote == null ? null : String(r.quote),
+      note: r.note == null ? null : String(r.note),
+      origin: String(r.origin) as 'spot' | 'sample',
+      schemaVersion: Number(r.schema_version ?? 1),
+      annotatedAt: Number(r.annotated_at), updatedAt: Number(r.updated_at),
+    }))
+  }
+
+  /**
+   * 对齐分布与边界计数（AL.5 一致性对照的输入）。
+   * `legacyFitRows` = 旧 0–4 契合行（`schema_version=1`）——**与新量表分层，永不合并统计**（诚实边界 3）。
+   */
+  turnAlignmentCoverage(): {
+    total: number; aligned: number; exempted: number; legacyFitRows: number
+    byAlign: Record<string, number>; byBoundary: Record<string, number>
+  } {
+    const rows = this.db.prepare('SELECT align, exempt, boundary, schema_version FROM turn_annotation').all() as Array<Record<string, unknown>>
+    const out = {
+      total: 0, aligned: 0, exempted: 0, legacyFitRows: 0,
+      byAlign: { '1': 0, '2': 0, '3': 0, '4': 0, '5': 0 } as Record<string, number>,
+      byBoundary: { none: 0, substitution: 0, possession: 0, coercion: 0, projection: 0 } as Record<string, number>,
+    }
+    for (const r of rows) {
+      out.total += 1
+      if (Number(r.schema_version ?? 1) === 1) { out.legacyFitRows += 1; continue }
+      if (Number(r.exempt ?? 0) === 1) { out.exempted += 1 }
+      if (r.align !== null && r.align !== undefined) {
+        out.aligned += 1
+        const k = String(Number(r.align))
+        out.byAlign[k] = (out.byAlign[k] ?? 0) + 1
+      }
+      const b = String(r.boundary ?? 'none')
+      out.byBoundary[b] = (out.byBoundary[b] ?? 0) + 1
+    }
+    return out
   }
 
   // ── M3-F.2 完整问答原文（B 方案；前向积累） ─────────────────────────────────

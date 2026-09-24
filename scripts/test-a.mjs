@@ -141,7 +141,7 @@ test('AlertEngine 停用不擅自解除 + lte 峰值取 min + 非法配置响亮
 
 // ── 存储：v7 迁移与 CHECK 三道门 ────────────────────────────────────────────
 
-test('migrateV7：v6 存库升级幂等、既有数字不变、新库直达 v7；alert_event 三 CHECK 生效', () => {
+test('migrateV7：v6 存库升级幂等、既有数字不变、新库直达最新（v8）；alert_event 三 CHECK 生效', () => {
   const tmp = mkdtempSync(join(tmpdir(), 'nautilus-v7-'))
   try {
     const file = join(tmp, 'n.db')
@@ -161,14 +161,14 @@ test('migrateV7：v6 存库升级幂等、既有数字不变、新库直达 v7�
       raw.close()
     }
     const s1 = openStore(file)
-    assert.equal(s1.schemaVersion(), 7)
+    assert.equal(s1.schemaVersion(), 9, 'v6 存库经 v7(A)+v8(AL) 后到最新')
     assert.deepEqual(s1.turnTotals(), { turns: 2, tokenIn: 15, tokenOut: 0, cacheRead: 0 }, '既有数字不变')
     s1.close()
     const s2 = openStore(file)
-    assert.equal(s2.schemaVersion(), 7, '重开不回退不重复')
+    assert.equal(s2.schemaVersion(), 9, '重开不回退不重复')
     s2.close()
     const fresh = openStore(join(tmp, 'fresh.db'))
-    assert.equal(fresh.schemaVersion(), 7, '新库直达 v7')
+    assert.equal(fresh.schemaVersion(), 9, '新库直达当前最新（v8）')
     fresh.close()
     // 三 CHECK：op / report_status / human_verdict
     const raw = new DatabaseSync(file)

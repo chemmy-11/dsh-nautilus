@@ -12,6 +12,7 @@
 
 | 文档 | 内容 |
 |---|---|
+| **[nautilus-alignment.md](./nautilus-alignment.md)** | **对齐体系重构（AL 系列，当前主线）**：术语收敛（「对齐」收归 我ai 口径 / 契合与 L 场废止 / A 改称分辨率提升速率）· 对齐定义 v1 与 1–5 量表 · v8 迁移与迁移账本 · 自评方案甲 · Correction 式进化闭环 · UI 收敛（删假设/预言）· nexus 解耦（甲）。**取代 T 系列与原 S2/v8 计划**；v0.1 **待守谷人逐条签核** |
 | [nautilus-opening-report.md](./nautilus-opening-report.md) | 开题报告（第一期）：技术调研、指标口径、总体设计、Phase 0–5 计划 |
 | [nautilus-research-2-positioning.md](./nautilus-research-2-positioning.md) | 第二期调研：产品定位（Agent 工作台）、竞争格局、路线阶梯、可借鉴开源项目清单 |
 | [nautilus-selfcheck-multisource.md](./nautilus-selfcheck-multisource.md) | 自评多源采集（S 系列）：通道定 HTTP ingest、declaration 改证据要求（D-SC1/2/3 已签核）；规则完善与诚实边界。**S1.2+ 挂起（2026-09-27）** |
