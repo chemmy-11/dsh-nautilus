@@ -19,6 +19,7 @@ Nautilus 各阶段的具体开发文档：模块设计、接口契约、schema�
 | [evidence-phase1-20260913.md](./evidence-phase1-20260913.md) | 证据归档 · Phase 1 + S 系列：通道成本对比、15 族落库、迁移与 soak（E21 起含 S1.1 自评多源采集） | 归档中（soak 回填后定稿） |
 | [nautilus-dev-04-selfcheck-ingest.md](./nautilus-dev-04-selfcheck-ingest.md) | 开发文档四 · **S1.1 自评多源采集**：`selfcheck_record`（v5 迁移）、共享 ingest、`POST /selfcheck`（token 门默认关）、工具 quote 硬门、MCP 前瞻约束 | v0.1（**S1.1 已交付**，见 E21；S1.2 面板切读待建） |
 | [nautilus-dev-05-turn-annotation.md](./nautilus-dev-05-turn-annotation.md) | 开发文档五 · **T 系列逐轮人工标注「契合」**：`turn_annotation` + `annotation_sample`（v6 迁移）、`m2/turn-annotations` 读写（origin 服务端判定）、流内契合条（D-T5 turnTail 链槽）、抽样生成器、recheck 噪声地板 | v0.1（**T.1 宿主半区 + T.2 UI 半区已交付**，见 E22/E23） |
+| [nautilus-dev-06-os-alerting.md](./nautilus-dev-06-os-alerting.md) | 开发文档六 · **A 系列 OS 层红线告警**：`alert_event`（v7 迁移，schema 逐字回收自原库）、检测内核（时间窗/滞回/冷却/缺样本）、证据冻结（覆盖率+sha256+独立保留期）、三段式 LLM 报告（默认关）、`/pulse/alerts` 三路由、UI 活跃即闪红 + 人工裁决、阈值回测脚本 | v0.1（**A.1–A.5 已交付**，见 E25/E27/E28；端上四元组待装配阶段 E29） |
 | [evidence-dev02-20260920.md](./evidence-dev02-20260920.md) | 证据归档 · dev-02 图表语法升级（§4.5 方案 A：PULSE 小图网格/gauge/排行/状态带/构成柱，六件套 30/30） | 已归档（端上 dsh-next 验收待补） |
 
-（待建：**S1.2「自评读侧统一与覆盖率三态」开发文档**（面板切读 `selfcheck_record`、按 source_kind/agent 分层、缺口三态——决策 D-SC4 落点）；Phase 2a「模型层 API 时代」开发文档；Phase 3「core 管道与时间窗对齐」；1 分钟档聚合与 OTLP 导出按 [nautilus-dev-03-os-layer.md](./nautilus-dev-03-os-layer.md) §7 的 OQ 推进）
+（待建：**S2 / v8 开发文档**（`turn_annotation` 重建 `align/align_prev` + `selfcheck_record` 追加 `receive/boundary/self_align/evidence`——两表的新结构已从幸存真库回收，见 E25）；**S1.2「自评读侧统一与覆盖率三态」开发文档**（面板切读 `selfcheck_record`、按 source_kind/agent 分层、缺口三态——决策 D-SC4 落点）；Phase 2a「模型层 API 时代」开发文档；Phase 3「core 管道与时间窗对齐」；1 分钟档聚合与 OTLP 导出按 [nautilus-dev-03-os-layer.md](./nautilus-dev-03-os-layer.md) §7 的 OQ 推进）

@@ -588,6 +588,110 @@ client-modules: package @dsh-external/dsh-nexus resolves from multiple active Lo
 
 ---
 
+## E25 A 系列 A.1 重建：检测内核 + v7 台账 + `/pulse/alerts`（2026-09-28）
+
+> **重建批次说明**：A 系列原实现提交（`677eb1b`/`6d4e521`/`ce6f8b5`/`b23c42b`/`d587bc2`）**从未 push**，
+> 随本地检出（`L:\dsh-nautilus`）被误删丢失。本批按 issue #6 的正文与四条实施评论重建，
+> 并**每步立即 push**（用户 2026-09-28 指令）。原文中已丢失、无法复现的读数在下面显式标注。
+
+**命令**：`npm run typecheck` · `npm run build` · `npm test` · `npm run check:deps` · `npm run check:exports` · `node .github/scripts/check-meta.mjs`
+
+**预期**：六件套全绿；`lib/pulse/alerts.js` 产出；台账表在 v7 迁移后自带三道 CHECK。
+
+**实际**：typecheck 0 · build 0 · **test 46/46**（新增 `scripts/test-a.mjs` 8 条：内核六类边界 / v7 与三 CHECK / 台账方法 / `ctx.plugin` 端到端路由）· check:deps OK · check:exports OK · check-meta OK。提交 `dbbb620`。
+
+**回收到的原件（本批唯一的「原实现物证」）**：A.1 写在真库里的 `alert_event` DDL 完整幸存于
+`.dsh-next/nautilus/nautilus.db`（`PRAGMA user_version=8`）。重建时从 `sqlite_master` 逐字回收该 DDL
+（`op CHECK(gte|lte)` · `report_status CHECK(pending|done|skipped|failed)` · `human_verdict CHECK(true-positive|false-positive|unknown)` ·
+索引 `ix_alert_open`/`ix_alert_rule`），因此**表结构不是重建推测，是原件**。恢复命令：
+
+```js
+const db = new DatabaseSync('C:/Users/15266/.dsh-next/nautilus/nautilus.db', { readOnly: true })
+db.prepare("SELECT sql FROM sqlite_master WHERE name='alert_event'").get()
+```
+
+**同时回收**（`turn_annotation` 的 `align/align_prev` 列与 schema_version≥2 契约、`selfcheck_record` 的
+`receive/boundary/self_align/evidence` 列）——这是 **v8（并行 S2）** 的表结构，A 系列不依赖它，先归档备 S2 重建用。
+
+**观察结论**：内核判据里唯一「反直觉但必须如此」的两条都进了测试：① 确认窗按**时刻**而非 tick 数
+（否则同一条规则换个采样族就换语义）；② 连续段一旦跌落 threshold **计时重置**（E26 的 0.89926 边界案例逐帧复现）。
+`ratio` 规则不落 `op='ratio'`——DDL 只允许 `gte|lte`，比值先算再比（与原件一致）。
+
+---
+
+## E26 A 系列 A.1 端上四元组 —— 原读数丢失，仅存痕迹（**不可复现声明**）
+
+**原记录（issue #6 评论，2026-09-21）**：宿主重启后 `user_version` 6→8；两条真实内存告警
+（`first_exceeded 19:54:32 → confirmed 19:55:04`、`20:26:14 → 20:26:44`）；峰值与原始读数逐一核对
+（16,624,889,856 / 16,890,322,944 = 0.984285）；滞回在跌破 0.85 那一刻解除。
+
+**为什么不可复现**：该证据所在的数据目录（`~/.dsh/nautilus/`）与检出一起被删；`.dsh/nautilus/` 现已不存在。
+
+**本机仍可查到的痕迹（本次逐条核过）**：
+
+| 痕迹 | 位置 | 说明 |
+|---|---|---|
+| v7 迁移确实执行过 | `.dsh-next/nautilus/nautilus.db` `user_version=8` + `alert_event` 表（0 行） | 证明 A.1 代码曾在该机器上跑起来并迁移成功 |
+| 管线真数据演练产物 | `%TEMP%\nt-dryrun-x28igD\`（2026-09-21 23:31） | `a-mub7z4zc-mem-occupancy/{samples.jsonl.gz 78083B, meta.json 2085B, digest.json 7856B}` + `reports/a-…-mem-occupancy.md 2956B` + `ledger.md 3489B`——**原 A.2/A.3 的产物原件** |
+| A 系列测试临时库 | `%TEMP%\nautilus-{ta,ta8,sc,alertroute,alertstore,alert,pipe,mount,v5}-*\` | 原 `test-a.mjs` 与迁移用例留下的临时目录名（本轮重建时又新增若干同名目录） |
+
+**观察结论**：痕迹足以证明「原实现存在且按设计工作过」，但**不足以复原读数**。
+故本批次把端上四元组整体推到装配阶段（§E29）重做——不拿痕迹冒充端上证据。
+
+---
+
+## E27 A 系列 A.2/A.3/A.4 重建：证据冻结 + 三段式报告 + UI/裁决（2026-09-28）
+
+**命令**：六件套全绿（`npm test` 52/52 → A.4 后 54/54）；提交 `a49456d` · `89003ba` · `9e63dd1`。
+
+**真数据演练（只读真库 + 临时副本 + 假模型；不碰原件）**——重建管线的实测读数：
+
+| 项 | 实测 |
+|---|---|
+| 真库规模 | `metric_sample` 48465 行 · 2026-09-20T04:34Z → 2026-09-23T16:16Z |
+| 抽取窗口（4h） | **5899 行 / 15 指标 / 642 tick / 活跃会话 1** |
+| 压缩与指纹 | `samples.jsonl.gz` **47781 B** · `meta.json` 898 B · `sha256=114ce56659a3cbe3…f30ba1` |
+| 覆盖率 | **100.0%** · 空洞 0 · 采样档 5157ms（去重时间戳中位数） |
+| 报告 | `reports/a-drill-mem-occupancy.md` 2763 B（三段式，假模型只填假设/待查） |
+| 内存指标聚合 | `pulse.mem.used` n=642 · min 13.45G · max 15.96G · mean 14.51G · last 14.52G（占比 max ≈ 0.945） |
+
+**观察结论**：
+1. **覆盖率在真数据上是「可能不满」的量**——本窗口 100% 是因为该机连续采样未断；E28 里原窗口的 82.2% 与
+   「空洞 2 个（最大 21 min）」正是因为那段历史有停机断点。判据（去重时间戳 + 中位间隔 + 3× 阈值）在
+   单测里有回归位（同 tick 15 条指标 → 间隔恒 0 的坑）。
+2. **模型段经假 seam 端到端验证**：断言模型输出进 `reports/<id>.md` 与 `ledger.md` 内联、
+   `report_status=done`、`report_model`/`prompt_version` 记账、**同一告警只调一次模型**；
+   门禁关时事实段仍在、假设段写明缺席原因。
+3. **UI 走真实 react SSR**：`AlertsView` 渲染出活跃数/台账行/裁决按钮/报告状态/规则表；`alertBadgeOf` 未裁决数按 id 去重
+   （active 与 recent 是同一批行，重复计数会虚高——写测试时当场发现并改）。
+4. **裁决通道不设审批门**（D-A4）：端到端断言了同源门 403 / `invalid-verdict` 400 / 未知 id 404 /
+   备注 trim 落库 / 报告查看入口 200 与未成文 404。
+
+---
+
+## E28 A 系列 A.5 重建：阈值回测与 D-A8（2026-09-28）
+
+**命令**：`node scripts/alert-threshold-backtest.mjs --db <surviving db> --days 14 --candidates`（只读；提交 `74057dc`）
+
+**预期**：给出每条规则的取值分布与当前阈值下的告警频次；脚本与线上同判据（回放走 `AlertEngine`）。
+
+**实际**（可回放窗口只有 **3.49 天** / 48675 行——原 8.5 天窗口的库已随误删丢失）：
+
+| 规则 | p50 | p99 | max | 旧默认（0.90/30s）告警 | **D-A8（0.93/120s）告警** |
+|---|---|---|---|---|---|
+| 内存占比 | 0.8367 | **0.9553** | 0.9993 | **8 次 / 3.49 天（≈2.29 次/天）** | **1 次（≈0.29 次/天）** |
+| 显存占比 | 0.2367 | 0.2943 | 0.3261 | 0 | 0 |
+| CPU 利用率 | 0.0959 | 0.3188 | 0.6360 | 0 | 0 |
+| GPU 利用率 | 4 | 22 | 32 | 0 | 0 |
+| 宿主 RSS（默认关） | 158.6 MB | 237.5 MB | 318.1 MB | 0 | 0 |
+
+**观察结论**：修订方向与幅度都得到真数据支持（内存占比 8 → 1 次，越线累计 61.8 → 15.4 min）。
+**但必须带边界引用**：该窗口 `p99=0.9553` 仍高于 0.93——按固化判据（p99 之上、max 之下）0.93 偏低。
+0.93 是**原 8.5 天窗口**上的裁决值（旧默认 41 次/8.5 天 → 9 次/8.5 天），本次不擅自改（改值等于换口径）；
+用新窗口复核列入 **OQ-A6**。回测只覆盖本机这段历史，**换机器必须重跑**；原始证据 14 天保留期一过只能重采。
+
+---
+
 ## E8 诚实边界（引用本归档时必须一并引用）
 
 1. **端上读数口径**：§E8 初稿时本层尚未装配（证据全来自离线探针）；**§E9 起已热装配进 profile `web`**，宿主路径已有端上四元组读数（OQ-3 收敛）。但 E5 的 1 小时档仍只有中间读数，且「连续 1 小时无内存增长」尚未给出完整序列。
