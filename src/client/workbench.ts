@@ -1654,7 +1654,7 @@ export function Workbench(props: { onExitToConversation?: () => void; sessionNam
   const body = view === 'overview' ? createElement(OverviewView, { m2, pulse, lfield, viewMode, onViewMode: setViewMode, newRoot, onNewRoot: setNewRoot, switching, onSwitchLfield: switchLfield, onOpenTurn: (s: string, t: number) => setDrawer({ session: s, turn: t }), paused, sessionNameOf: props.sessionNameOf, nonce })
     : view === 'curve' ? createElement(CurveView, { m2, era, pulse, paused, analysis, sessionNameOf: props.sessionNameOf, onOpenTurn: (s: string, t: number) => setDrawer({ session: s, turn: t }), nonce })
     : view === 'hypotheses' ? createElement(HypothesesView, { m2, ann, analysis, onProphecy: (id: string) => { setView('prophecy'); setToast('已跳到预言标注：' + id) } })
-    : view === 'alerts' ? createElement(AlertsView, { state: alerts, toast: setToast, reload: () => setNonce((v) => v + 1) })
+    : view === 'alerts' ? createElement(AlertsView, { state: alerts, toast: setToast, reload: () => setNonce((v) => v + 1), collectorMode: pulse === null ? 'auto' : pulse.collector.mode })
     : view === 'prophecy' ? createElement(ProphecyView, { ann, m2, toast: setToast, reload: () => setNonce((v) => v + 1) })
     : createElement(ReportView, { m2, pulse, era, ann, analysis })
   return createElement('div', { className: 'nt-wb', 'data-nt-theme': theme },
@@ -1714,7 +1714,9 @@ export function WorkbenchIcon(props: { size?: number; active?: boolean }): React
         ? createElement('text', { x: 20, y: 6.7, textAnchor: 'middle', fontSize: 5.6, fill: 'var(--nt-panel,#fff)' }, String(Math.min(9, badge.unjudged)))
         : null)
     : null
-  return createElement('svg', { width: s, height: s, viewBox: '0 0 24 24', fill: 'none', role: 'img', 'aria-label': WORKBENCH_LABEL + (alerting ? '（有活跃告警）' : '') },
+  // aria-label 三态齐全（正常 / 活跃 / 有未裁决）——原先只报活跃，未裁决态对读屏用户不可见
+  const aria = WORKBENCH_LABEL + (alerting ? '（有 ' + String(badge.active) + ' 条活跃告警' + (badge.unjudged > 0 ? '，' + String(badge.unjudged) + ' 条未裁决' : '') + '）' : (badge.unjudged > 0 ? '（有 ' + String(badge.unjudged) + ' 条未裁决）' : ''))
+  return createElement('svg', { width: s, height: s, viewBox: '0 0 24 24', fill: 'none', role: 'img', 'aria-label': aria },
     createElement('circle', { cx: 12, cy: 12, r: 8.5, stroke, strokeWidth: 1.4, fill: on ? 'var(--nt-accent,#e6321e)' : 'none', fillOpacity: on ? 0.12 : 0 }),
     createElement('path', { d: 'M3.5 12h17M12 3.5c3 2.6 3 14.4 0 17M12 3.5c-3 2.6-3 14.4 0 17', stroke, strokeWidth: 1.1 }),
     createElement('path', { d: 'M12 12l6.5-4.2', stroke, strokeWidth: 1.4 }),

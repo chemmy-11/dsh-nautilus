@@ -654,6 +654,20 @@ test('告警视图 SSR + 徽标纯函数：台账/裁决/报告状态/规则表�
       '查看报告', '规则表', '告警台账', '未裁决', '报告已成文', 'a-report-v1', '4/5 启用', '证据 1 份']) {
       assert.ok(html.includes(s), '告警视图 SSR 缺内容: ' + s)
     }
+    for (const s of ['噪声地板', '未裁决的告警不计入阳性率', '换机器必须重跑', 'p99 之上']) {
+      assert.ok(html.includes(s), 'U3 口径注记缺内容: ' + s)
+    }
+    assert.ok(html.includes('nt-al-note'), '口径注记必须带自己的类（不依赖他文件样式表）')
+    assert.ok(html.includes('font-family:Georgia') === false, 'SSR 不该内联字体（样式走 <style> 块）')
+    // 手动采样档：默认（不传档位 / auto）**不得**出现盲区横幅——只有真在手动档才喊
+    assert.ok(!html.includes('手动采样档'), 'auto 档不得出现手动档横幅（否则等于长期狼来了）')
+    const manual = h(react.createElement(al.AlertsView, { state, toast: () => {}, reload: () => {}, collectorMode: 'manual' }))
+    assert.ok(manual.includes('手动采样档'), 'U3：手动档必须显式声明「静默 ≠ 没越线」')
+    assert.ok(manual.includes('没在看'), '手动档横幅要说清代价（不是没越线，是没在看）')
+    assert.ok(manual.includes('nt-al-warn'), '手动档横幅样式类')
+    // 报告排版：全站唯一衬线正文处（S4 §4）
+    const alCss = readFileSync(join(REPO_DIR, 'src', 'client', 'alerts.ts'), 'utf8')
+    assert.ok(alCss.includes('Georgia') && alCss.includes('line-height:1.95'), '报告正文必须用 S4 报告排版（衬线 + 行高 1.95）')
     assert.ok(html.includes('已停用'), '停用规则要显式标注')
     assert.ok(!html.includes('undefined'), 'SSR 不得出现 undefined')
     assert.ok(h(react.createElement(al.AlertsView, { state: null, toast: () => {}, reload: () => {} })).includes('告警能力缺席'))
@@ -669,8 +683,15 @@ test('告警视图接线：ViewKey/侧栏标签/取数口与图标徽标（源�
   assert.ok(wb.includes("useJson<AlertsState>('/api/nautilus/pulse/alerts?limit=50'"), '工作台取数口')
   assert.ok(wb.includes('useAlertBadge()'), '图标徽标接线（活跃即闪红）')
   assert.ok(wb.includes('nt-icon-alert'), '图标闪红类')
+  assert.ok(wb.includes('条未裁决'), '图标 aria-label 必须覆盖未裁决态（三态对读屏可用）')
+  assert.ok(wb.includes('collectorMode: pulse === null'), '告警视图必须拿到采集档位（手动档明示的数据源）')
   const ax = readFileSync(join(REPO_DIR, 'src', 'client', 'alerts.ts'), 'utf8')
   assert.ok(ax.includes("conversation") === false, '告警半区不该碰会话槽位')
+  // 产物级哨兵：新 UI 必须真的进了 bundle（ASCII 标识符，不受 esbuild 中文转义影响）
+  const bundle = readFileSync(join(REPO_DIR, 'lib', 'client.js'), 'utf8')
+  for (const s of ['nt-al-warn', 'nt-al-note', 'collectorMode']) {
+    assert.ok(bundle.includes(s), 'lib/client.js 缺 A.4 UI 哨兵: ' + s)
+  }
   assert.ok(ax.includes('/api/nautilus/pulse/alerts/verdict'), '裁决走同源 POST')
   assert.ok(ax.includes('sec-fetch-site'), '同源标记必须带')
 })
