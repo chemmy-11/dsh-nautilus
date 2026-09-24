@@ -57,7 +57,7 @@ export interface Config {
   alertRules: AlertRule[]
   /** A 系列：证据目录（空 = <库目录>/alerts）。快照/报告/台账都落在这里。 */
   alertsDir: string
-  /** A 系列：证据回看窗口（确认时刻往前抽多久的原始采样）。 */
+  /** A 系列：证据回看窗口（确认时刻往前抽多久的原始采样；D-A8 定 4h）。 */
   alertLookbackMs: number
   /** A 系列：快照独立保留期（天；与 metric_sample 的 retentionDays 无关）。 */
   alertSnapshotRetentionDays: number
@@ -95,11 +95,11 @@ export const Config = z.object({
     op: z.string().default('gte'),
     threshold: z.number(),
     clear: z.number(),
-    forMs: z.number().min(0).default(30000),
+    forMs: z.number().min(0).default(120000),
     cooldownMs: z.number().min(0).default(0),
   })).default(DEFAULT_ALERT_RULES.map((r) => ({ ...r }))),
   alertsDir: z.string().default(''),
-  alertLookbackMs: z.number().min(60_000).default(2 * 3600_000),
+  alertLookbackMs: z.number().min(60_000).default(4 * 3600_000),
   alertSnapshotRetentionDays: z.number().min(1).default(30),
   alertLlmEnabled: z.boolean().default(false),
   alertLlmMaxTokens: z.number().min(64).max(8192).default(900),

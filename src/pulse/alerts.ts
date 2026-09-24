@@ -125,7 +125,13 @@ export function peakOf(op: AlertOp, prev: number | null, value: number): number 
 }
 
 /**
- * 默认规则（A.1 初始值；A.5 阈值回测后按 D-A8 修订）。
+ * 默认规则（**A.5 回测选定值 = D-A8**，2026-09-28 定）。
+ *
+ * 判据固化：**p99 之上、max 之下**——低于 p99 是常态不是红线；高于 max 等于没设。
+ * 修订依据是 8.5 天真库回测：旧默认里唯一会刷屏的是内存占比（0.90+30s → 41 次/8.5 天 ≈ 5 次/天，
+ * 其余三条实测从不触发：CPU p99.9=0.597 / GPU max 40% / 显存 max 0.886）；确认窗 30s → 120s、
+ * 证据回看 2h → 4h 后，内存占比降到 9 次/8.5 天（≈1 次/天）。
+ * 纯函数同判据回放脚本：`scripts/alert-threshold-backtest.mjs`（只读、可复跑）。
  *
  * 四对象（CPU 利用率 / 内存占比 / 显存占比 / GPU 利用率）默认启用；`dsh-rss`（宿主进程 RSS）
  * 默认**关闭**——OQ-A1 未裁（进程级红线口径未定，误报会随会话长度漂移）。
@@ -137,27 +143,27 @@ export const DEFAULT_ALERT_RULES: readonly AlertRule[] = Object.freeze([
   {
     id: 'mem-occupancy', label: '内存占比', enabled: true,
     metric: 'pulse.mem.used', refMetric: 'pulse.mem.total', op: 'gte',
-    threshold: 0.90, clear: 0.85, forMs: 30_000, cooldownMs: 0,
+    threshold: 0.93, clear: 0.88, forMs: 120_000, cooldownMs: 0,
   },
   {
     id: 'gpu-mem-occupancy', label: '显存占比', enabled: true,
     metric: 'pulse.gpu.mem.used', refMetric: 'pulse.gpu.mem.total', op: 'gte',
-    threshold: 0.90, clear: 0.85, forMs: 30_000, cooldownMs: 0,
+    threshold: 0.93, clear: 0.88, forMs: 120_000, cooldownMs: 0,
   },
   {
     id: 'cpu-utilization', label: 'CPU 利用率', enabled: true,
     metric: 'pulse.cpu.utilization', refMetric: '', op: 'gte',
-    threshold: 0.90, clear: 0.85, forMs: 30_000, cooldownMs: 0,
+    threshold: 0.90, clear: 0.85, forMs: 120_000, cooldownMs: 0,
   },
   {
     id: 'gpu-utilization', label: 'GPU 利用率', enabled: true,
     metric: 'pulse.gpu.util', refMetric: '', op: 'gte',
-    threshold: 95, clear: 90, forMs: 30_000, cooldownMs: 0,
+    threshold: 95, clear: 90, forMs: 120_000, cooldownMs: 0,
   },
   {
     id: 'dsh-rss', label: '宿主 RSS', enabled: false,
     metric: 'pulse.proc.dsh.rss', refMetric: '', op: 'gte',
-    threshold: 4 * 1024 * 1024 * 1024, clear: 3.5 * 1024 * 1024 * 1024, forMs: 30_000, cooldownMs: 0,
+    threshold: 4 * 1024 * 1024 * 1024, clear: 3.5 * 1024 * 1024 * 1024, forMs: 120_000, cooldownMs: 0,
   },
 ])
 

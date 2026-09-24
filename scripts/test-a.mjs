@@ -674,3 +674,33 @@ test('告警视图接线：ViewKey/侧栏标签/取数口与图标徽标（源�
   assert.ok(ax.includes('/api/nautilus/pulse/alerts/verdict'), '裁决走同源 POST')
   assert.ok(ax.includes('sec-fetch-site'), '同源标记必须带')
 })
+
+// ── A.5 阈值论证：默认值 = 回测选定值（防漂移）─────────────────────────────
+
+test('默认规则 = D-A8 回测选定值（改值必须同时改回测证据与决策文档）', () => {
+  const byId = Object.fromEntries(DEFAULT_ALERT_RULES.map((r) => [r.id, r]))
+  // 内存/显存占比：0.93（解除 0.88）——旧默认 0.90/0.85 实测会刷屏（≈5 次/天）
+  for (const id of ['mem-occupancy', 'gpu-mem-occupancy']) {
+    assert.equal(byId[id].threshold, 0.93, id + ' 阈值 = D-A8')
+    assert.equal(byId[id].clear, 0.88, id + ' 解除线 = D-A8')
+  }
+  // CPU 0.90 / GPU 95 未改（实测从不触发）
+  assert.equal(byId['cpu-utilization'].threshold, 0.90)
+  assert.equal(byId['gpu-utilization'].threshold, 95)
+  // 确认窗 30s → 120s、证据回看 2h → 4h
+  for (const r of DEFAULT_ALERT_RULES) assert.equal(r.forMs, 120000, r.id + ' 确认窗 = D-A8 的 120s')
+  const pulseSrc = readFileSync(join(REPO_DIR, 'src', 'pulse', 'index.ts'), 'utf8')
+  assert.ok(pulseSrc.includes('alertLookbackMs: z.number().min(60_000).default(4 * 3600_000)'), '证据回看默认 4h（D-A8）')
+  // 判据固化可自证：所有 gte 规则的解除线都在阈值之下（滞回方向不能反）
+  for (const r of DEFAULT_ALERT_RULES) {
+    if (r.op === 'gte') assert.ok(r.clear < r.threshold, r.id + '：解除线必须在阈值之下')
+    else assert.ok(r.clear > r.threshold, r.id + '：解除线必须在阈值之上')
+  }
+  // 回测脚本存在且只读（源码级守卫：不得出现写语句）
+  const bench = readFileSync(join(REPO_DIR, 'scripts', 'alert-threshold-backtest.mjs'), 'utf8')
+  for (const bad of ['INSERT ', 'UPDATE ', 'DELETE ', 'DROP ', 'CREATE TABLE']) {
+    assert.ok(!bench.includes(bad), '回测脚本必须只读，出现写语句: ' + bad)
+  }
+  assert.ok(bench.includes('readOnly: true'), '只读打开')
+  assert.ok(bench.includes('new AlertEngine('), '同判据：回放走线上检测内核，不另写一套比较逻辑')
+})
