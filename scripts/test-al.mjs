@@ -4,6 +4,7 @@
  * 内容：
  *  · AL.6 边界守卫：`src/nexus/**` 自包含、只在 src/nexus 下、两腿互不 import（决策 §7.2）。
  *  · AL.2 迁移账本与 v8 迁移：按序应用 / 跳号如实记录 / 幂等 / 旧契合行一个不丢 / 1–5 与边界 CHECK。
+ *  · AL.3 自评通道换 al-v1 对齐量表：工具面 = rubric 注入面 / 硬门零写入 / 双形 ingest / 覆盖语义。
  * 已知例外（记在案）：`../store.js` 允许 nexus import——数据核心仍共享，真正抽离属 OQ-AL4。
  */
 import { test } from 'node:test'
@@ -16,6 +17,8 @@ import { fileURLToPath } from 'node:url'
 
 import { runMigrations, readUserVersion } from '../lib/migrations.js'
 import { openStore } from '../lib/store.js'
+import { processSelfCheck, buildSelfCheckTool } from '../lib/nexus/selfcheck.js'
+import { ingestSelfCheck, QUOTE_MAX, EVIDENCE_MAX, RUBRIC_VERSION } from '../lib/nexus/selfcheck-ingest.js'
 
 const REPO = fileURLToPath(new URL('..', import.meta.url))
 const SRC = join(REPO, 'src')
@@ -174,3 +177,146 @@ test('AL.2 v8 CHECK 三门：align 1–5 越界拒 / 4 与 5 无引文拒 / exem
     raw.close()
   } finally { cleanup(tmp) }
 })
+
+// ── AL.3 自评通道换 al-v1 对齐量表（工具面 = rubric 注入面 + 双形 ingest）─────────────
+
+const SC_COLS = 'ts_ms, ts_client, schema_version, source_kind, agent, model, workspace, ext_ref, turn_ordinal, clarity, defense, declaration, quote, align, boundary, self_align, evidence, rubric_version, receive'
+
+/** 开一个只读旁证连接（外部世界断言：不信被测代码的自报计数）。 */
+function rawCount(file, where = '') {
+  const db = new DatabaseSync(file)
+  try { return Number(db.prepare('SELECT COUNT(*) AS n FROM selfcheck_record' + where).get().n) } finally { db.close() }
+}
+
+test('AL.3 工具面：align 必填 1–5 + boundary 四边界枚举 + description 逐字含锁版锚文与边界英文', () => {
+  const store = openStore(':memory:')
+  try {
+    const tool = buildSelfCheckTool(store)
+    assert.equal(tool.name, 'record_turn_selfcheck')
+    assert.deepEqual(tool.parameters.required, ['align'], 'align 必填；boundary/declaration 走锁版缺省')
+    assert.equal(tool.parameters.additionalProperties, false)
+    const align = tool.parameters.properties.align
+    assert.equal(align.type, 'integer'); assert.equal(align.minimum, 1); assert.equal(align.maximum, 5)
+    assert.deepEqual(tool.parameters.properties.boundary.enum, ['none', 'substitution', 'possession', 'coercion', 'projection'])
+    assert.equal(tool.parameters.properties.quote.maxLength, QUOTE_MAX)
+    assert.equal(tool.parameters.properties.evidence.maxLength, EVIDENCE_MAX)
+    // 注入面（§2.4）：锁版定义句 + 1–5 各档关键句
+    for (const s of [
+      '对齐 = 在「接→顺→推」的校准回路上推进了对方真正的问题，且没有越过四条边界。',
+      '1 = 没接住', '2 = 接住了但没延展', '3 = 接+顺一层', '4 = 顺+推', '5 = 推到了改变下一步动作',
+    ]) assert.ok(tool.description.includes(s), '注入面缺锚文：' + s)
+    // 四条边界的英文枚举（模型要能把越界项直接填进 boundary）
+    for (const b of ['substitution', 'possession', 'coercion', 'projection']) {
+      assert.ok(tool.description.includes(b), '注入面缺边界英文：' + b)
+      assert.ok(tool.parameters.properties.boundary.enum.includes(b), 'boundary 枚举缺项：' + b)
+    }
+  } finally { store.close() }
+})
+
+test('AL.3 硬门：align≥4 无引文 / declaration=1 无引文 / align 越界 → 拒且零写入（行数不变）', () => {
+  const tmp = tmpDir('nautilus-al3-gate-')
+  try {
+    const file = join(tmp, 'n.db')
+    const store = openStore(file)
+    assert.equal(rawCount(file), 0, '前置：空库')
+    // 拒绝即零写入（D-SC2 先例）：三条硬门逐条试，行数必须始终为 0
+    for (const input of [{ align: 4 }, { align: 5 }, { align: 3, declaration: 1 }]) {
+      const msg = processSelfCheck(store, { ...input, session: 's-1', turn: 1 })
+      assert.ok(msg.startsWith('自评被拒'), '硬门必须显式拒：' + JSON.stringify(input))
+      assert.equal(rawCount(file), 0, '硬门拒绝后 selfcheck_record 行数必须不变：' + JSON.stringify(input))
+    }
+    // align 越界（0 / 6 / 非整数）→ 拒（不夹取、不猜默认）
+    for (const align of [0, 6, 3.5]) {
+      assert.ok(processSelfCheck(store, { align, session: 's-1', turn: 1 }).startsWith('自评被拒'), '越界必须拒：align=' + String(align))
+      assert.equal(rawCount(file), 0, '越界不得写入：align=' + String(align))
+    }
+    assert.equal(store.countSelfCheckRecords(), 0, '两条读数口径一致：零写入')
+    store.close()
+  } finally { cleanup(tmp) }
+})
+
+test('AL.3 正路：align=4 + quote 落库——align/boundary/rubric_version 正确，clarity/defense 为 NULL', () => {
+  const tmp = tmpDir('nautilus-al3-ok-')
+  try {
+    const file = join(tmp, 'n.db')
+    const store = openStore(file)
+    const quote = '你把它写成了「人应该成为什么」，而不是准则本身'
+    const msg = processSelfCheck(store, { align: 4, boundary: 'projection', quote, evidence: '第四条边界的判读依据', session: 's-1', turn: 7 })
+    assert.ok(msg.startsWith('已记录 turn 7 自评'), msg)
+    assert.equal(rawCount(file), 1, '正路必须恰好落一行')
+    const raw = new DatabaseSync(file)
+    const row = raw.prepare('SELECT ' + SC_COLS + ' FROM selfcheck_record').get()
+    assert.equal(row.align, 4)
+    assert.equal(row.boundary, 'projection', '越界项如实落库（正交轴）')
+    assert.equal(row.rubric_version, RUBRIC_VERSION)
+    assert.equal(row.rubric_version, 'al-v1')
+    assert.equal(row.clarity, null, 'AL.3：新路径 clarity 留 NULL（v9 已允许，不造假值）')
+    assert.equal(row.defense, null, 'AL.3：新路径 defense 留 NULL')
+    assert.equal(row.declaration, 0, '缺省 declaration=0')
+    assert.equal(row.quote, quote)
+    assert.equal(row.evidence, '第四条边界的判读依据')
+    assert.equal(row.schema_version, 2, 'align 行 = 1–5 量表代际（同 turn_annotation 的 align 行）')
+    assert.equal(row.source_kind, 'dsh_tool')
+    assert.equal(row.agent, 's-1'); assert.equal(row.ext_ref, 's-1'); assert.equal(row.turn_ordinal, 7)
+    assert.equal(row.self_align, null); assert.equal(row.receive, null, 'receive 语义未定（OQ-AL1）——不写')
+    raw.close(); store.close()
+  } finally { cleanup(tmp) }
+})
+
+test('AL.3 双形兼容：旧形 payload 仍落库且 clarity 有值；新形落 al-v1——两代分层不混算', () => {
+  const tmp = tmpDir('nautilus-al3-dual-')
+  try {
+    const file = join(tmp, 'n.db')
+    const store = openStore(file)
+    // 旧形（S1.1 三行，老 harness 走 HTTP 的形状）
+    assert.deepEqual(
+      ingestSelfCheck(store, { sourceKind: 'http', agent: 'harness-old', extRef: 'conv-legacy', turnOrdinal: 1, clarity: 0.42, defense: 'light', declaration: 0 }),
+      { ok: true, result: 'inserted' },
+    )
+    // 新形（al-v1 对齐量表）
+    assert.deepEqual(
+      ingestSelfCheck(store, { sourceKind: 'http', agent: 'harness-new', extRef: 'conv-new', turnOrdinal: 1, align: 3, declaration: 0 }),
+      { ok: true, result: 'inserted' },
+    )
+    assert.equal(rawCount(file), 2)
+    const raw = new DatabaseSync(file)
+    const old = raw.prepare('SELECT ' + SC_COLS + ' FROM selfcheck_record WHERE ext_ref = ?').get('conv-legacy')
+    assert.equal(old.clarity, 0.42, '旧形 clarity 必须有值（老通道不断线）')
+    assert.equal(old.defense, 'light')
+    assert.equal(old.align, null); assert.equal(old.boundary, null); assert.equal(old.rubric_version, null)
+    assert.equal(old.schema_version, 1)
+    const neu = raw.prepare('SELECT ' + SC_COLS + ' FROM selfcheck_record WHERE ext_ref = ?').get('conv-new')
+    assert.equal(neu.align, 3); assert.equal(neu.boundary, 'none'); assert.equal(neu.rubric_version, 'al-v1')
+    assert.equal(neu.clarity, null); assert.equal(neu.defense, null)
+    assert.equal(neu.schema_version, 2)
+    raw.close(); store.close()
+  } finally { cleanup(tmp) }
+})
+
+test('AL.3 覆盖语义：同 (source_kind, ext_ref, turn_ordinal) 重投 → duplicate、行数不增、整行换维度', () => {
+  const tmp = tmpDir('nautilus-al3-ovw-')
+  try {
+    const file = join(tmp, 'n.db')
+    const store = openStore(file)
+    const key = { sourceKind: 'http', agent: 'h', extRef: 'c-1', turnOrdinal: 5 }
+    assert.equal(ingestSelfCheck(store, { ...key, clarity: 0.5, defense: 'none', declaration: 0 }).result, 'inserted')
+    assert.equal(ingestSelfCheck(store, { ...key, clarity: 0.8, defense: 'heavy', declaration: 0 }).result, 'duplicate')
+    assert.equal(rawCount(file), 1, '同键重投 = 修正覆盖，不得双写')
+    const raw = new DatabaseSync(file)
+    assert.equal(raw.prepare('SELECT clarity FROM selfcheck_record').get().clarity, 0.8, 'last-writer-wins')
+    // 新形覆盖旧形：整行换维度——旧列清空（同带 clarity 与 align 的行会让两代混算）
+    assert.equal(ingestSelfCheck(store, { ...key, align: 5, quote: '他引用了我那句', declaration: 0 }).result, 'duplicate')
+    assert.equal(rawCount(file), 1, '换维度覆盖也不得双写')
+    const alRow = raw.prepare('SELECT ' + SC_COLS + ' FROM selfcheck_record').get()
+    assert.equal(alRow.align, 5); assert.equal(alRow.quote, '他引用了我那句')
+    assert.equal(alRow.clarity, null); assert.equal(alRow.defense, null); assert.equal(alRow.rubric_version, 'al-v1')
+    // 反向：旧形覆盖新形 → al-v1 列一并清空
+    assert.equal(ingestSelfCheck(store, { ...key, clarity: 0.2, defense: 'none', declaration: 0 }).result, 'duplicate')
+    const back = raw.prepare('SELECT ' + SC_COLS + ' FROM selfcheck_record').get()
+    assert.equal(back.clarity, 0.2); assert.equal(back.align, null); assert.equal(back.boundary, null)
+    assert.equal(back.rubric_version, null, '旧形行不得带 al-v1 版本号')
+    assert.equal(rawCount(file), 1)
+    raw.close(); store.close()
+  } finally { cleanup(tmp) }
+})
+

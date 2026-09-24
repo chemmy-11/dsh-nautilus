@@ -11,7 +11,8 @@
  * GET  /api/nautilus/m2/analysis    → 白盒分析（形态 / 爆发段 / τ_e）
  * GET  /api/nautilus/lfield         → L 场读数独立指向（M4-L；每根会话计数）
  * POST /api/nautilus/lfield         → 切换 L 场读数指向（采集归属；既有会话归属不变）
- * POST /api/nautilus/selfcheck      → S1.1 外部 harness 自评 ingest（token 门，默认关；见 1-planning 决策 D-SC1）
+ * POST /api/nautilus/selfcheck      → 外部 harness 自评 ingest（token 门，默认关；S1.1 通道 + AL.3 双形：
+ *                                      旧形 clarity/defense/declaration 与新形 align/boundary 同门，硬门与校验在共享 ingest）
  * GET  /api/nautilus/m2/turn-annotations   → T 系列逐轮人工标注清单 + spot/sample 双口径覆盖
  * POST /api/nautilus/m2/turn-annotations   → 标注 upsert（origin 服务端判定；fit=4 必附引文；无原文拒）
  * Same-origin marker guard; registered as effect.（/selfcheck 例外：调用方非浏览器，以 token 为门。）
@@ -207,7 +208,8 @@ export function registerNautilusRoutes(ctx: { webServer: { register(route: WebRo
   }
 
   // S1.1：外部 harness 自评 ingest（决策 D-SC1 通道 A；口径走共享 ingest，与 DSH 工具同一份校验）。
-  // 门序：方法 → 启用 → token → 体长 → JSON → 校验。默认 enabled=false：路由在场但恒 403（禁用可判别，不是 404）。
+  // AL.3：同一通道收两代形态（旧三行 / 新 al-v1 对齐量表），分支判据 = 有无 align；路由本身不判维度。
+  // 门序（AL.3 未变）：方法 → 启用 → token → 体长 → JSON → 校验。默认 enabled=false：路由在场但恒 403（禁用可判别，不是 404）。
   const selfcheck: WebRoute = {
     kind: 'exact',
     path: `${API_PREFIX}/selfcheck`,
@@ -234,11 +236,14 @@ export function registerNautilusRoutes(ctx: { webServer: { register(route: WebRo
       if (body === null || typeof body !== 'object' || Array.isArray(body)) {
         return json(res, 400, { ok: false, error: 'bad-json' })
       }
+      // 双形兼容（AL.3）：旧形（clarity/defense/declaration）与新形（align/boundary/evidence）同通道，
+      // 分支与硬门全在共享 ingest 一处判——本路由只搬字段，不复制口径。
       const outcome = ingestSelfCheck(deps.store, {
         sourceKind: 'http',
         agent: body.agent, extRef: body.ext_ref, turnOrdinal: body.turn_ordinal,
         clarity: body.clarity, defense: body.defense, declaration: body.declaration,
-        quote: body.quote, model: body.model, workspace: body.workspace,
+        quote: body.quote, align: body.align, boundary: body.boundary, evidence: body.evidence,
+        model: body.model, workspace: body.workspace,
         tsClient: body.ts_client, schemaVersion: body.schema_version,
       })
       if (!outcome.ok) return json(res, 400, { ok: false, error: outcome.error })
