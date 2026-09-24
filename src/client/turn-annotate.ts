@@ -198,8 +198,8 @@ const CSS_LINES = [
   // AL.4d「先量后画」：min-width 仍由**加总**得出——
   //     分值排 = 5 档 × 28 + N/A 40 + 间距 5×4 = 200；＋内边距 9×2 ＋边框 1×2 = 220 → 取 272 留余量（提交键已移出该排，
   //     故 200 落进 272−20 = 252 的内容宽里有 52px 富余，一排不会被挤压）。
-  //     顶部 30px 是给绝对定位的提交键留的净空（键高 ≈22 + 上下各 8），分值排与输入框都不会被它压住。
-  '.nt-fitpop{position:absolute;bottom:calc(100% + 6px);right:0;z-index:30;display:flex;flex-direction:column;gap:6px;padding:30px 9px 8px;border:1px solid var(--nt-border2,#c8c8c3);border-radius:8px;background:var(--dsw-alias-button-floating-fill,var(--nt-panel,#fff));box-shadow:0 6px 22px var(--nt-shadow-color,rgba(0,0,0,.16));min-width:272px;max-height:min(70vh,420px);overflow-y:auto;font-size:var(--dsh-content-font-size-secondary,13px);color:var(--nt-text,#101010)}',
+  //     顶部 36px 是给绝对定位的提交键留的净空（键高 ≈22 + 上 8 + 下 6 呼吸感），分值排与输入框都不会被它压住。
+  '.nt-fitpop{position:absolute;bottom:calc(100% + 6px);right:0;z-index:30;display:flex;flex-direction:column;gap:6px;padding:36px 9px 8px;border:1px solid var(--nt-border2,#c8c8c3);border-radius:8px;background:var(--dsw-alias-button-floating-fill,var(--nt-panel,#fff));box-shadow:0 6px 22px var(--nt-shadow-color,rgba(0,0,0,.16));min-width:272px;max-height:min(70vh,420px);overflow-y:auto;font-size:var(--dsh-content-font-size-secondary,13px);color:var(--nt-text,#101010)}',
   '.nt-fitpop .row{display:flex;gap:4px;flex-wrap:wrap;align-items:center}',
   // AL.4d：档位 + N/A 同排（提交键已移出此排，见 .sub）
   '.nt-fitpop .row.nowrap{flex-wrap:nowrap}',
@@ -207,7 +207,7 @@ const CSS_LINES = [
   '.nt-fitpop .opt:hover{border-color:var(--nt-faint,#9a9a95)}',
   '.nt-fitpop .opt.on{border-color:var(--nt-accent,#e6321e);color:var(--nt-accent,#e6321e);font-weight:700}',
   '.nt-fitpop .opt.na{min-width:40px}',
-  // AL.4d：提交键固定在浮层右上角（不占分值排的宽度）；浮层 padding-top 30px 即它的净空
+  // AL.4d：提交键固定在浮层右上角（不占分值排的宽度）；浮层 padding-top 36px 即它的净空（键底到分值排留 6px 呼吸感）
   '.nt-fitpop .opt.sub{position:absolute;top:8px;right:8px;min-width:0;padding:4px 9px}',
   // AL.4d：输入框高度翻倍（改前单行 input ≈27px → 改后 56px）——多行以便引文可读，仍只此一个输入控件
   '.nt-fitpop .inp{width:100%;box-sizing:border-box;min-height:56px;line-height:1.45;resize:vertical;border:1px solid var(--nt-border2,#c8c8c3);border-radius:6px;background:transparent;color:inherit;font:inherit;font-size:12px;padding:5px 6px}',
@@ -283,7 +283,7 @@ export function TurnFitAction(props: TurnFitActionProps): ReactNode {
       : createElement('span', null, '对齐', createElement('span', { className: 'nv' }, String(row.align) + (row.origin === 'sample' ? '样' : '')))
   const pop = open
     ? createElement('div', { className: 'nt-fitpop', role: 'menu' },
-      // AL.4d：提交键固定右上角（绝对定位；浮层 padding-top:30px 是它的净空，不压分值排与输入框）
+      // AL.4d：提交键固定右上角（绝对定位；浮层 padding-top:36px 是它的净空，键底与分值排留 6px 不贴边）
       createElement('button', {
         className: 'opt sub', disabled: !canSubmit,
         title: quoteRequired ? '4/5 档必附引文后才能提交' : '提交本轮判读',

@@ -877,7 +877,9 @@ test('AL.4c/4d 打分件：SSR 可见结果（对齐文案 / 无契合 / 无 tNN
     assert.ok(src.includes('box-sizing:border-box'), 'B7：控件统一 border-box，宽度才可加总')
     // AL.4d-②：提交键绝对定位右上角（top/right 各 8px）；浮层 padding-top 30px 即它的净空
     assert.ok(/\.nt-fitpop \.opt\.sub\{position:absolute;top:8px;right:8px/.test(src), 'AL.4d：提交键必须固定右上角')
-    assert.ok(src.includes('padding:30px 9px 8px'), 'AL.4d：浮层顶部净空 30px（不压分值排与输入框）')
+    // 断「≥36px」而不是钉死 36：下次调 padding 只要不放小就不会假红（净空 = 键高 22 + 上 8 + 键底到分值排 ≥6）
+    const padTop = Number((src.match(/\.nt-fitpop\{[^}]*?padding:(\d+)px/) ?? [])[1] ?? '0')
+    assert.ok(padTop >= 36, 'AL.4d：浮层顶部净空须 ≥36px（实测键底到分值排 6px），当前 ' + String(padTop) + 'px')
     // AL.4d-③：输入框高度翻倍（改前单行 ≈27px → min-height 56px）
     assert.ok(src.includes('min-height:56px'), 'AL.4d：输入框 min-height = 56px（改前 ≈27px 的 2 倍）')
     assert.ok(!src.includes("type: 'text'"), 'AL.4d：单行 input 已换成多行 textarea')
