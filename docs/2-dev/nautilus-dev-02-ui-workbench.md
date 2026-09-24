@@ -96,7 +96,7 @@
 
 ---
 
-## 3. 信息架构（四视图 + 抽屉 + era 条）
+## 3. 信息架构（五视图 + 抽屉 + era 条）
 
 > **2026-09-28 AL.4a 收敛（UI 线，feat/ui）**：工作台视图由六收敛为**四**（总览 / 告警 / 曲线 / 报告）——
 > 「假设台账」「预言检验表」两视图连同其标注读写层（`GET/POST /m2/annotations`、`PROPHECY_SEED`、标注 UI）整块撤除；
@@ -104,6 +104,53 @@
 > 因此本面板**已无任何写路径**；曲线（未命中率 / 时长 / tps / 累计输入）与白盒 analysis（形态 / τ_e）**全部保留**。
 > `annotation` / `lfield_config` / `session_root` 三表**保留不 drop**（红线 3，历史数据不删）。
 > 下列原型描述保留为设计沿革，落地以 `src/client/workbench.ts` 为准。
+
+> **2026-09-28 AL.4b 增补（UI 线，feat/ui）**：工作台新增**「对齐」视图**（位次：总览之后），视图数四 → 五。
+> 只读消费主线冻结的读侧契约 GET /api/nautilus/m2/alignments，**不自造任何接口**（源码守卫：该视图切片内出现的 /api/ 路径只允许这一个）。
+> 五块内容：**双路台账**（人工 (session,turn) 与自评 (ext_ref,turn_ordinal) 同键并列；列 轮次 / 人工 / 自评 / Δ / 边界 / 引文备注 / 时间；只有一侧有行的也列出）·
+> **分布**（人工与自评各一组 align 1–5 计数柱；legacyFitRows 单列为「旧 0–4 档行（代际，不混算）」）·
+> **边界计数**（无 / 替代 / 占有 / 强迫 / 投射，正交轴，不与分数合并）· **一致性**（pairs / 完全一致率 / 相邻档一致率 / 二次加权 κ；consistency 为 null 时显示「样本不足（<2 对）」而非 0）·
+> **版本面**（schema_version=2 · rubric_version=al-v1；1–5 锚文进 hover title）。pairs < 50 时显式标注「只作观察，不得据此调整 rubric」（决策 §5 纪律）。
+> 术语纪律：视图内**不得出现「契合」**（该词已随量表换代废止，代际行改称「旧 0–4 档行」）。
+> 同步修一条真实回归：面板「自评覆盖」原读 turn_read.clarity（AL.3 起停写，会静默停更）→ 改读 alignments 的 coverage.selfAligned。
+
+> **2026-09-28 AL.4c 换代（UI 线，feat/ui）**：会话内打分件由「契合 0–4」换成**「对齐 1–5」**，并同步契约 v2 增量。
+>
+> **A. 换代**：① 锚文不再写死在客户端——1–5 锚文取契约 scale.anchors（本地量表常量 FIT_SCALE 撤除），标签 / 浮层标题 / 提示一律「对齐」。
+> ② 写路径改走 POST /m2/turn-annotations 的**双形 body**（带 align / 仅 exempt），不再发 fit。
+> ③ 读态**只读**契约 human[]（(session,turn) 同键），锚文同源；v3 起 human[] 收全部新量表行（含豁免），故单端点即足够——
+> 临时补读 T 系列清单的那一路已按 v3 删除（守卫：补充读不得复活）。
+> ④ 视图吃 v2：selfRatio 真比率（selfTotal=0 显示「分母为 0（缺席）」而非 0%）、代际隔离 human/self **两侧各自独立计数**、
+> 一致性表补**留出集（采纳判据）**一行、**删本地阈值常量改读契约 scale.min**（守卫：不得再出现本地阈值常量）。
+> ⑤ Drawer：「推理态自评」三行 clarity/defense/declaration（取自 turn_read，AL.3 起停写 → 永久显示「未落盘」）→
+> 换成 per-turn 人工/自评 align（human[] + self[] 同键 join，缺就是缺、不写 0）。
+> ⑥ 术语守卫扩到**整个客户端半区**（不再只扫对齐视图切片）；负控：往打分件注入「契合」→ 视图 SSR 断言与术语守卫**同时**变红。
+>
+> **B. 布局（B1–B7 的裁决依据，守谷人 2026-09-28）**：浮层 = 「对齐 1–5」一行 + 「边界」可选第二行（默认「无」、**非必填**）+ 单一输入框；提交按钮在 N/A 右侧同排。
+> · **边界为什么必须由人填**：边界是「对齐」定义里信息量最大的那一半（推进 = 接 / 顺 / 推 + **不越四条边界**）；
+>   若人工侧只能填 none，boundary 轴就只剩自评在填，人工/自评的边界计数**不可比**，AL.5 的边界统计会退化成「自评自说自话」——
+>   那是拒绝独立裁判之后最该警惕的另一种自证。
+> · **为什么默认「无」+ 按需展开**：不改变现有 5 档那一行的点击路径，只有真要标越界时才多点一下（渐进披露，零额外摩擦）。
+> · **为什么不做必填**：纯操作性轮本来就走 N/A 豁免（工具通道是「不调用」，人工侧是 exempt），别用必填把豁免路径堵死。
+> · **两条硬约束**：**正交**——边界与分数各自落库（两条列），UI 不做任何方向的互相推导（标「占有」不改分数，改分数不清边界）；
+>   **诚实的边界**——一致性三指标只算 align、**不含 boundary**，故边界计数是**描述性**的，不得暗示「边界一致性已被度量」；
+>   日后要算边界一致性属新口径，另开 OQ。
+> · **改动明细**：B1 文案「契合」→「对齐」（未标 / N/A / 已标三处渲染）· B2 浮层移到按钮**上方**（bottom:100%+6px、去掉 top；
+>   贴顶由 max-height:min(70vh,420px) 限高滚动兜底，不做翻转）· B3 两个输入框（引文 textarea + 理由 input）**合一**
+>   （≥4 走引文必填、否则走可空理由；提交时映射服务端两列，**不绕过**「≥4 必附引文」硬门）· B4「提交 4」→「提交」
+>   · B5 删浮层轮次角标 tNN（原位置 = 打分框第一排 N/A 右侧的 hint 文本）· B6 提交并入 N/A 右侧同一排（row nowrap）
+>   · B7 **先量后画**：min-width 由加总得出——5 档 × 28 + N/A 40 + 提交 ≈38 + 间距 6×4 + 内边距 9×2 + 边框 1×2 = **262 → 取 272**（留字体度量余量）；
+>   控件统一 box-sizing:border-box（否则 min-width 落在内容盒，档位实际 ≈42px/个）。**改前**：min-width:230px 且 content-box → 一排需 ≈340px，
+>   故旧「提交 4」被迫换行到第二排。
+>
+> **写侧已闭合（AL.4 跟单，main 86f8dfd）**：POST /m2/turn-annotations 双形同门，判据 = body 带 `boundary` 键（或 `align` 键）——
+> 故本件 POST **恒带 boundary**（N/A 发 `align:null + exempt:1 + boundary`），豁免行落 schema_version=2、进 exempted，不再被代际错判。
+> 测试缝：TurnFitAction 增 defaultOpen 仅供 SSR 断言浮层内容（renderToStaticMarkup 点不了按钮），线上不传、行为不变。
+> 连带：scripts/test-t.mjs 的 T 系列 UI 测试断言了旧文案与 postFit({fit})，随换代改了 5 行（范围例外，已上报）。
+>
+> **端上验收的诚实边界**：活库当前 user_version=7（宿主未重启，v8/v9 迁移未跑），故**活宿主里没有 /m2/alignments 路由**；
+> 本轮交付证据 = SSR 测试 + 负控（不依赖活宿主）。端上刷新看「对齐」视图需先重启宿主（会中断当前会话，属守谷人的决定）；
+> 若在未重启的宿主上看到「对齐接口不可用（/m2/alignments）」，那是**预期形态**，不是缺陷。
 
 ### 3.0 宿主 UI 入口契约（2026-09-13 对 0.1.5-rc.2 安装树实测，slot 声明以 in-box 包 `lib/types` 为权威）
 
@@ -255,7 +302,7 @@
 
 ## 6. 数据契约与 API（对齐 §5 + 现有面）
 
-**现有**（`src/routes.ts`，实现时逐条核对，不凭本文档）：`GET m2/state` · `GET m2/analysis` · `GET m2/turn-text` · `GET/POST m2/turn-annotations` · `POST selfcheck` · pulse 四条（`state`/`series`/`control`/`alerts`）。**演进**：vault 观测腿 2026-09-27 下线删除 `GET state` / `POST action` / `GET+POST vault`；**2026-09-28 AL.4a** 再删 `GET/POST m2/annotations`（预言标注）与 `GET/POST lfield`（工作区指向）——三张相关表保留不 drop。
+**现有**（`src/routes.ts`，实现时逐条核对，不凭本文档）：`GET m2/state` · `GET m2/analysis` · `GET m2/turn-text` · `GET/POST m2/turn-annotations` · `POST selfcheck` · pulse 四条（`state`/`series`/`control`/`alerts`）· **`GET /api/nautilus/m2/alignments`（AL.4b 读侧契约已冻结，由主线实现；UI 已按此写视图）**。**演进**：vault 观测腿 2026-09-27 下线删除 `GET state` / `POST action` / `GET+POST vault`；**2026-09-28 AL.4a** 再删 `GET/POST m2/annotations`（预言标注）与 `GET/POST lfield`（工作区指向）——三张相关表保留不 drop。
 
 **新增提案**（轮次人工标注；命名沿用 `m2` 前缀，路由进 `API_PREFIX` 集中常量）：
 

@@ -19,7 +19,7 @@
  *   ③ 朱红 `--nt-accent` **静态**，不随主题（S4 唯一颜色主张；语义＝需人工注意）。
  *
  * **手动档边界**：浅/深只覆盖 `.nt-wb` 子树里的字面值——不写宿主 body 属性、不调 ctx.theme.setTheme。
- * 观测插件不改宿主状态（AGENTS §0 定位红线：观测，不干预）。侧栏图标与流内契合按钮在 `.nt-wb` 之外，
+ * 观测插件不改宿主状态（AGENTS §0 定位红线：观测，不干预）。侧栏图标与流内对齐按钮在 `.nt-wb` 之外，
  * 属宿主色谱面，永远跟随宿主。
  */
 import { createElement, type ReactNode } from 'react'

@@ -481,7 +481,7 @@ export function CurveChart(props: {
   resetKey?: string | number
   onOpenTurn?: (session: string, turn: number) => void
   tipOf?: (meta: M2Point) => { head: string; lines: string[] }
-  /** 人工层标记（T 系列契合，dev-02 §5）：与 points 平行；非空项 = 描边环 + 档位数字。只改点样貌，不动读数线。 */
+  /** 人工层标记（T 系列对齐判读，dev-02 §5）：与 points 平行；非空项 = 描边环 + 档位数字。只改点样貌，不动读数线。 */
   marks?: Array<string | null>
   label?: string
 }): ReactNode {
@@ -836,7 +836,7 @@ export function PulseChart(props: { metric: string; points: Array<{ ts: number; 
 
 // ── 视图 1：总览 ──────────────────────────────────────────────────────────────
 
-export function OverviewView(props: { m2: M2State | null; pulse: PulseState | null; onOpenTurn: (s: string, t: number) => void; paused?: boolean; sessionNameOf?: (id: string) => { name: string; title: string } | null; nonce?: number }): ReactNode {
+export function OverviewView(props: { m2: M2State | null; pulse: PulseState | null; align?: AlignmentsState | null; onOpenTurn: (s: string, t: number) => void; paused?: boolean; sessionNameOf?: (id: string) => { name: string; title: string } | null; nonce?: number }): ReactNode {
   const { m2, pulse } = props
   const n = m2?.totals
   const hr = n?.hitRate
@@ -866,7 +866,7 @@ export function OverviewView(props: { m2: M2State | null; pulse: PulseState | nu
     { layer: 'NEXUS', label: '窗口缓存命中率', value: hr === null || hr === undefined ? '—' : (hr * 100).toFixed(1) + '%', note: n === undefined ? '—' : '读 ' + String(n.cacheRead) + ' / 未命中 ' + String(n.missToken) + ' 令牌 · ' + String(n.turns) + ' 轮', warn: hr !== null && hr !== undefined && hr < 0.5, spark: missPct },
     { layer: 'INFER', label: '推理时延 TTFT', value: '—', note: 'Phase 2a 采集（provider 侧未接入）', warn: false },
     { layer: 'INFER', label: '层间对齐度', value: '—', note: '需 INFER 落地后方可计算 τ_e', warn: false },
-    { layer: 'SELF', label: '自评覆盖率', value: m2 === null ? '—' : String(m2.selfcheck.checked) + ' / ' + String(m2.selfcheck.total), note: '每轮 record_turn_selfcheck 落盘比例' },
+    { layer: 'SELF', label: '自评覆盖（al-v1）', value: props.align === null || props.align === undefined ? '—' : String(props.align.coverage.selfAligned) + ' 轮', note: '来源 /m2/alignments 的 self 计数（原 turn_read.clarity 口径自 AL.3 起停写，会静默停更）' },
   ]
   const HEADLINE = ['pulse.cpu.utilization', 'pulse.mem.used', 'pulse.gpu.util', 'pulse.proc.dsh.rss']
   const headline = HEADLINE.map((name) => latest.find((l) => l.metric === name)).filter((x): x is PulsePoint => x !== undefined)
@@ -1036,6 +1036,7 @@ export function CurveView(props: {
   m2: M2State | null
   era: Era
   pulse: PulseState | null
+  align?: AlignmentsState | null
   paused?: boolean
   analysis?: AnalysisRow[] | null
   sessionNameOf?: (id: string) => { name: string; title: string } | null
@@ -1145,17 +1146,13 @@ export function CurveView(props: {
     createElement('span', { style: { width: 12 } }),
     ...(['date', 'turn'] as Array<'date' | 'turn'>).map((a) => createElement('button', { key: a, className: axis === a ? 'on' : '', onClick: () => setAxis(a) }, a === 'date' ? '日期轴' : '轮次轴')),
   )
-  // M4-B：自评覆盖（当前视图口径；选中会话时带缺口轮号）
-  const sc = props.m2?.selfcheck
-  const scSel = scope === 'all' ? undefined : sc?.bySession?.[scope]
+  // AL.4b：自评覆盖改读 /m2/alignments 的 self 计数——turn_read.clarity 自 AL.3 起停写，
+  // 旧口径（sc.checked / sc.total）会永久停在旧值（静默停更）；其按会话缺口数据源已死，一并撤掉。
+  const selfAligned = props.align === null || props.align === undefined ? null : props.align.coverage.selfAligned
   const coverageLine = createElement('span', { className: 'nt-label' },
-    sc === undefined || sc.total === 0
-      ? '自评覆盖：本视图暂无轮次'
-      : '自评覆盖 ' + ((sc.checked / sc.total) * 100).toFixed(0) + '%（' + String(sc.checked) + '/' + String(sc.total) + ' 轮）'
-        + (scSel === undefined
-          ? ''
-          : ' · 本会话 ' + String(scSel.checked) + '/' + String(scSel.total) + ' 轮'
-            + (scSel.missing.length > 0 ? ' · 缺 ' + scSel.missing.map((n) => 't' + String(n)).join(' ') : ' · 无缺口')))
+    selfAligned === null
+      ? '自评覆盖（al-v1）：对齐接口不可用'
+      : '自评覆盖（al-v1）' + String(selfAligned) + ' 轮 · 与人工行按 session+turn 配对')
   const pickerBox = createElement('div', { className: 'nt-wb-pickwrap' },
     createElement('button', { className: 'nt-btn' + (scope !== 'all' ? ' on' : ''), onClick: () => setPickOpen((v) => !v) },
       '会话 · ' + (scope === 'all' ? '全部（' + String(sessions.length) + '）' : scopeLabel(scope)) + ' ▾'),
@@ -1349,7 +1346,7 @@ export function ReportView(props: { m2: M2State | null; pulse: PulseState | null
 export type DrawerTarget = { session: string; turn: number }
 export type TurnText = { found: boolean; session?: string; turn?: number; userText?: string; assistantText?: string }
 
-export function Drawer(props: { target: DrawerTarget; point: M2Point | null; onClose: () => void }): ReactNode {
+export function Drawer(props: { target: DrawerTarget; point: M2Point | null; align?: AlignmentsState | null; onClose: () => void }): ReactNode {
   const [text, setText] = useState<TurnText | null>(null)
   const [loading, setLoading] = useState(true)
   useEffect(() => {
@@ -1374,11 +1371,18 @@ export function Drawer(props: { target: DrawerTarget; point: M2Point | null; onC
     ['时长', p.durationMs === null ? '—' : String(Math.round(p.durationMs)) + ' ms'],
     ['TPS', fmtNum(p.tps, 1)],
   ]
-  const selfRows: Array<[string, string]> = p === null ? [] : [
-    ['clarity', p.clarity === null || p.clarity === undefined ? '未落盘' : String(p.clarity)],
-    ['defense', p.defense === null || p.defense === undefined ? '未落盘' : String(p.defense)],
-    ['declaration', p.declaration === null || p.declaration === undefined ? '未落盘' : String(p.declaration)],
+  // AL.4c：per-turn 对齐判读（人工 human[] + 自评 self[] 同键 join）。
+  // 原 clarity/defense/declaration 取自 turn_read，自 AL.3 起新形 ingest 置 NULL → 会永久显示「未落盘」，故整块换源。
+  const al = props.align ?? null
+  const bLabel = (k: string | null | undefined): string => (k === null || k === undefined || k === '' ? '—' : (BOUNDARY_LABEL[k] ?? k))
+  const hRow = al === null ? undefined : al.human.find((r) => String(r.session) === props.target.session && Number(r.turn) === props.target.turn)
+  const sRow = al === null ? undefined : al.self.find((r) => String(r.extRef) === props.target.session && Number(r.turnOrdinal) === props.target.turn)
+  const alignRows: Array<[string, string]> = [
+    ['人工判读（1–5）', hRow === undefined ? '未标注 / 豁免（豁免行不进 human[]，见覆盖率）' : (hRow.align === null ? '—' : String(hRow.align)) + ' · 边界 ' + bLabel(hRow.boundary)],
+    ['人自评（1–5）', sRow === undefined ? '无自评行' : (sRow.align === null ? '—' : String(sRow.align)) + ' · 边界 ' + bLabel(sRow.boundary)],
+    ['自评引文 / 依据', sRow === undefined ? '—' : (sRow.quote ?? sRow.evidence ?? '—')],
   ]
+  const alignMissing = hRow === undefined && sRow === undefined
   return createElement('div', null,
     createElement('div', { className: 'nt-scrim', onClick: props.onClose }),
     createElement('div', { className: 'nt-drawer' },
@@ -1388,15 +1392,15 @@ export function Drawer(props: { target: DrawerTarget; point: M2Point | null; onC
         createElement('button', { className: 'nt-btn', onClick: props.onClose }, '关闭'),
       ),
       createElement('div', { className: 'db' },
-        createElement('p', { className: 'nt-note', style: { marginTop: 0 } }, '本抽屉分两层：上半是读数（客观、不可变），下半是原文与自评（解释层）。原文只读，永不写回读数。'),
+        createElement('p', { className: 'nt-note', style: { marginTop: 0 } }, '本抽屉分两层：上半是读数（客观、不可变），下半是人工/自评判读与原文（解释层）。判读与原文都只读，永不写回读数。'),
         createElement('h5', null, '读数（turn_read）'),
         p === null
           ? Empty({ text: '本窗口内无该轮读数（可能已被裁剪策略清除）' })
           : createElement('table', { className: 'nt-tbl' }, createElement('tbody', null, ...rows.map(([k, v]) => createElement('tr', { key: k }, createElement('td', { style: { width: '42%', color: 'var(--nt-faint,#9a9a95)' } }, k), createElement('td', null, v))))),
-        createElement('h5', null, '推理态自评（record_turn_selfcheck）'),
-        selfRows.every(([, v]) => v === '未落盘')
-          ? Empty({ text: '该轮未落盘自评 → 该轮推理态自评缺席' })
-          : createElement('table', { className: 'nt-tbl' }, createElement('tbody', null, ...selfRows.map(([k, v]) => createElement('tr', { key: k }, createElement('td', { style: { width: '42%', color: 'var(--nt-faint,#9a9a95)' } }, k), createElement('td', null, v))))),
+        createElement('h5', null, '对齐判读（人工 1–5 · 自评 1–5）'),
+        alignMissing
+          ? Empty({ text: '该轮既无人工判读、也无自评行——缺就是缺，不写 0' })
+          : createElement('table', { className: 'nt-tbl' }, createElement('tbody', null, ...alignRows.map(([k, v]) => createElement('tr', { key: k }, createElement('td', { style: { width: '42%', color: 'var(--nt-faint,#9a9a95)' } }, k), createElement('td', null, v))))),
         createElement('h5', null, '完整问答（turn_text）'),
         loading
           ? Empty({ text: '读取中' })
@@ -1415,10 +1419,207 @@ export function Drawer(props: { target: DrawerTarget; point: M2Point | null; onC
   )
 }
 
+// ── 视图：对齐台账（AL.4b；只读，契约 = GET /api/nautilus/m2/alignments）────────
+// 契约由主线冻结，本视图只消费、不发明 API。加入键与 scripts/alignment-consistency.mjs 同源：
+// self.extRef === human.session 且 self.turnOrdinal === human.turn。
+
+export type AlignAnchor = { score: number; text: string }
+export type AlignHumanRow = {
+  session: string; turn: number; align: number | null; boundary: string; exempt: number
+  quote: string | null; note: string | null; origin: string; schemaVersion: number
+  annotatedAt: number; updatedAt: number
+}
+export type AlignSelfRow = {
+  extRef: string; turnOrdinal: number; align: number | null; boundary: string | null
+  declaration: number | null; quote: string | null; evidence: string | null
+  rubricVersion: string | null; tsMs: number; agent: string | null
+}
+export type AlignmentsState = {
+  revision: number
+  /** v2：min = 采纳判据的最小对数——**单点来源在契约**，UI 不写本地阈值常量。 */
+  scale: { schemaVersion: number; rubricVersion: string; anchors: AlignAnchor[]; min: number }
+  coverage: {
+    humanTotal: number; humanAligned: number; exempted: number; legacyFitRows: number
+    byAlign: Record<string, number>
+    byBoundary: Record<string, number>
+    /** v2：分母 = turn_read 全局轮数（与 /m2/state 的 totals.turns 同式，不加 root）。 */
+    selfTotal: number
+    selfAligned: number
+    /** v2：selfAligned / selfTotal；**selfTotal = 0 → null**（0/0 报 0 是假读数）。 */
+    selfRatio: number | null
+    selfByAlign: Record<string, number>
+    /** v2：selfcheck_record 里 align IS NULL 或 rubric_version ≠ al-v1 的行数（与 human 侧**各自独立**计数）。 */
+    legacySelfRows: number
+  }
+  human: AlignHumanRow[]
+  self: AlignSelfRow[]
+  /** v2：holdout = 与聚合同一份确定性切分的子集（hash(session:turn)%5）——决策 §5 的**采纳判据口**。 */
+  consistency: {
+    pairs: number; exact: number; near: number; kappa: number | null
+    holdout: { pairs: number; exact: number; near: number; kappa: number | null }
+  } | null
+}
+/** 边界四类 + 无（正交轴：只记「有没有越界」，不与 1–5 分数相加或合并）。 */
+export const BOUNDARY_LABEL: Record<string, string> = { none: '无', substitution: '替代', possession: '占有', coercion: '强迫', projection: '投射' }
+export const BOUNDARY_ORDER = ['none', 'substitution', 'possession', 'coercion', 'projection']
+/** 台账最多列出的行数（按时间降序后的截断；超出部分在表下如实标注）。 */
+const ALIGN_LEDGER_MAX = 50
+
+export function AlignmentsView(props: { align: AlignmentsState | null }): ReactNode {
+  const a = props.align
+  if (a === null) {
+    return createElement('div', null,
+      createElement('div', { className: 'nt-note', style: { marginTop: 0 } }, '对齐台账：人工 1–5 与人自评 1–5 逐轮并列（只读，无写路径）。'),
+      Panel({ title: '对齐台账', fig: 'FIG.11', children: Empty({ text: '对齐接口不可用（/api/nautilus/m2/alignments）——路由未落地或读取中，不写 0 假读数' }) }),
+    )
+  }
+  const c = a.coverage
+  const anchors = a.scale.anchors.slice().sort((x, y) => Number(x.score) - Number(y.score))
+  const anchorOf = (s: number | null): string => {
+    if (s === null) return ''
+    const hit = anchors.find((x) => Number(x.score) === Number(s))
+    return hit === undefined ? 'align ' + String(s) : 'align ' + String(s) + ' · ' + String(hit.text)
+  }
+  const num = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) ? v : 0)
+  const pct = (v: unknown): string => (typeof v === 'number' && Number.isFinite(v) ? (v * 100).toFixed(1) + '%' : '—')
+  const countsOf = (m: Record<string, number> | null | undefined, k: number): number => (m === null || m === undefined ? 0 : num(m[String(k)]))
+
+  // 双路台账：两侧同键并列；只有一侧有行也列出（缺口要看得见，不补齐、不臆造）
+  const selfByKey = new Map<string, AlignSelfRow>()
+  for (const s of a.self) selfByKey.set(String(s.extRef) + ':' + String(s.turnOrdinal), s)
+  const led: Array<{ key: string; session: string; turn: number; h: AlignHumanRow | null; s: AlignSelfRow | null; ts: number }> = []
+  const seen = new Set<string>()
+  for (const h of a.human) {
+    const k = String(h.session) + ':' + String(h.turn)
+    seen.add(k)
+    led.push({ key: k, session: String(h.session), turn: Number(h.turn), h, s: selfByKey.get(k) ?? null, ts: num(h.updatedAt) || num(h.annotatedAt) })
+  }
+  for (const s of a.self) {
+    const k = String(s.extRef) + ':' + String(s.turnOrdinal)
+    if (seen.has(k)) continue
+    led.push({ key: k, session: String(s.extRef), turn: Number(s.turnOrdinal), h: null, s, ts: num(s.tsMs) })
+  }
+  led.sort((x, y) => y.ts - x.ts)
+  const shown = led.slice(0, ALIGN_LEDGER_MAX)
+
+  const ledger = createElement('table', { className: 'nt-tbl' },
+    createElement('thead', null, createElement('tr', null, ...['轮次', '人工', '自评', 'Δ', '边界', '引文 / 备注', '时间'].map((h) => createElement('th', { key: h }, h)))),
+    createElement('tbody', null, ...shown.map((r) => {
+      const hv: number | null = r.h === null ? null : r.h.align
+      const sv: number | null = r.s === null ? null : r.s.align
+      const d: number | null = hv === null || sv === null ? null : Number(sv) - Number(hv)
+      const exempt = r.h !== null && Number(r.h.exempt) === 1
+      const bd = r.h !== null ? String(r.h.boundary) : String(r.s?.boundary ?? '')
+      const raw = r.h?.quote ?? r.h?.note ?? r.s?.quote ?? r.s?.evidence ?? null
+      return createElement('tr', { key: r.key },
+        createElement('td', null, shortSession(r.session) + ' · ' + String(r.turn)),
+        createElement('td', { title: anchorOf(hv) }, hv === null ? '—' : String(hv)),
+        createElement('td', { title: anchorOf(sv) }, sv === null ? '—' : String(sv)),
+        createElement('td', { title: 'Δ = 自评 − 人工' }, d === null ? '—' : (d > 0 ? '+' + String(d) : String(d))),
+        createElement('td', null, exempt ? '豁免' : (BOUNDARY_LABEL[bd] ?? (bd === '' ? '—' : bd))),
+        createElement('td', { title: raw ?? undefined }, raw === null || raw === '' ? '—' : (raw.length > 42 ? raw.slice(0, 42) + '…' : raw)),
+        createElement('td', null, r.ts === 0 ? '—' : fmtDayTime(r.ts)),
+      )
+    })),
+  )
+
+  const hist = (counts: Record<string, number>, fill: string, name: string): ReactNode => StackedBars({
+    rows: [1, 2, 3, 4, 5].map((s) => ({ x: s, segs: [{ key: name, v: countsOf(counts, s), fill, name }] })),
+    h: 150,
+    xTick: (v: number): string => String(Math.round(v)),
+    yFmt: (v: number): string => String(Math.round(v)),
+    label: name + '：align 1–5 分布',
+  })
+
+  const anchorChips = createElement('div', { className: 'nt-legend' },
+    createElement('span', null, '锚文（悬停看全文）'),
+    ...anchors.map((x) => createElement('span', {
+      key: String(x.score), className: 'nt-tag', title: String(x.text),
+    }, String(x.score) + ' · ' + (String(x.text).length > 16 ? String(x.text).slice(0, 16) + '…' : String(x.text)))),
+  )
+
+  const stats = createElement('div', { className: 'nt-wb-grid' },
+    Stat({ layer: 'ALIGN', label: '人工行', value: String(num(c.humanTotal)) + ' 行', note: '其中有分 ' + String(num(c.humanAligned)) + ' · 豁免 ' + String(num(c.exempted)) }),
+    Stat({ layer: 'ALIGN', label: '自评覆盖（al-v1）', value: c.selfRatio === null || c.selfRatio === undefined ? '分母为 0（缺席）' : pct(c.selfRatio), note: '自评 ' + String(num(c.selfAligned)) + ' / 全局 ' + String(num(c.selfTotal)) + ' 轮（分母 = turn_read 全局轮数）' }),
+    Stat({ layer: 'ALIGN', label: '一致配对', value: a.consistency === null ? '样本不足（<2 对）' : String(num(a.consistency.pairs)) + ' 对', note: 'session+turn ↔ ext_ref+turn_ordinal · 采纳判据看留出集' }),
+    Stat({ layer: 'ALIGN', label: '代际隔离', value: '人工 ' + String(num(c.legacyFitRows)) + ' · 自评 ' + String(num(c.legacySelfRows)) + ' 行', note: '旧 0–4 档行与 rubric ≠ al-v1 行：两侧各自独立计数，均不混算' }),
+  )
+
+  const boundTbl = createElement('table', { className: 'nt-tbl' },
+    createElement('thead', null, createElement('tr', null, ...['边界', '计数'].map((h) => createElement('th', { key: h }, h)))),
+    createElement('tbody', null, ...BOUNDARY_ORDER.map((b) => createElement('tr', { key: b },
+      createElement('td', null, BOUNDARY_LABEL[b] ?? b),
+      createElement('td', null, String(num(c.byBoundary?.[b])))))),
+  )
+
+  const cst = a.consistency
+  // 阈值取自契约 scale.min（单点来源）；老响应缺该字段时退化为 0，即「不显示不足提示」而不是编一个阈值
+  const minPairs = Number.isFinite(Number(a.scale.min)) ? Number(a.scale.min) : 0
+  const metricRow = (name: string, m: { pairs: number; exact: number; near: number; kappa: number | null }, strong: boolean): ReactNode => createElement('tr', { key: name },
+    createElement('td', null, strong ? createElement('b', null, name) : name),
+    createElement('td', null, String(num(m.pairs))),
+    createElement('td', null, pct(m.exact)),
+    createElement('td', null, pct(m.near)),
+    createElement('td', null, typeof m.kappa === 'number' && Number.isFinite(m.kappa) ? m.kappa.toFixed(3) : '—'))
+  const consistencyBody = cst === null
+    ? Empty({ text: '样本不足（<2 对）：一致性三指标不可计算——不写 0 假读数（口径与 scripts/alignment-consistency.mjs 同源）' })
+    : createElement('div', null,
+      createElement('table', { className: 'nt-tbl' },
+        createElement('thead', null, createElement('tr', null, ...['口径', '对数', '完全一致率', '相邻档一致率', '二次加权 κ'].map((h) => createElement('th', { key: h }, h)))),
+        createElement('tbody', null,
+          metricRow('全部配对', cst, false),
+          cst.holdout === null || cst.holdout === undefined ? null : metricRow('留出集（采纳判据）', cst.holdout, true))),
+      createElement('p', { className: 'nt-note' }, '留出集 = hash(session:turn) % 5 === 0 的确定性切分，与 scripts/alignment-consistency.mjs 同一份实现；**rubric 修订候选只有留出集提升才可采纳**，否则回滚（决策 §5）。'),
+      cst.pairs < minPairs
+        ? createElement('p', { className: 'nt-note' }, '样本不足（' + String(num(cst.pairs)) + ' < ' + String(minPairs) + ' 对，阈值取自契约 scale.min）：只作观察，不得据此调整 rubric（决策 §5 纪律）。')
+        : null,
+    )
+
+  return createElement('div', null,
+    createElement('div', { className: 'nt-note', style: { marginTop: 0 } }, '对齐台账：人工 1–5 与人自评 1–5 逐轮并列——两条独立读数只作对照，不互相覆盖（只读，无写路径）。'),
+    stats,
+    createElement('p', { className: 'nt-note' }, '量表：schema_version=' + String(a.scale.schemaVersion) + ' · rubric_version=' + String(a.scale.rubricVersion) + ' · 一致性口径与 scripts/alignment-consistency.mjs 同源（完全一致 / |Δ|≤1 / 二次加权 κ）。'),
+    Panel({
+      title: '分布（align 1–5）', fig: 'FIG.11',
+      note: '两组独立柱：人工行 与 人自评行 各自的 1–5 计数（不做归一化、不合并成一条曲线）。灰色代际行（旧 0–4 档）不计入本分布。',
+      children: createElement('div', null,
+        anchorChips,
+        createElement('div', { style: { display: 'flex', gap: 18, flexWrap: 'wrap', alignItems: 'flex-start' } },
+          createElement('div', { style: { flex: '1 1 300px', minWidth: 260 } },
+            createElement('div', { className: 'nt-famhd' }, '人工（' + String(num(c.humanAligned)) + ' 行有分）'),
+            hist(c.byAlign, 'var(--nt-ink,#101010)', '人工')),
+          createElement('div', { style: { flex: '1 1 300px', minWidth: 260 } },
+            createElement('div', { className: 'nt-famhd' }, '自评（' + String(num(c.selfAligned)) + ' 行有分）'),
+            hist(c.selfByAlign, 'var(--nt-accent,#e6321e)', '自评')),
+        ),
+      ),
+    }),
+    Panel({
+      title: '双路台账（人工 · 自评）', fig: 'FIG.12',
+      note: '同轮并列：轮次 = 会话短 id + turn；Δ = 自评 − 人工（缺一侧时为 —，不按 0 计）。引文 / 备注取该行原文（悬停看全文）。只有一侧有行的也列出——缺口不补齐、不臆造。',
+      children: led.length === 0
+        ? Empty({ text: '窗口内暂无对齐行（人工与自评两侧都空）' })
+        : createElement('div', null, ledger, led.length > shown.length
+          ? createElement('p', { className: 'nt-note' }, '仅列最近 ' + String(shown.length) + ' / ' + String(led.length) + ' 行（按时间降序）。')
+          : null),
+    }),
+    Panel({
+      title: '边界计数（正交轴）', fig: 'FIG.13',
+      note: '边界只记「有没有越界」：五类计数与 1–5 分数是两个轴，不相加、不合并。零计数照实显示。**边界计数是描述性的**——一致性三指标只基于 align、不含 boundary，此处不构成「边界一致性已被度量」的证据。',
+      children: boundTbl,
+    }),
+    Panel({
+      title: '一致性（人工 vs 自评）', fig: 'FIG.14',
+      note: '三指标：完全一致率 · 相邻档一致率(|Δ|≤1) · 二次加权 κ（K=5）——**口径仅 align，不含 boundary**（后者正交，另属新口径，要算需另开 OQ）。对数 < 2 时整体不可计算——显示样本不足而不是 0。',
+      children: consistencyBody,
+    }),
+  )
+}
+
 // ── 根组件 ────────────────────────────────────────────────────────────────────
 
-export type ViewKey = 'overview' | 'alerts' | 'curve' | 'report'
-export const VIEW_LABEL: Record<ViewKey, string> = { overview: '总览', alerts: '告警', curve: '曲线', report: '报告' }
+export type ViewKey = 'overview' | 'alignments' | 'alerts' | 'curve' | 'report'
+export const VIEW_LABEL: Record<ViewKey, string> = { overview: '总览', alignments: '对齐', alerts: '告警', curve: '曲线', report: '报告' }
 export const WORKBENCH_LABEL = 'Nautilus 工作台'
 
 /** 工作台根组件。onExitToConversation 由宿主半区注入（ctx.layout.selectPanel(null)），用于回到会话。 */
@@ -1435,6 +1636,8 @@ export function Workbench(props: { onExitToConversation?: () => void; sessionNam
   const [nonce, setNonce] = useState(0)
   const paused = drawer !== null
   const m2 = useJson<M2State>('/api/nautilus/m2/state', paused, 120000, nonce)
+  // AL.4b：对齐台账（人工 1–5 vs 人自评 1–5；只读，契约由主线冻结——本视图不发明 API）
+  const alignments = useJson<AlignmentsState>('/api/nautilus/m2/alignments', paused, 120000, nonce)
   // 实时读数：OS 层每 1s 重取最新值（/pulse/state 只查 15 行 latest，代价可忽略）；
   // 手动档下值不会变，但重取同样廉价，故不额外分支。
   const pulse = useJson<PulseState>('/api/nautilus/pulse/state', paused, 1000, nonce)
@@ -1454,8 +1657,9 @@ export function Workbench(props: { onExitToConversation?: () => void; sessionNam
   const ok = (v: unknown): string => (v === null ? '缺席' : '在场')
   // 用 createElement 渲染视图组件（**不可**写成 OverviewView({...}) 直接调用）：
   // 直接调用会把子组件的 hooks 算进父组件，切换视图时 hooks 数量变化 → React 抛错、整页渲染失败。
-  const body = view === 'overview' ? createElement(OverviewView, { m2, pulse, onOpenTurn: (s: string, t: number) => setDrawer({ session: s, turn: t }), paused, sessionNameOf: props.sessionNameOf, nonce })
-    : view === 'curve' ? createElement(CurveView, { m2, era, pulse, paused, analysis, sessionNameOf: props.sessionNameOf, onOpenTurn: (s: string, t: number) => setDrawer({ session: s, turn: t }), nonce })
+  const body = view === 'overview' ? createElement(OverviewView, { m2, pulse, align: alignments, onOpenTurn: (s: string, t: number) => setDrawer({ session: s, turn: t }), paused, sessionNameOf: props.sessionNameOf, nonce })
+    : view === 'alignments' ? createElement(AlignmentsView, { align: alignments })
+    : view === 'curve' ? createElement(CurveView, { m2, era, pulse, align: alignments, paused, analysis, sessionNameOf: props.sessionNameOf, onOpenTurn: (s: string, t: number) => setDrawer({ session: s, turn: t }), nonce })
     : view === 'alerts' ? createElement(AlertsView, { state: alerts, toast: setToast, reload: () => setNonce((v) => v + 1), collectorMode: pulse === null ? 'auto' : pulse.collector.mode })
     : createElement(ReportView, { m2, pulse, era, analysis })
   return createElement('div', { className: 'nt-wb', 'data-nt-theme': theme },
@@ -1464,7 +1668,7 @@ export function Workbench(props: { onExitToConversation?: () => void; sessionNam
         ? createElement('button', { className: 'nt-btn', style: { marginRight: 2 }, onClick: () => { if (props.onExitToConversation !== undefined) props.onExitToConversation() } }, '← 返回会话')
         : null,
       createElement('div', { className: 'nt-wb-brand' }, 'NAUTILUS', createElement('small', null, 'Observation Workbench')),
-      createElement('div', { className: 'nt-wb-seg' }, ...(['overview', 'alerts', 'curve', 'report'] as ViewKey[]).map((k) => createElement('button', { key: k, className: k === view ? 'on' : '', onClick: () => setView(k) }, VIEW_LABEL[k]))),
+      createElement('div', { className: 'nt-wb-seg' }, ...(['overview', 'alignments', 'alerts', 'curve', 'report'] as ViewKey[]).map((k) => createElement('button', { key: k, className: k === view ? 'on' : '', onClick: () => setView(k) }, VIEW_LABEL[k]))),
       createElement('div', { className: 'nt-wb-right' },
         createElement('span', null, 'NEXUS ' + ok(m2) + ' · PULSE ' + ok(pulse)),
         createElement('button', {
@@ -1494,7 +1698,7 @@ export function Workbench(props: { onExitToConversation?: () => void; sessionNam
       ),
     ),
     createElement('div', { className: 'nt-wb-body' }, createElement(ViewBoundary, { key: view, label: VIEW_LABEL[view] }, body)),
-    drawer !== null ? createElement(Drawer, { target: drawer, point, onClose: () => setDrawer(null) }) : null,
+    drawer !== null ? createElement(Drawer, { target: drawer, point, align: alignments, onClose: () => setDrawer(null) }) : null,
     toast !== null ? createElement('div', { className: 'nt-toast' }, toast) : null,
   )
 }
