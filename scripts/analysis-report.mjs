@@ -1,10 +1,10 @@
 // M4-A 分析报告（可重复运行）：node scripts/analysis-report.mjs [all|pointing]
 // M4.11：视图两态（全局 / vault 指向）——归档口径下线。
-// 复用插件 analyze() 管线（lib/analysis.js）+ 全局聚合，产出简历可引用的参数集。
+// 复用插件 analyze() 管线（lib/nexus/analysis.js）+ 全局聚合，产出简历可引用的参数集。
 import { DatabaseSync } from 'node:sqlite'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
-import { analyze } from '../lib/analysis.js'
+import { analyze } from '../lib/nexus/analysis.js'
 
 const scope = process.argv[2] ?? 'all'
 const db = new DatabaseSync(join(homedir(), '.dsh', 'nautilus', 'nautilus.db'))

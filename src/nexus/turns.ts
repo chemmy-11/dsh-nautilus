@@ -5,7 +5,7 @@
  *   → assistant/message（usage: inputTokens/outputTokens/cacheReadTokens + turn/step）
  * 按 (session, turn) 幂等聚合为 turn_read。与团队底座零耦合（官方事件直采）。
  */
-import type { NautilusStore } from './store.js'
+import type { NautilusStore } from '../store.js'
 
 /** 最小事件形态（官方 SessionEvent 的 duck-type 子集；避免新增 dsh-session 依赖）。 */
 export interface TurnEventLike {

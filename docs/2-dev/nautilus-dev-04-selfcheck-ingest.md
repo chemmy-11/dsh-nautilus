@@ -8,7 +8,7 @@
 | # | 验收项 | 判据 |
 |---|---|---|
 | 1 | v4→v5 迁移 | 存量库升级幂等可重跑；`turn_read` 既有统计**前后数字不变**（对照证据入 E21）；新库直达 v5 且不抢 pulse 语义 |
-| 2 | 共享 ingest | 校验/去重/落库一个实现（`src/selfcheck-ingest.ts`），DSH 工具与 HTTP 路由都是薄壳（D-SC3a 约束 1） |
+| 2 | 共享 ingest | 校验/去重/落库一个实现（`src/nexus/selfcheck-ingest.ts`），DSH 工具与 HTTP 路由都是薄壳（D-SC3a 约束 1） |
 | 3 | 工具改造（D-SC2） | `declaration=1` 无 `quote` → **拒绝并要求重提**（不写入、不降级）；`quote` ≤200 字 |
 | 4 | HTTP 通道（D-SC1） | 禁用 403 / 缺错 token 401 / 非法 400 / 合法 200；重复投递 = 修正覆盖 + `duplicate:true`，不双写 |
 | 5 | 测试红线 | 迁移/四分支/口径一致经 **真实装配路径**（`ctx.plugin(mod)` + 已注册 handler）断言外部世界 |
@@ -17,11 +17,14 @@
 
 ## 2. 模块划分
 
+> **路径变更（2026-09-28，AL.6 解耦第一步）**：下表中的 `src/selfcheck-ingest.ts` 与 `src/selfcheck.ts`
+> 已移入 `src/nexus/`（同文件名），本表其余内容与口径不变。
+
 | 文件 | 内容 | 性质 |
 |---|---|---|
-| `src/selfcheck-ingest.ts` | `IngestInput` / `validateIngest` / `ingestSelfCheck`（唯一口径：校验→去重→落库） | 纯逻辑，零 HTTP / 零工具依赖 |
+| `src/nexus/selfcheck-ingest.ts` | `IngestInput` / `validateIngest` / `ingestSelfCheck`（唯一口径：校验→去重→落库） | 纯逻辑，零 HTTP / 零工具依赖 |
 | `src/store.ts` | `migrateV5`（建表+两索引，v→5）+ `insertSelfCheckRecord` / `countSelfCheckRecords` / `schemaVersion` / `selfcheckWorkspaceOf` | 迁移唯一权威不变（D-N1 前） |
-| `src/selfcheck.ts` | 工具半壳：兼容夹取（clarity/defense）→ 调 ingest（`source_kind='dsh_tool'`）→ **双写**旧 `turn_read` 列（过渡期，S1.2 切读后停） | 契约变更点：`quote` |
+| `src/nexus/selfcheck.ts` | 工具半壳：兼容夹取（clarity/defense）→ 调 ingest（`source_kind='dsh_tool'`）→ **双写**旧 `turn_read` 列（过渡期，S1.2 切读后停） | 契约变更点：`quote` |
 | `src/routes.ts` | `POST ${API_PREFIX}/selfcheck`：token 门 → `readJson` → `validateIngest`（严格）→ 落库 | 集中常量：`SELFCHECK_TOKEN_HEADER` |
 | `src/index.ts` | `Config.selfcheck.ingest = { enabled, token, maxBodyBytes }`；**enabled=true 且 token 空 → 加载时抛错**（响亮失败） | 默认关 |
 

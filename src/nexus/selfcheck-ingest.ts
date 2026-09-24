@@ -8,7 +8,7 @@
  * 严格语义：validateIngest **不夹取、不猜默认**——非法即拒（调用方决定映射 400 还是 isError）。
  * DSH 工具侧的历史兼容夹取（clarity 越界夹取等）留在工具薄壳里做，不污染本口径。
  */
-import type { SelfCheckRecordRow } from './store.js'
+import type { SelfCheckRecordRow } from '../store.js'
 
 /** source_kind 枚举（集中常量——与 migrateV5 的 CHECK 一致；红线 4）。 */
 export const SOURCE_KINDS = ['dsh_tool', 'http', 'backfill', 'mcp'] as const
