@@ -5,6 +5,11 @@
 ## 分支与提交
 
 - `main` 为主干，保持线性；小步本地提交，**push 时机按用户明确指令**（本地领先 origin 是常态）。
+- **一线一检出（工作区纪律，2026-09-28 事故固化）**：多条分支线**各自一个 git worktree**（或独立 clone），
+  **禁止两条线共用一个工作目录**。实测事故形态：共享检出被切到 `feat/ui` 后，`feat/nautilus` 的**未提交改动在工作区整体消失**
+  （已提交的在 origin 上不会丢，本地改动会）。约定：`L:\dsh-nautilus`（feat/ui，UI 线）·
+  `L:\dsh-nautilus-al`（feat/nautilus，主线）；开新线用 `git worktree add <path> <branch>`。
+  **分支不是隔离单位，检出才是**——同一个 clone 里切分支，等于把另一条线的桌面抽走。
 - **三条长驻开发线**，各自一条分支、互不混提：
   - `feat/nexus` —— **插件线**：应用层观测插件本体（采集 / 存储 / 路由 / 面板 / 宿主适配）；
   - `feat/nautilus` —— **Nautilus 主线**：三层指标（pulse / infer / nexus）、era 因果上下文、Agentic Ops 工作台；**包含**插件线全部内容，插件线前进后用 `git merge feat/nexus` 同步（不 rebase，保留既有提交 hash）；
