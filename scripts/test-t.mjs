@@ -17,7 +17,7 @@ import { buildPool, selectFromPool, nextBatchId } from './annotation-sample.mjs'
 
 // ── 迁移与 CHECK 双门 ─────────────────────────────────────────────────────────
 
-test('migrateV6: v5 存库升级幂等、turn_read 数字不变、新库直达 v6', () => {
+test('migrateV6: v5 存库升级幂等、turn_read 数字不变、新库直达最新（v7）', () => {
   const tmp = mkdtempSync(join(tmpdir(), 'nautilus-v6-'))
   try {
     const file = join(tmp, 'n.db')
@@ -37,15 +37,15 @@ test('migrateV6: v5 存库升级幂等、turn_read 数字不变、新库直达 v
       raw.close()
     }
     const s1 = openStore(file)
-    assert.equal(s1.schemaVersion(), 6)
+    assert.equal(s1.schemaVersion(), 7, 'v5 存库经 v6(T 系列)+v7(A 系列) 后到最新')
     assert.deepEqual(s1.turnTotals(), { turns: 3, tokenIn: 0, tokenOut: 0, cacheRead: 0 }, 'turn_read 数字不变')
     assert.deepEqual({ ...s1.turnAnnotationCoverage() }.total, 0)
     s1.close()
     const s2 = openStore(file)
-    assert.equal(s2.schemaVersion(), 6, '重开不回退不重复')
+    assert.equal(s2.schemaVersion(), 7, '重开不回退不重复')
     s2.close()
     const fresh = openStore(join(tmp, 'fresh.db'))
-    assert.equal(fresh.schemaVersion(), 6)
+    assert.equal(fresh.schemaVersion(), 7)
     fresh.close()
     // CHECK 双门：fit=4 无引文直插必须炸；合法对照（fit 档、exempt 档）直插必须成
     const raw = new DatabaseSync(file)

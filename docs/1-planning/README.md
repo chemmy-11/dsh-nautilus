@@ -16,6 +16,7 @@
 | [nautilus-research-2-positioning.md](./nautilus-research-2-positioning.md) | 第二期调研：产品定位（Agent 工作台）、竞争格局、路线阶梯、可借鉴开源项目清单 |
 | [nautilus-selfcheck-multisource.md](./nautilus-selfcheck-multisource.md) | 自评多源采集（S 系列）：通道定 HTTP ingest、declaration 改证据要求（D-SC1/2/3 已签核）；规则完善与诚实边界。**S1.2+ 挂起（2026-09-27）** |
 | [nautilus-turn-annotation.md](./nautilus-turn-annotation.md) | 逐轮人工标注（T 系列）：「契合」5 档锚定量表 + 抽屉随手标/抽样队列双口径（D-T1 已签核）；观测体系的第一人工真值源 |
+| [nautilus-os-alerting.md](./nautilus-os-alerting.md) | OS 层红线告警（A 系列）：固定阈值触发 + `[t0-lookback, t0]` 证据冻结 + `ctx.llm` 三段式报告 + `alert_event` 台账（D-A1/A2/A3 已签核；**做提示与留证，不自动处置**） |
 
 ## 关联
 

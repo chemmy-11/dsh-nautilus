@@ -22,6 +22,7 @@ import { LAYER, collectGpu, collectLocal, cpuTimes, type Exec, type ExecResult, 
 import { CountersSession, type ChildLike, type ChildSpawner } from './counters.js'
 import { openPulseStore, type PulseStore } from './store.js'
 import { registerPulseRoutes, type PulseControl } from './routes.js'
+import { AlertEngine, DEFAULT_ALERT_RULES, alertMetricExpr, type AlertRule } from './alerts.js'
 
 export const name = 'pulse'
 /** webServer 必需（校验路由）；subprocess 可选，经 ctx.get 取（AGENTS.md §2）。 */
@@ -47,6 +48,10 @@ export interface Config {
   nvidiaSmiPath: string
   /** 空 = `$DSH_HOME/nautilus/nautilus.db`（与 nautilus 同库）。 */
   dbFile: string
+  /** A 系列：OS 层红线告警总开关（默认开；关掉 = 不检测、不收口台账）。 */
+  alertEnabled: boolean
+  /** A 系列：告警规则表（可扩展；默认四个主要对象 + dsh-rss 关闭）。 */
+  alertRules: AlertRule[]
 }
 
 export const Config = z.object({
@@ -63,6 +68,21 @@ export const Config = z.object({
   pwshPath: z.string().default(''),
   nvidiaSmiPath: z.string().default('nvidia-smi'),
   dbFile: z.string().default(''),
+  alertEnabled: z.boolean().default(true),
+  // 规则表逐字段可配（只改 cordis.yml 就能加规则/改阈值）；语义与交叉约束由 AlertEngine 在
+  // 装配时校验（非法即加载失败，见 alerts.ts validateAlertRules）
+  alertRules: z.array(z.object({
+    id: z.string(),
+    label: z.string().default(''),
+    enabled: z.boolean().default(true),
+    metric: z.string(),
+    refMetric: z.string().default(''),
+    op: z.string().default('gte'),
+    threshold: z.number(),
+    clear: z.number(),
+    forMs: z.number().min(0).default(30000),
+    cooldownMs: z.number().min(0).default(0),
+  })).default(DEFAULT_ALERT_RULES.map((r) => ({ ...r }))),
 })
 
 export interface PulseCollectorStatus {
@@ -146,6 +166,14 @@ export function apply(ctx: Context, config: Config): void {
   const store: PulseStore = openPulseStore(dbFile)
   ctx.effect(() => () => store.close())
 
+  // A 系列：告警检测内核（构造即校验——非法规则在这里响亮失败，不留到运行时静默失效）
+  const engine = config.alertEnabled ? new AlertEngine(config.alertRules) : null
+  if (engine !== null) {
+    // 启动自愈：上个进程遗留的未解除行收口（重启后连续段与峰值都不可考，不装「还活着」）
+    const stale = store.closeStaleAlerts(Date.now())
+    if (stale.length > 0) console.warn('[pulse] 告警启动自愈：收口 ' + stale.length + ' 条遗留未解除告警（' + stale.join(', ') + '）')
+  }
+
   const exec = makeExecFrom(ctx)
   const status: PulseCollectorStatus = {
     startedAt: Date.now(), ticks: 0, lastTickTs: null, lastDurationMs: null, lastSampleCount: 0,
@@ -208,6 +236,27 @@ export function apply(ctx: Context, config: Config): void {
       store.insert(started, LAYER, samples)
       status.lastSampleCount = samples.length
       status.lastError = null
+
+      // A 系列：把本 tick 的最新值喂检测内核。缺席的指标不进 map → 相关规则跳过且**状态保持**
+      // （缺席不等于恢复）。迁移只在本 tick 内处理，不跨 tick 攒批——确认/解除都落在真实时刻上。
+      if (engine !== null) {
+        const values = new Map<string, number>()
+        for (const s of samples) if (Number.isFinite(s.value)) values.set(s.metric, s.value)
+        for (const t of engine.observe(values, started)) {
+          if (t.kind === 'opened') {
+            const ins = store.insertAlert({
+              id: t.alertId, ruleId: t.rule.id, metric: alertMetricExpr(t.rule), op: t.rule.op,
+              threshold: t.rule.threshold, firstExceededAt: t.firstExceededAt, confirmedAt: t.confirmedAt,
+              peakValue: t.peak, createdAt: Date.now(),
+            })
+            console.warn('[pulse] 告警确认 ' + t.alertId + '（' + t.rule.label + ' ' + alertMetricExpr(t.rule) +
+              ' ' + t.rule.op + ' ' + String(t.rule.threshold) + '，连续 ' + String(Math.round((t.confirmedAt - t.firstExceededAt) / 1000)) + 's）· 台账 ' + ins)
+          } else {
+            const closed = store.closeAlert(t.alertId, t.ts)
+            console.info('[pulse] 告警解除 ' + t.alertId + '（持续 ' + String(Math.round(t.durationMs / 1000)) + 's' + (closed ? '' : '，台账行已收口') + '）')
+          }
+        }
+      }
     } catch (err) {
       status.lastError = err instanceof Error ? err.message : String(err)
     } finally {
@@ -236,7 +285,16 @@ export function apply(ctx: Context, config: Config): void {
     sampleNow: () => tick(),
   }
 
-  registerPulseRoutes(ctx, { store, status: () => status, control })
+  registerPulseRoutes(ctx, {
+    store,
+    status: () => status,
+    control,
+    alerts: () => ({
+      enabled: config.alertEnabled,
+      rules: engine === null ? config.alertRules.map((r) => ({ ...r })) : engine.rulesView(),
+      states: engine === null ? [] : engine.statesView(),
+    }),
+  })
 
   ctx.effect(() => () => {
     stopped = true
@@ -244,6 +302,7 @@ export function apply(ctx: Context, config: Config): void {
     status.sealed = true
   })
 
+  console.info('[pulse] 告警' + (engine === null ? '已停用（pulse.alertEnabled=false，不做检测也不收口台账）' : '就绪：规则 ' + String(engine.rulesView().filter((r) => r.enabled).length) + '/' + String(engine.rulesView().length) + ' 启用'))
   console.info('[pulse] 采集启动：mode=' + status.mode + ' interval=' + status.intervalMs + 'ms counters=' + config.countersIntervalMs + 'ms gpu=' + config.gpuIntervalMs + 'ms exec=' + (exec !== null ? 'ctx.subprocess' : '不可用（只采本地族）') + ' db=' + dbFile)
 
   /** 计数器助手用的常驻子进程 spawner（stdin/stdout 双管道；宿主 seam 缺席 → null）。 */

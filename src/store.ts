@@ -11,6 +11,8 @@
 import { DatabaseSync } from 'node:sqlite'
 import { mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
+// v7 告警台账的 DDL 只有一份（本库迁移与 pulse 存储层共用），见 ALERT_EVENT_DDL 注释
+import { ALERT_EVENT_DDL } from './pulse/store.js'
 /** M2/M3 turn 读数行（官方会话事件聚合；与团队底座零耦合）。 */
 export interface TurnReadRow {
   session: string
@@ -132,6 +134,7 @@ export class NautilusStore {
     if (v < 3) this.migrateV3()
     if (v < 5) this.migrateV5()
     if (v < 6) this.migrateV6()
+    if (v < 7) this.migrateV7()
   }
 
 
@@ -257,6 +260,28 @@ export class NautilusStore {
         CREATE INDEX IF NOT EXISTS ix_as_lookup ON annotation_sample(session, turn, annotated_at);
       `)
       this.db.exec('PRAGMA user_version = 6')
+      this.db.exec('COMMIT')
+    } catch (e) {
+      this.db.exec('ROLLBACK')
+      throw e
+    }
+  }
+
+  /**
+   * A 系列迁移（user_version 6→7，决策 D-A1/A3）：OS 层红线告警台账 `alert_event`。
+   *
+   * 一行一条**已确认**的告警（确认那刻插入，解除时补 cleared_at/duration_ms）；
+   * 规则参数快照（rule_id/metric/op/threshold）与报告/裁决字段一并在表内留位，
+   * 让台账在规则改阈值之后仍能解释「当时按哪条线判的」。
+   *
+   * 幂等：`CREATE TABLE IF NOT EXISTS` + 版本单调；不删不改既有数据（红线 3）。
+   * v8 槽留给并行的 S2（`turn_annotation` 重建 + `selfcheck_record` 追加）。
+   */
+  private migrateV7(): void {
+    this.db.exec('BEGIN')
+    try {
+      this.db.exec(ALERT_EVENT_DDL)
+      this.db.exec('PRAGMA user_version = 7')
       this.db.exec('COMMIT')
     } catch (e) {
       this.db.exec('ROLLBACK')

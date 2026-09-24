@@ -5,6 +5,7 @@
  *   GET  /api/nautilus/pulse/state                        采集状态 + 每指标最新值
  *   GET  /api/nautilus/pulse/series?metric=&windowMs=&maxPoints=   单指标时间序列（桶均值）
  *   POST /api/nautilus/pulse/control                      心跳档位：{ intervalMs } 定时档 | { mode:'manual' } 手动档 | { sample:true } 立即采一次
+ *   GET  /api/nautilus/pulse/alerts                       OS 层红线告警：规则 + 运行态 + 台账（A 系列 A.1）
  *
  * 与 nautilus 路由同一守卫口径（同源标记）。**control 只改采集节律，不写业务读数**——
  * 它决定「多久采一次」，采样本身仍走同一条 tick 路径（同库同表）。
@@ -13,6 +14,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { WebRoute } from '@deepseek-ai/dsh-host-webserver'
 import type { PulseStore } from './store.js'
 import type { PulseCollectorStatus } from './index.js'
+import type { AlertRule, AlertRuntimeState } from './alerts.js'
 
 /** 集中常量：pulse 路由前缀（AGENTS.md §1-4）。 */
 export const PULSE_API_PREFIX = '/api/nautilus/pulse'
@@ -31,10 +33,19 @@ export interface PulseControl {
   sampleNow(): Promise<void>
 }
 
+/** 告警视图（A 系列）：规则定义 + 运行态；路由只负责把它们拼成一份快照。 */
+export interface PulseAlertsView {
+  enabled: boolean
+  rules: AlertRule[]
+  states: AlertRuntimeState[]
+}
+
 export interface PulseRouteDeps {
   store: PulseStore
   status: () => PulseCollectorStatus
   control: PulseControl
+  /** 告警视图（A.1）。子插件独立挂载时也可缺席 → 路由回 503（能力不在，不编造空表）。 */
+  alerts?: () => PulseAlertsView
 }
 
 function json(res: ServerResponse, status: number, body: unknown): void {
@@ -142,9 +153,39 @@ export function registerPulseRoutes(ctx: { webServer: { register(route: WebRoute
     },
   }
 
+  // A 系列：告警台账读口（规则 + 运行态 + 台账计数 + 活跃/近期事件）
+  const alerts: WebRoute = {
+    kind: 'exact',
+    path: PULSE_API_PREFIX + '/alerts',
+    handler: (req, res): void => {
+      if (req.method !== 'GET') return json(res, 405, { ok: false, error: 'method-not-allowed' })
+      if (!browserSameOriginMarker(req)) return json(res, 403, { ok: false, error: 'forbidden' })
+      if (deps.alerts === undefined) return json(res, 503, { ok: false, error: 'alerts-unavailable' })
+      const view = deps.alerts()
+      const byRule = new Map(view.states.map((s) => [s.id, s]))
+      const url = new URL(req.url ?? '/', 'http://localhost')
+      const limit = intParam(url.searchParams.get('limit'), 50, 1, 500)
+      const counts = deps.store.alertCounts()
+      json(res, 200, {
+        revision: Date.now(),
+        enabled: view.enabled,
+        counts: { ...counts, rules: view.rules.length, rulesEnabled: view.rules.filter((r) => r.enabled).length },
+        rules: view.rules.map((r) => ({
+          id: r.id, label: r.label, enabled: r.enabled, metric: r.metric, refMetric: r.refMetric,
+          expr: r.refMetric === '' ? r.metric : r.metric + ' / ' + r.refMetric,
+          op: r.op, threshold: r.threshold, clear: r.clear, forMs: r.forMs, cooldownMs: r.cooldownMs,
+          state: byRule.get(r.id) ?? null,
+        })),
+        active: deps.store.openAlerts(),
+        recent: deps.store.recentAlerts(limit),
+      })
+    },
+  }
+
   disposers.push(ctx.webServer.register(state))
   disposers.push(ctx.webServer.register(series))
   disposers.push(ctx.webServer.register(control))
+  disposers.push(ctx.webServer.register(alerts))
   return () => { for (const d of disposers.reverse()) { try { d() } catch { /* 幂等清理 */ } } }
 }
 

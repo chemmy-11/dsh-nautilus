@@ -242,17 +242,17 @@ test('migrateV5: v4 存库升级幂等、turn_read 数字不变、新库直达 v
       raw.close()
     }
     const s1 = openStore(file)
-    assert.equal(s1.schemaVersion(), 6, 'v4 存库经 S1.1(v5)+T 系列(v6) 后到 v6')
+    assert.equal(s1.schemaVersion(), 7, 'v4 存库经 S1.1(v5)+T 系列(v6)+A 系列(v7) 后到 v7')
     assert.deepEqual(s1.turnTotals(), { turns: 3, tokenIn: 0, tokenOut: 0, cacheRead: 0 }, 'turn_read 数字不变')
     assert.equal(s1.countSelfCheckRecords(), 0)
     s1.close()
     const s2 = openStore(file)
-    assert.equal(s2.schemaVersion(), 6, '重开幂等：不重复迁移、不回退')
+    assert.equal(s2.schemaVersion(), 7, '重开幂等：不重复迁移、不回退')
     assert.deepEqual(s2.turnTotals(), { turns: 3, tokenIn: 0, tokenOut: 0, cacheRead: 0 })
     s2.close()
     // 新库直达 v5；pulse 侧 v>4 直接返回（其表由自身构造 exec 幂等创建，不抢版本）
     const fresh = openStore(join(tmp, 'fresh.db'))
-    assert.equal(fresh.schemaVersion(), 6, '新库直达当前最新（v6）')
+    assert.equal(fresh.schemaVersion(), 7, '新库直达当前最新（v7）')
     fresh.close()
   } finally {
     try { rmSync(tmp, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }) } catch { /* Windows 句柄 GC 滞后：容忍 %TEMP% 残留 */ }
@@ -558,6 +558,7 @@ test('host bundle 单入口：pulse 作为子插件挂载并注册自身路由',
       '/api/nautilus/m2/state',
       '/api/nautilus/m2/turn-annotations',
       '/api/nautilus/m2/turn-text',
+      '/api/nautilus/pulse/alerts',
       '/api/nautilus/pulse/control',
       '/api/nautilus/pulse/series',
       '/api/nautilus/pulse/state',
