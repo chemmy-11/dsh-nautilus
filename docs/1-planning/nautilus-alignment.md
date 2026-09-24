@@ -139,6 +139,23 @@ receive     INTEGER CHECK (receive IN (0,1,2))            -- 预留未启用（O
 | 增 | 一个「**对齐**」视图：双路台账（人工/自评）+ 分布 + 一致性 + boundary 计数 + 版本号 |
 | 留 | 未命中率/时长/tps 等曲线**全留**（A 投影只作对照读数）；`analysis`（白盒 τ_e/形态）保留（曲线与报告仍用） |
 
+### 6.1 AL.4 交接给 UI 线（2026-09-28 守谷人「UI 线已指派」）
+
+**动工前置**：UI 线的检出在 `feat/ui`，而 AL.1/AL.2/AL.6a 落在 `feat/nautilus`（origin tip `b2087d6`）。
+**先把 `feat/nautilus` merge 进 `feat/ui`**（CONTRIBUTING 既定方向：主线前进后支线跟随，不 rebase），
+否则 UI 侧看不到 `align` 1–5 的 schema 与 `src/nexus/` 的模块边界。
+
+**UI 线交付清单（按 §6 表）**：
+1. **删**：「假设」「预言」两格（`ViewKey`/`VIEW_LABEL`/分段控件/`body` 分支）+ 后端 `/api/nautilus/m2/annotations` 与 `PROPHECY_SEED` 停用；
+   **连带必改**：`ReportView` 吃 `ann`（`已检验预言数` 统计 + 导出快照）——漏改会在报告页留下悬空引用。
+2. **撤**：`/api/nautilus/lfield` 路由 + 视图两态（pointed/all）→ 收敛为**一态（全局）**；`lfield_config`/`session_root` 两表**留表停用**（红线 3，不删数据）。
+   L 场命名在 `src/client/` 有 22 处、`src/routes.ts` 15 处，逐处清。
+3. **增**：一个「**对齐**」视图——双路台账（人工 / 自评）+ `align` 1–5 分布 + `boundary` 计数 + 一致性（AL.5 的读数口）+ `rubric_version`/`schema_version` 版本面。
+4. **呈现纪律照旧**：`--nt-*` 令牌层（U1/U2 已落）+ 零新依赖 + class 前缀 `nt-`。
+
+**UI 线的验收标准**：假设/预言/L 场在 `src/` 与 `docs/` 里零残留（可脚本守卫）· 对齐视图能同时看到两路分布与边界计数 ·
+`npm test` 全绿 · 端上刷新既有 URL 后可见（E29/E30 同款四元组）。
+
 ## 7. nexus 解耦（方案甲：先解耦留缝，暂不拆包）
 
 1. **目录**：nexus 的能力收进 `src/nexus/`，**自包含**（不 import pulse/alert 的值）；跨腿协作只走服务或同库只读。
@@ -158,6 +175,23 @@ receive     INTEGER CHECK (receive IN (0,1,2))            -- 预留未启用（O
 | **AL.6** | nexus 解耦 | 目录自包含 + 依赖方向门禁进六件套 |
 
 **顺序**：AL.1 →（AL.2 · AL.6 可并行）→ AL.3 → AL.4 → AL.5。
+
+**进度（2026-09-28 更新）**：
+- ✅ **AL.1**：本文档 6 签已核（守谷人「6 签均同意」）。
+- ✅ **AL.2**：迁移账本 + v8 迁移（`b2087d6`，test 61/61）。**遗留**：pulse 的 v4 尚未进账本
+  （它「只在库已到 v3 时推进版本」的守卫是**承重**的，改成账本条目需要「前置条件」机制）→ **OQ-AL5**。
+- ✅ **AL.6（nexus 侧）**：四模块移入 `src/nexus/` + 边界守卫进测试（`d88d81d`/`0dec1e1`）；正式拆包时点 → **OQ-AL4**。
+- 🔄 **AL.4**：**已指派 UI 线**，交接清单与验收标准见 §6.1。
+- ⬜ **AL.3**：自评通道换维度（工具面 = rubric 注入面；`align>=4` 引文硬门）。
+  **实现注记（开工前必读）**：`selfcheck_record` 的 `clarity`/`defense` 是 **NOT NULL**，新行只带 `align` →
+  需要 **v9 迁移重建该表**（把两列转可空；SQLite 不能改 NOT NULL，走「建新表→搬数据→换名」，同 v8 手法）。
+  HTTP ingest 通道保留**双形兼容**（旧 payload 落 clarity/defense、新 payload 落 align），避免老 harness 硬断。
+- ⬜ **AL.5**：一致性闭环（三指标 + 确定性留出集 + Correction 记录）。
+
+**工作区纪律（新增，2026-09-28 踩坑记）**：`feat/ui` 与 `feat/nautilus` 是**两条并行线**，
+但本轮出现过「共享检出被切到 `feat/ui`、主线文件在工作区消失」的情形。**两条线各用一个 git worktree**：
+`L:\dsh-nautilus`（feat/ui，UI 线用）· `L:\dsh-nautilus-al`（feat/nautilus，主线用）。
+同目录并写会互相覆盖——这不是风格问题，是丢代码的问题。
 
 ## 9. 诚实边界（随读数引用）
 
