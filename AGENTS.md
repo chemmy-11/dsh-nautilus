@@ -10,7 +10,7 @@
 
 ## 0. 项目是什么
 
-- **观测插件**（`@dsh-external/dsh-nautilus`，bundle 形态）：逐轮会话遥测（token/缓存/耗时/tps + 自评）+ L 场读数（按会话工作区归属）+ OS/GPU 采集（pulse 子插件）+ 工作台面板。**vault 观测腿已于 2026-09-27 下线**（不再读 vault；vault 侧操作走会话侧 /obsidian 技能）。扩展方向见 `docs/1-planning/`（三层指标 pulse / infer / nexus + era 因果上下文 + Agentic Ops 工作台）。
+- **观测插件**（`@dsh-external/dsh-nautilus`，bundle 形态）：逐轮会话遥测（token/缓存/耗时/tps + 自评）+ L 场读数（按会话工作区归属）+ OS/GPU 采集（pulse 子插件）+ 工作台面板 + **OS 层红线告警（A 系列：越线检测 / 证据冻结 / 三段式 LLM 报告 / 台账 / 人工裁决）**。**vault 观测腿已于 2026-09-27 下线**（不再读 vault；vault 侧操作走会话侧 /obsidian 技能）。A 系列规格见 [docs/2-dev/nautilus-dev-06-os-alerting.md](./docs/2-dev/nautilus-dev-06-os-alerting.md) 与 [docs/1-planning/nautilus-os-alerting.md](./docs/1-planning/nautilus-os-alerting.md)；扩展方向见 `docs/1-planning/`（三层指标 pulse / infer / nexus + era 因果上下文 + Agentic Ops 工作台）。
 - 定位红线：**观测，不干预**。不改宿主源码、不改宿主行为、不写用户数据；归因结论人工主导，AI 只辅助检索与编码。
 
 ## 1. 五条不可违（违反即回滚，不看进度）

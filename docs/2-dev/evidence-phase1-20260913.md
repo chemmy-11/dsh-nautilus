@@ -726,9 +726,44 @@ npm registry 确有该版本（`npm view` 列出 `…0.1.7-alpha.2, 0.1.7-rc.1`�
 
 ---
 
-## E30 A 系列端上四元组（装配 + 真实越线）
+## E30 A 系列端上四元组（装配 + 强制越线全链路，2026-09-28）
 
-（装配阶段回填：dsh 版本 · profile 名 · 装配方式 · `user_version` · 三路由 200 · 一次真实越线 → 台账/快照/报告三面一致。）
+**环境四元组**：dsh **0.1.7-rc.1** · profile **web** · 装配方式 **bundle（`link:` 本地检出）**：
+`dsh plugin --profile web add link:L:/dsh-nautilus` → `+ @dsh-external/dsh-nautilus link:L:/dsh-nautilus`，
+`dsh --profile web --dump-config` 中本包**恰好一个 Loader 条目**（`- id: nautilus`），
+profile `package.json` 的 `dsh.profile.bundles` = `[dsh-base, dsh-web-app, dsh-nautilus]`。
+
+**探测实例**（不动活宿主）：`dsh web --patch <临时 overlay> --port 3099 --no-open`——
+同 profile、不同端口、独立进程；overlay 按 id 命中已有条目、**config 整体替换**（非深合并），
+把 `mem-occupancy` 阈值置 0 / `forMs` 0（**强制越线**）并留一条永不越线的 GPU 对照规则；
+overlay 只作用于该进程，**没有写进任何 profile**。
+
+| 观测项 | 实测 |
+|---|---|
+| 启动图 | `[nautilus] Pulse OS/GPU 层已挂载（子插件）` · `[pulse] 告警就绪：规则 2/2 启用` · `[pulse] 采集启动：mode=auto interval=1000ms … db=C:\Users\15266\.dsh\nautilus\nautilus.db` |
+| `PRAGMA user_version` | **7**（新库直达 v7）· 表：`alert_event` + `turn_read`/`turn_text`/`step_seen`/`annotation`/`session_root`/`lfield_config`/`turn_annotation`/`annotation_sample`/`selfcheck_record`/`metric_sample` 共 12 张 |
+| `GET /api/nautilus/pulse/state` | **200** |
+| `GET /api/nautilus/pulse/alerts` | **200**：`counts{open:1,total:1,last24h:1,rules:2,rulesEnabled:2}` · 规则运行态（mem `exceeding:true open:true peak 0.8478`；GPU 对照 `skippedTicks:17`）· `evidence{dirs:1,bytes:3201}` · `reportsDir` · active/recent 行齐全 |
+| 三步日志（实际输出） | `告警确认 a-mufiwv0b-mem-occupancy … 台账 inserted` → `证据冻结 …：13 行 / 9 指标 / 覆盖 100.0% / 空洞 0 / sha256 7e7b8da5bb46` → `告警报告 … → skipped（门禁默认关）` |
+| `alert_event` 行 | `rule_id=mem-occupancy` · `metric=pulse.mem.used / pulse.mem.total` · `op=gte` · `threshold=0` · `confirmed_at=1790253839099` · `peak_value=0.8433` · `snapshot_path=…\a-mufiwv0b-mem-occupancy\samples.jsonl.gz` · `snapshot_hash=7e7b8da5bb46fa51…` · `report_status=skipped` |
+| 磁盘产物（真实尺寸） | `samples.jsonl.gz` 346 B · `meta.json` 733 B · `digest.json` 2122 B · `reports/<id>.md` 2232 B · `ledger.md` 3069 B（含 确认/冻结/报告 三行 + 报告全文内联） |
+| `POST /alerts/verdict` | **200** `{ok:true, verdict:'false-positive', note:'验收：阈值 0 强制触发，属预期误报'}`；回读 `GET /alerts` → `humanVerdict/note` 原样落库 |
+| `GET /alerts/report?id=` | **200**：`path` 指向 reports/<id>.md，正文 1543 字符，含 `## 一、事实（程序生成，不经模型）` 与 `门禁默认关` 缺席说明（三段结构完整） |
+| 门禁 | 六件套全绿（`test` 55/55） |
+
+**附带实证（决策 §5-4「缺样本 ≠ 恢复」在端上）**：探测实例 `enableGpu=false` → `pulse.gpu.util` 从不进入样本，
+GPU 对照规则的 `skippedTicks` 一路涨到 17 而 `firstExceededAt` 始终为 null——**缺席没有被当成恢复**。
+
+**诚实边界（引用本条必须一并引用）**：
+1. **越线是强制触发**（阈值 0 / 窗 0），不是自然越线。D-A8 默认值下自然越线约 1 次/天量级，
+   本批次**未**等到自然越线；「自然越线上三步日志与台账一致」仍待观察窗口。
+2. **活宿主（127.0.0.1:3080，本会话所在进程）没有重启**——`link:` 依赖是**新增**的，
+   组合树在启动时定型，故 client 半区与 host 半区都还没进活宿主；本次验收走 3099 探测实例。
+   要让活宿主生效需重启 `dsh`（重启会中断当前会话，交由用户择时）。
+   （注：E14 的「`link:` 无需重启」说的是**已挂载**包的产物回流，不是新增包。）
+3. **真模型报告未验**：探测实例门禁默认关 → `report_status=skipped`；假设段此前由**假 seam** 离线端到端覆盖（E27）。
+4. 命令行发中文备注的坑：PowerShell `Invoke-WebRequest -Body` 会把中文按控制台编码发出、入库成乱码；
+   已改用 node `fetch`（UTF-8）重发并回读确认。属工具链坑，**不是插件缺陷**，记档以免下次误判。
 
 ---
 
