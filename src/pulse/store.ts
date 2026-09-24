@@ -269,6 +269,16 @@ export class PulseStore {
       .run(status, model, promptVersion, id)
   }
 
+  /**
+   * 人工裁决（A.4）：**不设审批门**，只做事后标注——告警噪声地板靠它量化（决策 §7 边界 3）。
+   * @returns 该台账行是否存在（false = 未知 id，路由据此 404）。
+   */
+  setAlertVerdict(id: string, verdict: 'true-positive' | 'false-positive' | 'unknown', note: string | null, ts: number): boolean {
+    const r = this.db.prepare('UPDATE alert_event SET human_verdict = ?, note = ? WHERE id = ?').run(verdict, note, id)
+    void ts
+    return Number(r.changes) > 0
+  }
+
   /** 最近台账（默认 50 行；UI 与证据归档用）。 */
   recentAlerts(limit = 50): AlertEventRow[] {
     return this.rowsToAlerts(this.db.prepare('SELECT * FROM alert_event ORDER BY confirmed_at DESC LIMIT ?').all(limit))

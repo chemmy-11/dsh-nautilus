@@ -9,6 +9,7 @@ import assert from 'node:assert/strict'
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, mkdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { DatabaseSync } from 'node:sqlite'
 import { gunzipSync } from 'node:zlib'
 
@@ -300,6 +301,55 @@ test('pulse/alerts 路由：403 同源门 + 规则/运行态/台账结构 + 真�
     assert.equal(ev.reportStatus, 'skipped', '台账报告态 = skipped')
     assert.ok(ledgerText.includes('报告'), '台账人读日志含报告行')
     assert.ok(snap.evidence !== null && snap.evidence.dirs >= 1, '证据目录现状随快照一起可见')
+
+    // A.4：人工裁决（不设审批门）+ 报告查看入口
+    const vh = handlers.get('/api/nautilus/pulse/alerts/verdict')
+    const rh = handlers.get('/api/nautilus/pulse/alerts/report')
+    assert.equal(typeof vh, 'function', 'verdict 路由必须注册')
+    assert.equal(typeof rh, 'function', 'report 路由必须注册')
+    const { Readable } = await import('node:stream')
+    const postReq = (body, sameOrigin = true) => {
+      const rq = new Readable({ read() {} })
+      rq.method = 'POST'
+      rq.url = '/api/nautilus/pulse/alerts/verdict'
+      rq.headers = sameOrigin ? { 'sec-fetch-site': 'same-origin' } : {}
+      rq.push(Buffer.from(JSON.stringify(body), 'utf8'))
+      rq.push(null)
+      return rq
+    }
+    const callV = async (rq) => {
+      const out = res()
+      vh(rq, out)
+      const dl2 = Date.now() + 3000
+      while (Date.now() < dl2 && out.statusCode === 0) await new Promise((x) => setTimeout(x, 10))
+      return out
+    }
+    const callG = async (url, sameOrigin = true) => {
+      const out = res()
+      rh({ method: 'GET', headers: sameOrigin ? { 'sec-fetch-site': 'same-origin' } : {}, url }, out)
+      const dl2 = Date.now() + 3000
+      while (Date.now() < dl2 && out.statusCode === 0) await new Promise((x) => setTimeout(x, 10))
+      return out
+    }
+    assert.equal((await callV(postReq({ id: ev.id, verdict: 'true-positive' }, false))).statusCode, 403, '非同源必须 403')
+    assert.equal((await callV(postReq({ verdict: 'true-positive' }))).payload.error, 'id-required')
+    assert.equal((await callV(postReq({ id: ev.id, verdict: 'maybe' }))).payload.error, 'invalid-verdict', '枚举外的裁决值拒收')
+    assert.equal((await callV(postReq({ id: 'a-nope-x', verdict: 'unknown' }))).statusCode, 404, '未知 id 404')
+    const okV = await callV(postReq({ id: ev.id, verdict: 'false-positive', note: '  一次误报  ' }))
+    assert.equal(okV.statusCode, 200)
+    assert.equal(okV.payload.verdict, 'false-positive')
+    assert.equal(okV.payload.note, '一次误报', '备注 trim 后存')
+    const s2 = openPulseStore(join(tmp, 'n.db'))
+    assert.equal(s2.alertById(ev.id).humanVerdict, 'false-positive', '裁决落台账')
+    assert.equal(s2.alertById(ev.id).note, '一次误报')
+    s2.close()
+    const rp = await callG('/api/nautilus/pulse/alerts/report?id=' + encodeURIComponent(ev.id))
+    assert.equal(rp.statusCode, 200)
+    assert.ok(rp.payload.markdown.includes('## 一、事实'), '报告查看入口返回全文')
+    assert.ok(String(rp.payload.path).endsWith(ev.id + '.md'))
+    assert.equal((await callG('/api/nautilus/pulse/alerts/report?id=a-nope-x')).statusCode, 404, '未成文如实 404')
+    assert.equal((await callG('/api/nautilus/pulse/alerts/report', false)).statusCode, 403)
+    assert.ok(readFileSync(join(tmp, 'alerts', 'ledger.md'), 'utf8').includes('裁决'), '裁决进人读台账')
     } finally { await dispose() }
   } finally {
     if (prevHome === undefined) delete process.env.DSH_HOME
@@ -548,4 +598,79 @@ test('告警报告端到端：门禁开 + 假 llm seam → done（模型段+台�
     else process.env.DSH_HOME = prevHome
     try { rmSync(tmp, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }) } catch { /* 容忍残留 */ }
   }
+})
+
+// ── A.4 客户端半区：徽标纯函数 + 告警视图 SSR（真实 react 渲染）────────────────
+
+const REPO_DIR = fileURLToPath(new URL('..', import.meta.url))
+
+test('告警视图 SSR + 徽标纯函数：台账/裁决/报告状态/规则表齐全，缺席态不编数', async () => {
+  const esbuild = await import('esbuild')
+  const rds = await import('react-dom/server')
+  const react = await import('react')
+  const renderToStaticMarkup = rds.renderToStaticMarkup ?? rds.default?.renderToStaticMarkup
+  // 临时产物建在仓库内（bundle external react 靠目录树向上解析到本仓库 node_modules；UI 线先例同款）
+  const dir = mkdtempSync(join(REPO_DIR, '.alerts-smoke-'))
+  const out = join(dir, 'alerts.mjs')
+  try {
+    esbuild.buildSync({
+      entryPoints: [join(REPO_DIR, 'src', 'client', 'alerts.ts')],
+      bundle: true, format: 'esm', platform: 'node', outfile: out, logLevel: 'silent',
+      external: ['react', 'react/jsx-runtime', 'react-dom', 'react-dom/server'],
+    })
+    const al = await import(pathToFileURL(out).href)
+    const row = (over = {}) => ({
+      id: 'a-mf3k-mem-occupancy', ruleId: 'mem-occupancy', metric: 'pulse.mem.used / pulse.mem.total',
+      op: 'gte', threshold: 0.93, firstExceededAt: 1000, confirmedAt: 121000, clearedAt: null,
+      peakValue: 0.9621, durationMs: null, snapshotPath: 'C:/x/samples.jsonl.gz', snapshotHash: 'a'.repeat(64),
+      reportStatus: 'done', reportModel: 'fake/mod-1', promptVersion: 'a-report-v1', humanVerdict: null,
+      note: null, createdAt: 121000, ...over,
+    })
+    const state = {
+      revision: 1, enabled: true,
+      counts: { open: 1, total: 3, last24h: 2, rules: 5, rulesEnabled: 4 },
+      rules: [{
+        id: 'mem-occupancy', label: '内存占比', enabled: true, metric: 'pulse.mem.used', refMetric: 'pulse.mem.total',
+        expr: 'pulse.mem.used / pulse.mem.total', op: 'gte', threshold: 0.93, clear: 0.88, forMs: 120000, cooldownMs: 0,
+        state: { exceeding: true, open: true, firstExceededAt: 1000, confirmedAt: 121000, alertId: 'a-mf3k-mem-occupancy', peak: 0.9621, lastValue: 0.951, lastTs: 200000, skippedTicks: 0 },
+      }, {
+        id: 'dsh-rss', label: '宿主 RSS', enabled: false, metric: 'pulse.proc.dsh.rss', refMetric: '',
+        expr: 'pulse.proc.dsh.rss', op: 'gte', threshold: 4e9, clear: 3.5e9, forMs: 120000, cooldownMs: 0, state: null,
+      }],
+      active: [row()],
+      recent: [row()],
+      evidence: { dirs: 1, bytes: 78083, oldestTs: 121000, newestTs: 121000 },
+      reportsDir: 'C:/x/reports',
+    }
+    const badge = al.alertBadgeOf(state)
+    assert.deepEqual(badge, { active: 1, unjudged: 1, enabled: true })
+    assert.deepEqual(al.alertBadgeOf(null), { active: 0, unjudged: 0, enabled: false }, '缺席不编数')
+    assert.deepEqual(al.alertBadgeOf({ ...state, recent: [row({ humanVerdict: 'false-positive' })] }).unjudged, 0, '已裁决不计入未裁决')
+    assert.equal(al.ruleText(state.rules[0]).includes('窗 120s'), true)
+    assert.equal(al.ruleText(state.rules[0]).includes('解除 0.88'), true)
+    const h = (n) => renderToStaticMarkup(n)
+    const html = h(react.createElement(al.AlertsView, { state, toast: () => {}, reload: () => {} }))
+    for (const s of ['活跃 1', '近 24h 2', 'mem-occupancy', '未解除', '真阳性', '假阳性', '未知',
+      '查看报告', '规则表', '告警台账', '未裁决', '报告已成文', 'a-report-v1', '4/5 启用', '证据 1 份']) {
+      assert.ok(html.includes(s), '告警视图 SSR 缺内容: ' + s)
+    }
+    assert.ok(html.includes('已停用'), '停用规则要显式标注')
+    assert.ok(!html.includes('undefined'), 'SSR 不得出现 undefined')
+    assert.ok(h(react.createElement(al.AlertsView, { state: null, toast: () => {}, reload: () => {} })).includes('告警能力缺席'))
+  } finally {
+    try { rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }) } catch { /* 容忍残留 */ }
+  }
+})
+
+test('告警视图接线：ViewKey/侧栏标签/取数口与图标徽标（源码级守卫）', () => {
+  const wb = readFileSync(join(REPO_DIR, 'src', 'client', 'workbench.ts'), 'utf8')
+  assert.ok(wb.includes("alerts: '告警'"), '视图标签必须登记')
+  assert.ok(wb.includes("'overview', 'alerts', 'curve'"), '分段控件必须含告警')
+  assert.ok(wb.includes("useJson<AlertsState>('/api/nautilus/pulse/alerts?limit=50'"), '工作台取数口')
+  assert.ok(wb.includes('useAlertBadge()'), '图标徽标接线（活跃即闪红）')
+  assert.ok(wb.includes('nt-icon-alert'), '图标闪红类')
+  const ax = readFileSync(join(REPO_DIR, 'src', 'client', 'alerts.ts'), 'utf8')
+  assert.ok(ax.includes("conversation") === false, '告警半区不该碰会话槽位')
+  assert.ok(ax.includes('/api/nautilus/pulse/alerts/verdict'), '裁决走同源 POST')
+  assert.ok(ax.includes('sec-fetch-site'), '同源标记必须带')
 })

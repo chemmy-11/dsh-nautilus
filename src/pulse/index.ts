@@ -345,7 +345,25 @@ export function apply(ctx: Context, config: Config): void {
       rules: engine === null ? config.alertRules.map((r) => ({ ...r })) : engine.rulesView(),
       states: engine === null ? [] : engine.statesView(),
       evidence: engine === null ? undefined : snapshotStats(alertsRoot),
+      reportsDir,
     }),
+    // A.4：人工裁决（不设审批门——只做事后标注，供噪声地板量化）
+    verdict: (id, verdictValue, note) => {
+      const hit = store.setAlertVerdict(id, verdictValue, note, Date.now())
+      if (hit) {
+        const label = verdictValue === 'true-positive' ? '真阳性' : verdictValue === 'false-positive' ? '假阳性' : '未知'
+        console.info('[pulse] 告警裁决 ' + id + ' → ' + verdictValue + (note === null ? '' : '（' + note + '）'))
+        ledger('**裁决** `' + id + '` · ' + label + (note === null ? '' : ' · ' + note))
+      }
+      return hit
+    },
+    // A.4：报告查看入口（报告落盘，UI 只读；未成文返回 null → 路由 404）
+    readReport: (id) => {
+      const target = join(reportsDir, id + '.md')
+      try {
+        return existsSync(target) ? { path: target, markdown: readFileSync(target, 'utf8') } : null
+      } catch { return null }
+    },
   })
 
   ctx.effect(() => () => {

@@ -6,6 +6,8 @@
  *   GET  /api/nautilus/pulse/series?metric=&windowMs=&maxPoints=   单指标时间序列（桶均值）
  *   POST /api/nautilus/pulse/control                      心跳档位：{ intervalMs } 定时档 | { mode:'manual' } 手动档 | { sample:true } 立即采一次
  *   GET  /api/nautilus/pulse/alerts                       OS 层红线告警：规则 + 运行态 + 台账（A 系列 A.1）
+ *   POST /api/nautilus/pulse/alerts/verdict               人工裁决 { id, verdict, note? }（A.4；不设审批门）
+ *   GET  /api/nautilus/pulse/alerts/report?id=            报告全文（A.4 查看入口；未成文 404）
  *
  * 与 nautilus 路由同一守卫口径（同源标记）。**control 只改采集节律，不写业务读数**——
  * 它决定「多久采一次」，采样本身仍走同一条 tick 路径（同库同表）。
@@ -40,7 +42,13 @@ export interface PulseAlertsView {
   states: AlertRuntimeState[]
   /** 证据目录现状（A.2 快照；只读诊断，缺席则前端不显示）。 */
   evidence?: { dirs: number; bytes: number; oldestTs: number | null; newestTs: number | null }
+  /** 报告目录（A.4 报告查看入口显示路径用）。 */
+  reportsDir?: string
 }
+
+/** 人工裁决取值（决策 D-A4：不做 ack，只做事后标注）。 */
+export const ALERT_VERDICTS = ['true-positive', 'false-positive', 'unknown'] as const
+export type AlertVerdict = (typeof ALERT_VERDICTS)[number]
 
 export interface PulseRouteDeps {
   store: PulseStore
@@ -48,6 +56,10 @@ export interface PulseRouteDeps {
   control: PulseControl
   /** 告警视图（A.1）。子插件独立挂载时也可缺席 → 路由回 503（能力不在，不编造空表）。 */
   alerts?: () => PulseAlertsView
+  /** A.4：人工裁决写入（不设门）。@returns false = 未知 id（404）。 */
+  verdict?: (id: string, verdict: AlertVerdict, note: string | null) => boolean
+  /** A.4：读报告全文（报告落盘，UI 只做查看；@returns null = 尚未成文）。 */
+  readReport?: (id: string) => { path: string; markdown: string } | null
 }
 
 function json(res: ServerResponse, status: number, body: unknown): void {
@@ -179,9 +191,56 @@ export function registerPulseRoutes(ctx: { webServer: { register(route: WebRoute
           state: byRule.get(r.id) ?? null,
         })),
         evidence: view.evidence ?? null,
+        reportsDir: view.reportsDir ?? null,
         active: deps.store.openAlerts(),
         recent: deps.store.recentAlerts(limit),
       })
+    },
+  }
+
+  // A.4：人工裁决（不设审批门——只做事后标注，供噪声地板量化）
+  const verdict: WebRoute = {
+    kind: 'exact',
+    path: PULSE_API_PREFIX + '/alerts/verdict',
+    handler: (req, res): void => {
+      void (async (): Promise<void> => {
+        if (req.method !== 'POST') return json(res, 405, { ok: false, error: 'method-not-allowed' })
+        if (!browserSameOriginMarker(req)) return json(res, 403, { ok: false, error: 'forbidden' })
+        if (deps.verdict === undefined) return json(res, 503, { ok: false, error: 'verdict-unavailable' })
+        const body = (await readJsonBody(req)) as { id?: unknown; verdict?: unknown; note?: unknown } | null
+        if (body === null) return json(res, 400, { ok: false, error: 'invalid-json' })
+        const id = typeof body.id === 'string' ? body.id : ''
+        if (id === '') return json(res, 400, { ok: false, error: 'id-required' })
+        const v = body.verdict
+        if (typeof v !== 'string' || !(ALERT_VERDICTS as readonly string[]).includes(v)) {
+          return json(res, 400, { ok: false, error: 'invalid-verdict' })
+        }
+        const rawNote = body.note
+        if (rawNote !== undefined && rawNote !== null && typeof rawNote !== 'string') return json(res, 400, { ok: false, error: 'invalid-note' })
+        const note = typeof rawNote === 'string' && rawNote.trim() !== '' ? rawNote.trim().slice(0, 500) : null
+        const hit = deps.verdict(id, v as AlertVerdict, note)
+        if (!hit) return json(res, 404, { ok: false, error: 'unknown-alert' })
+        json(res, 200, { ok: true, id, verdict: v, note, counts: deps.store.alertCounts() })
+      })().catch((err: unknown) => {
+        json(res, 500, { ok: false, error: err instanceof Error ? err.message : String(err) })
+      })
+    },
+  }
+
+  // A.4：报告查看入口（报告在磁盘，UI 只查看；未成文如实回 404）
+  const report: WebRoute = {
+    kind: 'exact',
+    path: PULSE_API_PREFIX + '/alerts/report',
+    handler: (req, res): void => {
+      if (req.method !== 'GET') return json(res, 405, { ok: false, error: 'method-not-allowed' })
+      if (!browserSameOriginMarker(req)) return json(res, 403, { ok: false, error: 'forbidden' })
+      if (deps.readReport === undefined) return json(res, 503, { ok: false, error: 'report-unavailable' })
+      const url = new URL(req.url ?? '/', 'http://localhost')
+      const id = url.searchParams.get('id') ?? ''
+      if (id === '') return json(res, 400, { ok: false, error: 'id-required' })
+      const got = deps.readReport(id)
+      if (got === null) return json(res, 404, { ok: false, error: 'no-report' })
+      json(res, 200, { ok: true, id, path: got.path, markdown: got.markdown })
     },
   }
 
@@ -189,6 +248,8 @@ export function registerPulseRoutes(ctx: { webServer: { register(route: WebRoute
   disposers.push(ctx.webServer.register(series))
   disposers.push(ctx.webServer.register(control))
   disposers.push(ctx.webServer.register(alerts))
+  disposers.push(ctx.webServer.register(verdict))
+  disposers.push(ctx.webServer.register(report))
   return () => { for (const d of disposers.reverse()) { try { d() } catch { /* 幂等清理 */ } } }
 }
 

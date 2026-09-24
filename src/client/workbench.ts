@@ -15,6 +15,8 @@ import { Component, createElement, useEffect, useRef, useState, type ReactNode }
 import { PulseHeartbeat } from './pulse-controls'
 // 图表原语（Grafana/Netdata/Datadog 语法借鉴，零依赖自绘；全部无 hooks，可直调）
 import { BarGauge, MiniChart, Sparkline, StackedBars, StateBand, TopList } from './charts'
+// A 系列：OS 层红线告警视图 + 图标徽标（活跃即闪红）；独立文件，避免与本文件的长历史并写冲突
+import { AlertsView, ensureAlertStyle, useAlertBadge, type AlertsState } from './alerts'
 
 export const WORKBENCH_ID = 'nautilus-workbench'
 
@@ -1590,8 +1592,8 @@ export function Drawer(props: { target: DrawerTarget; point: M2Point | null; onC
 
 // ── 根组件 ────────────────────────────────────────────────────────────────────
 
-export type ViewKey = 'overview' | 'curve' | 'hypotheses' | 'prophecy' | 'report'
-export const VIEW_LABEL: Record<ViewKey, string> = { overview: '总览', curve: '曲线', hypotheses: '假设', prophecy: '预言', report: '报告' }
+export type ViewKey = 'overview' | 'alerts' | 'curve' | 'hypotheses' | 'prophecy' | 'report'
+export const VIEW_LABEL: Record<ViewKey, string> = { overview: '总览', alerts: '告警', curve: '曲线', hypotheses: '假设', prophecy: '预言', report: '报告' }
 export const WORKBENCH_LABEL = 'Nautilus 工作台'
 
 /** 工作台根组件。onExitToConversation 由宿主半区注入（ctx.layout.selectPanel(null)），用于回到会话。 */
@@ -1611,6 +1613,8 @@ export function Workbench(props: { onExitToConversation?: () => void; sessionNam
   // 实时读数：OS 层每 1s 重取最新值（/pulse/state 只查 15 行 latest，代价可忽略）；
   // 手动档下值不会变，但重取同样廉价，故不额外分支。
   const pulse = useJson<PulseState>('/api/nautilus/pulse/state', paused, 1000, nonce)
+  // A 系列：告警台账（5s 一取——确认/解除是分钟级事件，不必跟 1s 心跳）
+  const alerts = useJson<AlertsState>('/api/nautilus/pulse/alerts?limit=50', paused, 5000, nonce)
   const ann = useJson<AnnotationsState>('/api/nautilus/m2/annotations', paused, 120000, nonce)
   // L 场接入（M4-L / M3-F.3）：每根会话计数 + 白盒分析（vault 观测腿 2026-09-27 下线，不再有 vault 取数）
   const lfield = useJson<LfieldInfo>('/api/nautilus/lfield', paused, 120000, nonce)
@@ -1643,6 +1647,7 @@ export function Workbench(props: { onExitToConversation?: () => void; sessionNam
   const body = view === 'overview' ? createElement(OverviewView, { m2, pulse, lfield, viewMode, onViewMode: setViewMode, newRoot, onNewRoot: setNewRoot, switching, onSwitchLfield: switchLfield, onOpenTurn: (s: string, t: number) => setDrawer({ session: s, turn: t }), paused, sessionNameOf: props.sessionNameOf, nonce })
     : view === 'curve' ? createElement(CurveView, { m2, era, pulse, paused, analysis, sessionNameOf: props.sessionNameOf, onOpenTurn: (s: string, t: number) => setDrawer({ session: s, turn: t }), nonce })
     : view === 'hypotheses' ? createElement(HypothesesView, { m2, ann, analysis, onProphecy: (id: string) => { setView('prophecy'); setToast('已跳到预言标注：' + id) } })
+    : view === 'alerts' ? createElement(AlertsView, { state: alerts, toast: setToast, reload: () => setNonce((v) => v + 1) })
     : view === 'prophecy' ? createElement(ProphecyView, { ann, m2, toast: setToast, reload: () => setNonce((v) => v + 1) })
     : createElement(ReportView, { m2, pulse, era, ann, analysis })
   return createElement('div', { className: 'nt-wb' },
@@ -1651,9 +1656,14 @@ export function Workbench(props: { onExitToConversation?: () => void; sessionNam
         ? createElement('button', { className: 'nt-btn', style: { marginRight: 2 }, onClick: () => { if (props.onExitToConversation !== undefined) props.onExitToConversation() } }, '← 返回会话')
         : null,
       createElement('div', { className: 'nt-wb-brand' }, 'NAUTILUS', createElement('small', null, 'Observation Workbench')),
-      createElement('div', { className: 'nt-wb-seg' }, ...(['overview', 'curve', 'hypotheses', 'prophecy', 'report'] as ViewKey[]).map((k) => createElement('button', { key: k, className: k === view ? 'on' : '', onClick: () => setView(k) }, VIEW_LABEL[k]))),
+      createElement('div', { className: 'nt-wb-seg' }, ...(['overview', 'alerts', 'curve', 'hypotheses', 'prophecy', 'report'] as ViewKey[]).map((k) => createElement('button', { key: k, className: k === view ? 'on' : '', onClick: () => setView(k) }, VIEW_LABEL[k]))),
       createElement('div', { className: 'nt-wb-right' },
         createElement('span', null, 'NEXUS ' + ok(m2) + ' · PULSE ' + ok(pulse)),
+        createElement('button', {
+          className: 'nt-btn' + ((alerts?.counts.open ?? 0) > 0 ? ' on' : ''),
+          title: 'OS 层红线告警',
+          onClick: () => setView('alerts'),
+        }, '告警 ' + String(alerts?.counts.open ?? 0) + ((alerts?.counts.last24h ?? 0) > 0 ? ' · 24h ' + String(alerts?.counts.last24h ?? 0) : '')),
         createElement('span', null, '刷新 ' + (pulse === null ? '—' : fmtTime(pulse.collector.lastTickTs))),
         createElement(PulseHeartbeat, {
           mode: pulse === null ? 'auto' : pulse.collector.mode,
@@ -1684,10 +1694,22 @@ export function WorkbenchIcon(props: { size?: number; active?: boolean }): React
   const s = props.size ?? 18
   const on = props.active === true
   const stroke = on ? 'var(--nt-accent,#e6321e)' : 'currentColor'
-  return createElement('svg', { width: s, height: s, viewBox: '0 0 24 24', fill: 'none', role: 'img', 'aria-label': WORKBENCH_LABEL },
+  // A 系列（D-A4 裁决后）：**活跃即闪红**（不做 ack）+ 未裁决数徽标；5s 轮询一次轻量台账读口
+  ensureAlertStyle()
+  const badge = useAlertBadge()
+  const alerting = badge.active > 0
+  const badgeNode = alerting || badge.unjudged > 0
+    ? createElement('g', { className: alerting ? 'nt-icon-alert' : undefined },
+      createElement('circle', { cx: 20, cy: 4.6, r: 3.1, fill: 'var(--nt-accent,#e6321e)', fillOpacity: alerting ? 1 : 0.5 }),
+      badge.unjudged > 0
+        ? createElement('text', { x: 20, y: 6.7, textAnchor: 'middle', fontSize: 5.6, fill: 'var(--nt-panel,#fff)' }, String(Math.min(9, badge.unjudged)))
+        : null)
+    : null
+  return createElement('svg', { width: s, height: s, viewBox: '0 0 24 24', fill: 'none', role: 'img', 'aria-label': WORKBENCH_LABEL + (alerting ? '（有活跃告警）' : '') },
     createElement('circle', { cx: 12, cy: 12, r: 8.5, stroke, strokeWidth: 1.4, fill: on ? 'var(--nt-accent,#e6321e)' : 'none', fillOpacity: on ? 0.12 : 0 }),
     createElement('path', { d: 'M3.5 12h17M12 3.5c3 2.6 3 14.4 0 17M12 3.5c-3 2.6-3 14.4 0 17', stroke, strokeWidth: 1.1 }),
     createElement('path', { d: 'M12 12l6.5-4.2', stroke, strokeWidth: 1.4 }),
     createElement('circle', { cx: 18.5, cy: 7.8, r: 1.7, fill: 'var(--nt-accent,#e6321e)' }),
+    badgeNode,
   )
 }
