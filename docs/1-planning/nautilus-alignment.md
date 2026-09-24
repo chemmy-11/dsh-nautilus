@@ -182,11 +182,16 @@ receive     INTEGER CHECK (receive IN (0,1,2))            -- 预留未启用（O
   （它「只在库已到 v3 时推进版本」的守卫是**承重**的，改成账本条目需要「前置条件」机制）→ **OQ-AL5**。
 - ✅ **AL.6（nexus 侧）**：四模块移入 `src/nexus/` + 边界守卫进测试（`d88d81d`/`0dec1e1`）；正式拆包时点 → **OQ-AL4**。
 - 🔄 **AL.4**：**已指派 UI 线**，交接清单与验收标准见 §6.1。
-- ⬜ **AL.3**：自评通道换维度（工具面 = rubric 注入面；`align>=4` 引文硬门）。
-  **实现注记（开工前必读）**：`selfcheck_record` 的 `clarity`/`defense` 是 **NOT NULL**，新行只带 `align` →
-  需要 **v9 迁移重建该表**（把两列转可空；SQLite 不能改 NOT NULL，走「建新表→搬数据→换名」，同 v8 手法）。
-  HTTP ingest 通道保留**双形兼容**（旧 payload 落 clarity/defense、新 payload 落 align），避免老 harness 硬断。
-- ⬜ **AL.5**：一致性闭环（三指标 + 确定性留出集 + Correction 记录）。
+- ✅ **AL.3**：自评通道换 al-v1 量表（`de90e2f` v9 迁移 + `edc3623` 工具面/ingest，test 66/66）。
+  **已确认口径**：① `rubric_version` 只盖新形行（旧三行代际留 NULL，§9.3 不混算）；② `schema_version` 按代际缺省（新 2 / 旧 1）；
+  ③ 旧 `turn_read` 三列**停写**；④ HTTP 新形 `declaration` 仍必填（不猜默认）；⑤ `align` 4/5 无引文即拒且零写入（签-2）；
+  ⑥ **N/A 的落法**：工具通道 `align` 必填——纯操作性轮**不调用本工具**（= 等价豁免、不进分母），工具描述尾注已写明。
+  **跨线遗留（给 AL.4）**：面板「自评覆盖率」现读 `turn_read.clarity`，新轮次不再增长 → **数据源须切到 `selfcheck_record`**。
+- ✅ **AL.5**：一致性闭环机制就位——`scripts/alignment-consistency.mjs`（只读；完全一致率 / 相邻档一致率 / 二次加权 κ；
+  确定性留出集 `hash(session:turn) % N`；样本 <50 只报数不给结论；配对键不符时**大声提示**而非静默给 0）+ `docs/2-dev/alignment-correction.md`（Correction 记录，只添不改）。
+  **待真实样本**（≥50 对）才能出第一个数字与第一轮「rubric v2 候选 → 留出集回归 → 采纳/回滚」。
+- ⬜ **待改项（我认领）**：`src/index.ts` 的 Config 字段 `lField`（7 处）→ 改名（倾向 `readings`）属**破坏性配置变更**，
+  须同步 Config schema / README 双语 / 部署侧 cordis.yml；另 `docs/2-dev/nautilus-dev-04-selfcheck-ingest.md` §3.2 的旧形口径待更新。
 
 **工作区纪律（新增，2026-09-28 踩坑记）**：`feat/ui` 与 `feat/nautilus` 是**两条并行线**，
 但本轮出现过「共享检出被切到 `feat/ui`、主线文件在工作区消失」的情形。**两条线各用一个 git worktree**：

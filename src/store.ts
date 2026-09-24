@@ -38,7 +38,13 @@ export interface SelfCheck {
   declaration: 0 | 1
 }
 
-/** S1.1 多源自评行（selfcheck_record；口径 = 决策 D-SC3 定案版）。 */
+/**
+ * S1.1 多源自评行（selfcheck_record；口径 = 决策 D-SC3 定案版 + AL.3 双形兼容）。
+ *
+ * 两代维度共存于同一行形状：旧形填 `clarity`/`defense`（0–1 三行口径，schema_version=1），
+ * 新形填 `align`/`boundary`/`evidence` + `rubric_version='al-v1'`（schema_version=2），
+ * **缺的一代一律 NULL**（v9 起 clarity/defense 可空）——代际不得混算（决策 §9.3）。
+ */
 export interface SelfCheckRecordRow {
   tsMs: number
   tsClient: number | null
@@ -49,10 +55,20 @@ export interface SelfCheckRecordRow {
   workspace: string | null
   extRef: string
   turnOrdinal: number
-  clarity: number
-  defense: 'none' | 'light' | 'heavy'
+  /** 旧形：清晰度 0–1；新形（align 行）为 NULL。 */
+  clarity: number | null
+  /** 旧形：防御 none|light|heavy；新形（align 行）为 NULL。 */
+  defense: 'none' | 'light' | 'heavy' | null
   declaration: 0 | 1
   quote: string | null
+  /** 新形：对齐 1–5（v8 列）；旧形为 NULL。 */
+  align: number | null
+  /** 新形：四条边界（v8 列）；旧形为 NULL。 */
+  boundary: 'none' | 'substitution' | 'possession' | 'coercion' | 'projection' | null
+  /** 新形：可选短证据；旧形为 NULL。 */
+  evidence: string | null
+  /** 新形：'al-v1'（签-6）；旧形为 NULL（旧三行口径不受 al-v1 管辖）。 */
+  rubricVersion: string | null
 }
 
 export function openStore(dbFile: string): NautilusStore {
@@ -617,6 +633,9 @@ export class NautilusStore {
 
   /**
    * 落一条多源自评；同唯一键 (source_kind, ext_ref, turn_ordinal) 重投 = 修正覆盖。
+   *
+   * AL.3 起覆盖是**整行换维度**：新形覆盖旧形（或反之）时，另一代的列一并写成 NULL——
+   * 不留上一代的残值（否则同一行会同时带 clarity 与 align，两代混算）。
    * @returns 'inserted' 首投 / 'duplicate' 同键覆盖（响应面据此标 duplicate）。
    */
   insertSelfCheckRecord(row: SelfCheckRecordRow): 'inserted' | 'duplicate' {
@@ -626,8 +645,8 @@ export class NautilusStore {
     this.db.prepare(`
       INSERT INTO selfcheck_record
         (ts_ms, ts_client, schema_version, source_kind, agent, model, workspace, ext_ref, turn_ordinal,
-         clarity, defense, declaration, quote)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         clarity, defense, declaration, quote, align, boundary, evidence, rubric_version)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(source_kind, ext_ref, turn_ordinal) DO UPDATE SET
         ts_ms = excluded.ts_ms,
         ts_client = excluded.ts_client,
@@ -638,10 +657,15 @@ export class NautilusStore {
         clarity = excluded.clarity,
         defense = excluded.defense,
         declaration = excluded.declaration,
-        quote = excluded.quote
+        quote = excluded.quote,
+        align = excluded.align,
+        boundary = excluded.boundary,
+        evidence = excluded.evidence,
+        rubric_version = excluded.rubric_version
     `).run(
       row.tsMs, row.tsClient, row.schemaVersion, row.sourceKind, row.agent, row.model, row.workspace,
       row.extRef, row.turnOrdinal, row.clarity, row.defense, row.declaration, row.quote,
+      row.align, row.boundary, row.evidence, row.rubricVersion,
     )
     return hit === undefined ? 'inserted' : 'duplicate'
   }
@@ -652,6 +676,34 @@ export class NautilusStore {
       ? this.db.prepare('SELECT COUNT(*) AS n FROM selfcheck_record').get()
       : this.db.prepare('SELECT COUNT(*) AS n FROM selfcheck_record WHERE source_kind = ?').get(sourceKind)
     return Number((r as { n: number } | undefined)?.n ?? 0)
+  }
+
+  /**
+   * AL.4b 读侧：自评**对齐**行清单（`align` 非空；默认只取 `dsh_tool` 通道 = 产出该轮的 agent 自评）。
+   *
+   * 代际分层（决策 §9.3）：按 `align IS NOT NULL` 过滤——旧三行（clarity/defense）`align` 为 NULL，
+   * 天然进不来，不会与新 1–5 量表混算；`rubricVersion` 原样带出（进化闭环要知道每行是哪版 rubric 打的）。
+   * @param sourceKind 通道过滤（默认 dsh_tool；http/backfill/mcp 属历史对照，不进当期读数）。
+   */
+  listSelfAlignments(sourceKind: 'dsh_tool' | 'http' | 'backfill' | 'mcp' = 'dsh_tool'): Array<{
+    extRef: string; turnOrdinal: number; align: number; boundary: string
+    declaration: 0 | 1; quote: string | null; evidence: string | null
+    rubricVersion: string | null; tsMs: number; agent: string
+  }> {
+    const rows = this.db.prepare(`
+      SELECT ext_ref, turn_ordinal, align, boundary, declaration, quote, evidence, rubric_version, ts_ms, agent
+      FROM selfcheck_record WHERE align IS NOT NULL AND source_kind = ?
+      ORDER BY ts_ms DESC, ext_ref ASC, turn_ordinal ASC
+    `).all(sourceKind) as Array<Record<string, unknown>>
+    return rows.map((r) => ({
+      extRef: String(r.ext_ref), turnOrdinal: Number(r.turn_ordinal), align: Number(r.align),
+      boundary: String(r.boundary ?? 'none'),
+      declaration: (Number(r.declaration ?? 0) === 1 ? 1 : 0) as 0 | 1,
+      quote: r.quote == null ? null : String(r.quote),
+      evidence: r.evidence == null ? null : String(r.evidence),
+      rubricVersion: r.rubric_version == null ? null : String(r.rubric_version),
+      tsMs: Number(r.ts_ms), agent: String(r.agent),
+    }))
   }
 
   /** 该会话的历史工作区归属（session_root；'' = 未归属 → 返回 null，不存空串）。 */

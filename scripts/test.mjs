@@ -107,24 +107,19 @@ test('analyze: 多会话分组（组内按 turn 升序）', () => {
 // ── selfcheck.ts / selfcheck-ingest.ts（M3-F.1 工具 + S1.1 共享口径）───────────
 
 function makeStore(rows) {
-  let recorded = null
   const records = []
   return {
     rows, records,
     turnReads: (limit) => rows.slice(0, limit),
-    setSelfCheck: (session, turn, check) => { recorded = { session, turn, check } },
     insertSelfCheckRecord: (row) => { records.push(row); return records.length === 1 ? 'inserted' : 'duplicate' },
     selfcheckWorkspaceOf: () => null,
-    get recorded() { return recorded },
   }
 }
 
-test('processSelfCheck: 兼容夹取 + 双写（dsh_tool 主存储 + turn_read 过渡列）', () => {
+test('processSelfCheck（AL.3 新形）: align/boundary/declaration 落共享 ingest，缺省归一但不夹取', () => {
   const store = makeStore([{ session: 's1', turn: 3 }])
-  const msg = processSelfCheck(store, { clarity: 1.5, defense: 'light', declaration: 0, session: 's1', turn: 3 })
+  const msg = processSelfCheck(store, { align: 3, session: 's1', turn: 3 })
   assert.ok(msg.startsWith('已记录 turn 3 自评'))
-  // 旧列兼容夹取保留：clarity 1.5 → 1；非法 defense → none
-  assert.deepEqual(store.recorded, { session: 's1', turn: 3, check: { clarity: 1, defense: 'light', declaration: 0 } })
   // 主存储 = 共享 ingest：身份字段齐备（agent/ext_ref 同源 sessionId，workspace 未归属 = null）
   assert.equal(store.records.length, 1)
   const r = store.records[0]
@@ -132,59 +127,75 @@ test('processSelfCheck: 兼容夹取 + 双写（dsh_tool 主存储 + turn_read �
   assert.equal(r.agent, 's1')
   assert.equal(r.extRef, 's1')
   assert.equal(r.turnOrdinal, 3)
-  assert.equal(r.clarity, 1)
+  assert.equal(r.align, 3)
+  assert.equal(r.boundary, 'none', 'boundary 缺省 = none（未越界）')
+  assert.equal(r.declaration, 0, 'declaration 缺省 = 0')
+  assert.equal(r.clarity, null, 'AL.3：新形 clarity 必须 NULL——不造假值填旧列')
+  assert.equal(r.defense, null, 'AL.3：新形 defense 必须 NULL')
+  assert.equal(r.rubricVersion, 'al-v1')
   assert.equal(r.workspace, null)
-  // 非法值兜底：clarity<0 → 0；defense 未知 → none；declaration≠1 → 0
+  // align 越界**不夹取**（旧工具对 clarity 的夹取随旧维度一起退场）：拒且零写入
   const store2 = makeStore([{ session: 's1', turn: 1 }])
-  processSelfCheck(store2, { clarity: -0.2, defense: 'nope', declaration: 2, session: 's1', turn: 1 })
-  assert.deepEqual(store2.recorded.check, { clarity: 0, defense: 'none', declaration: 0 })
+  assert.ok(processSelfCheck(store2, { align: 6, session: 's1', turn: 1 }).startsWith('自评被拒'))
+  assert.equal(store2.records.length, 0, '越界不得落库')
 })
 
-test('processSelfCheck（D-SC2 硬门）: declaration=1 无引文 → 拒且零写入', () => {
+test('processSelfCheck（AL.3 硬门）: align≥4 或 declaration=1 无引文 → 拒且零写入', () => {
   const store = makeStore([{ session: 's1', turn: 2 }])
-  const msg = processSelfCheck(store, { clarity: 0.5, defense: 'none', declaration: 1, session: 's1', turn: 2 })
-  assert.ok(msg.startsWith('自评被拒'), '拒绝文案必须显式')
-  assert.equal(store.recorded, null, '旧列不得被写')
-  assert.equal(store.records.length, 0, '新表不得被写')
+  assert.ok(processSelfCheck(store, { align: 4, session: 's1', turn: 2 }).startsWith('自评被拒'), '拒绝文案必须显式')
+  assert.equal(store.records.length, 0, 'align=4 无引文：任何表都不得被写')
+  assert.ok(processSelfCheck(store, { align: 5, session: 's1', turn: 2 }).startsWith('自评被拒'))
+  assert.ok(processSelfCheck(store, { align: 3, declaration: 1, session: 's1', turn: 2 }).startsWith('自评被拒'))
+  assert.equal(store.records.length, 0, '三个硬门都不落库')
   // 超长引文同样拒
-  const m2 = processSelfCheck(store, { clarity: 0.5, defense: 'none', declaration: 1, quote: '字'.repeat(QUOTE_MAX + 1), session: 's1', turn: 2 })
-  assert.ok(m2.startsWith('自评被拒'))
+  assert.ok(processSelfCheck(store, { align: 4, quote: '字'.repeat(QUOTE_MAX + 1), session: 's1', turn: 2 }).startsWith('自评被拒'))
   assert.equal(store.records.length, 0)
 })
 
-test('processSelfCheck: declaration=1 带引文 → 落库含 quote；declaration=0 带引文 → 引文丢弃', () => {
+test('processSelfCheck: align≥4 带引文 → 落库含 quote；align≤3 且 declaration=0 带引文 → 引文丢弃', () => {
   const store = makeStore([{ session: 's1', turn: 5 }])
-  const ok = processSelfCheck(store, { clarity: 0.4, defense: 'heavy', declaration: 1, quote: ' 我选择离开这回路。 ', session: 's1', turn: 5 })
+  const ok = processSelfCheck(store, { align: 4, boundary: 'coercion', quote: ' 「我不需要你替我做决定。」 ', evidence: '他改道', session: 's1', turn: 5 })
   assert.ok(ok.startsWith('已记录 turn 5 自评'))
-  assert.equal(store.records[0].quote, '我选择离开这回路。', '引文要 trim 后存')
+  assert.equal(store.records[0].quote, '「我不需要你替我做决定。」', '引文要 trim 后存')
+  assert.equal(store.records[0].boundary, 'coercion', '越界项如实落库（正交轴，不改 align）')
+  assert.equal(store.records[0].evidence, '他改道')
   const before = store.records.length
-  processSelfCheck(store, { clarity: 0.1, defense: 'none', declaration: 0, quote: '多余引文', session: 's1', turn: 5 })
-  assert.equal(store.records[before].quote, null, 'declaration=0 的引文不落库（防歧义行）')
+  processSelfCheck(store, { align: 3, quote: '多余引文', session: 's1', turn: 5 })
+  assert.equal(store.records[before].quote, null, 'align≤3 且 declaration=0 的引文不落库（防歧义行）')
 })
 
 test('processSelfCheck: 缺省 session/turn → 最近一轮；空库 → 失败文案', () => {
   const store = makeStore([{ session: 's2', turn: 7 }])
-  processSelfCheck(store, { clarity: 0.5, defense: 'heavy', declaration: 0 })
-  assert.deepEqual(store.recorded, { session: 's2', turn: 7, check: { clarity: 0.5, defense: 'heavy', declaration: 0 } })
+  processSelfCheck(store, { align: 2 })
+  assert.deepEqual(
+    { s: store.records[0].agent, t: store.records[0].turnOrdinal, a: store.records[0].align },
+    { s: 's2', t: 7, a: 2 },
+  )
   const empty = makeStore([])
-  assert.ok(processSelfCheck(empty, { clarity: 0.5, defense: 'none', declaration: 0 }).includes('尚无任何会话轮次'))
+  assert.ok(processSelfCheck(empty, { align: 2 }).includes('尚无任何会话轮次'))
 })
 
-test('buildSelfCheckTool: schema 契约（additionalProperties/required/canonical output/quote 字段在场）', () => {
+test('buildSelfCheckTool（AL.3）: al-v1 锚文注入 + align 必填 1–5 + boundary 枚举 + canonical output', () => {
   const tool = buildSelfCheckTool(makeStore([{ session: 's', turn: 1 }]))
   assert.equal(tool.name, 'record_turn_selfcheck')
   assert.equal(tool.parameters.additionalProperties, false)
-  assert.deepEqual(tool.parameters.required, ['clarity', 'defense', 'declaration'])
-  assert.equal(tool.parameters.properties.defense.enum.length, 3)
+  assert.deepEqual(tool.parameters.required, ['align'], 'align 必填（boundary/declaration 有锁版缺省）')
+  assert.equal(tool.parameters.properties.align.type, 'integer')
+  assert.equal(tool.parameters.properties.align.minimum, 1)
+  assert.equal(tool.parameters.properties.align.maximum, 5)
+  assert.deepEqual(tool.parameters.properties.boundary.enum, ['none', 'substitution', 'possession', 'coercion', 'projection'])
   assert.equal(tool.parameters.properties.quote.type, 'string', 'D-SC2：quote 参数必须在场')
   assert.equal(tool.parameters.properties.quote.maxLength, QUOTE_MAX)
+  for (const s of ['1 = 没接住', '2 = 接住了但没延展', '3 = 接+顺一层', '4 = 顺+推', '5 = 推到了改变下一步动作']) {
+    assert.ok(tool.description.includes(s), '注入面缺锚文句：' + s)
+  }
   assert.ok(tool.description.includes('quote'), '描述必须把引文要求说给模型')
   assert.equal(tool.output.schema.type, 'string')
   const rendered = tool.output.render({}, 'ok')
   assert.equal(rendered[0].text, 'ok')
 })
 
-test('validateIngest: 严格口径——合法/非法各判据（不夹取、不猜默认）', () => {
+test('validateIngest: 严格口径——旧形（clarity/defense）与新形（align/boundary）同门各判据（不夹取、不猜默认）', () => {
   const base = { sourceKind: 'http', agent: 'harness-A', extRef: 'conv-9', turnOrdinal: 2, clarity: 0.5, defense: 'light', declaration: 0 }
   assert.equal(validateIngest(base).ok, true)
   assert.equal(validateIngest({ ...base, clarity: 1.2 }).error, 'invalid:clarity')
@@ -201,6 +212,29 @@ test('validateIngest: 严格口径——合法/非法各判据（不夹取、不
   assert.equal(validateIngest({ ...base, tsClient: -5 }).error, 'invalid:ts_client')
   assert.equal(validateIngest({ ...base, tsClient: 1.9 }).record.tsClient, 1)
   assert.equal(validateIngest({ ...base, schemaVersion: 0 }).error, 'invalid:schema_version')
+  // AL.3 新形：同一份 ingest 收两代（有 align 即新路径），越界/缺引文一律拒
+  const al = { sourceKind: 'http', agent: 'harness-A', extRef: 'conv-9', turnOrdinal: 2, align: 3, declaration: 0 }
+  const okv = validateIngest(al)
+  assert.equal(okv.ok, true)
+  assert.equal(okv.record.clarity, null, '新形 clarity 必须 NULL')
+  assert.equal(okv.record.defense, null, '新形 defense 必须 NULL')
+  assert.equal(okv.record.rubricVersion, 'al-v1')
+  assert.equal(okv.record.boundary, 'none', 'boundary 缺省 none')
+  assert.equal(validateIngest({ ...al, align: 0 }).error, 'invalid:align')
+  assert.equal(validateIngest({ ...al, align: 6 }).error, 'invalid:align')
+  assert.equal(validateIngest({ ...al, align: 3.5 }).error, 'invalid:align')
+  assert.equal(validateIngest({ ...al, align: '4' }).error, 'invalid:align')
+  assert.equal(validateIngest({ ...al, boundary: 'weird' }).error, 'invalid:boundary')
+  assert.equal(validateIngest({ ...al, align: 4 }).error, 'align-quote-required')
+  assert.equal(validateIngest({ ...al, align: 5 }).error, 'align-quote-required')
+  assert.equal(validateIngest({ ...al, declaration: 1 }).error, 'quote-required')
+  assert.equal(validateIngest({ ...al, align: 4, quote: '引文' }).ok, true)
+  assert.equal(validateIngest({ ...al, align: 4, quote: 'x'.repeat(QUOTE_MAX + 1) }).error, 'quote-too-long')
+  assert.equal(validateIngest({ ...al, evidence: 'e'.repeat(501) }).error, 'evidence-too-long')
+  // 两代不混：带 align 的 payload 即使塞了 clarity/defense 也一律 NULL（代际分层，决策 §9.3）
+  const mixed = validateIngest({ ...al, clarity: 0.9, defense: 'heavy' })
+  assert.equal(mixed.record.clarity, null)
+  assert.equal(mixed.record.defense, null)
 })
 
 test('ingestSelfCheck + store: 同键重投 = 修正覆盖（duplicate 标），行数不双增', () => {
@@ -217,6 +251,10 @@ test('ingestSelfCheck + store: 同键重投 = 修正覆盖（duplicate 标），
     // 唯一键含 source_kind：不同源同 (ext_ref, turn) 各存一行
     assert.equal(ingestSelfCheck(store, { ...inp, sourceKind: 'dsh_tool' }).result, 'inserted')
     assert.equal(store.countSelfCheckRecords(), 2)
+    // AL.3：同一唯一键由新形（align）覆盖旧形 = 整行换维度——仍判 duplicate、行数不增
+    const alNew = { sourceKind: 'http', agent: 'h', extRef: 'c1', turnOrdinal: 1, align: 3, declaration: 0 }
+    assert.deepEqual(ingestSelfCheck(store, alNew), { ok: true, result: 'duplicate' })
+    assert.equal(store.countSelfCheckRecords(), 2, '换维度覆盖也不得双写')
   } finally { store.close() }
 })
 
@@ -548,24 +586,28 @@ test('host bundle 单入口：pulse 作为子插件挂载并注册自身路由',
     const fiber = ctx.plugin(mod, {
       pulse: { enabled: true, enableCounters: false, enableGpu: false, intervalMs: 60000, dbFile: ':memory:' },
     })
-    const deadline = Date.now() + 5000
-    while (Date.now() < deadline && !routes.includes('/api/nautilus/pulse/state')) await new Promise((r) => setTimeout(r, 25))
-    // vault 观测腿下线（2026-09-27）后：无 /state · /vault · /action 三条；S1.1 新增 /selfcheck
-    assert.deepEqual([...routes].sort(), [
-      '/api/nautilus/m2/analysis',
-      '/api/nautilus/m2/state',
-      '/api/nautilus/m2/turn-annotations',
-      '/api/nautilus/m2/turn-text',
-      '/api/nautilus/pulse/alerts',
-      '/api/nautilus/pulse/alerts/report',
-      '/api/nautilus/pulse/alerts/verdict',
-      '/api/nautilus/pulse/control',
-      '/api/nautilus/pulse/series',
-      '/api/nautilus/pulse/state',
-      '/api/nautilus/selfcheck',
-    ])
-    assert.deepEqual([...tools], ['record_turn_selfcheck'])
-    await fiber.dispose()
+    // 断言一律包在 try 里：断言失败也必须拆 fiber——pulse 采集定时器不会自己停，fiber 漏拆 =
+    // 子进程不退出、npm test 整体挂死且**没有任何报错输出**（2026-09-28 实测：路由清单漏一项即复现）。
+    try {
+      const deadline = Date.now() + 5000
+      while (Date.now() < deadline && !routes.includes('/api/nautilus/pulse/state')) await new Promise((r) => setTimeout(r, 25))
+      // vault 观测腿下线（2026-09-27）后：无 /state · /vault · /action 三条；S1.1 新增 /selfcheck；AL.4b 新增 /m2/alignments
+      assert.deepEqual([...routes].sort(), [
+        '/api/nautilus/m2/alignments',
+        '/api/nautilus/m2/analysis',
+        '/api/nautilus/m2/state',
+        '/api/nautilus/m2/turn-annotations',
+        '/api/nautilus/m2/turn-text',
+        '/api/nautilus/pulse/alerts',
+        '/api/nautilus/pulse/alerts/report',
+        '/api/nautilus/pulse/alerts/verdict',
+        '/api/nautilus/pulse/control',
+        '/api/nautilus/pulse/series',
+        '/api/nautilus/pulse/state',
+        '/api/nautilus/selfcheck',
+      ])
+      assert.deepEqual([...tools], ['record_turn_selfcheck'])
+    } finally { await fiber.dispose() }
   } finally {
     if (prevHome === undefined) delete process.env.DSH_HOME
     else process.env.DSH_HOME = prevHome
@@ -728,13 +770,34 @@ test('selfcheck ingest 通道：默认关 403 → token 门 401 → 非法 400 �
       const dup = await call(h, 'POST', { ...goodBody, clarity: 0.9 }, 't-123')
       assert.equal(dup.payload.result, 'duplicate')
       assert.equal(dup.payload.duplicate, true)
+      // AL.3：同通道收新形（align）——门序不变（405→403→401→400→200），硬门也在 400 这一档
+      // declaration 是新形的**必填**判断（与旧形同口径：不替调用方猜「有没有宣告」）
+      const alNoDecl = await call(h, 'POST', { agent: 'harness-y', ext_ref: 'conv-2', turn_ordinal: 1, align: 4 }, 't-123')
+      assert.equal(alNoDecl.statusCode, 400)
+      assert.equal(alNoDecl.payload.error, 'invalid:declaration', 'declaration 缺省不得由服务端代填')
+      const alNoQuote = await call(h, 'POST', { agent: 'harness-y', ext_ref: 'conv-2', turn_ordinal: 1, align: 4, declaration: 0 }, 't-123')
+      assert.equal(alNoQuote.statusCode, 400)
+      assert.equal(alNoQuote.payload.error, 'align-quote-required', 'align=4 无引文必须 400')
+      const al = await call(h, 'POST', { agent: 'harness-y', ext_ref: 'conv-2', turn_ordinal: 1, align: 4, declaration: 0, quote: '你还没命名的那处结构' }, 't-123')
+      assert.equal(al.statusCode, 200)
+      assert.equal(al.payload.result, 'inserted')
       await fiber.dispose()
 
-      // 外部世界断言：库内 1 行、覆盖后 clarity=0.9、身份为 http 源
+      // 外部世界断言：旧形 1 行（覆盖后 clarity=0.9）+ 新形 1 行（clarity/defense NULL、rubric=al-v1）
       const raw = new DatabaseSync(join(tmp, 'nautilus', 'nautilus.db'))
-      const rows = raw.prepare('SELECT source_kind, agent, clarity, declaration, quote FROM selfcheck_record').all()
-      assert.equal(rows.length, 1, '修正覆盖不得双写')
-      assert.deepEqual({ ...rows[0] }, { source_kind: 'http', agent: 'harness-x', clarity: 0.9, declaration: 0, quote: null })
+      const rows = raw.prepare(`
+        SELECT source_kind, agent, clarity, defense, declaration, quote, align, boundary, rubric_version
+        FROM selfcheck_record ORDER BY id
+      `).all()
+      assert.equal(rows.length, 2, '修正覆盖不得双写；新形另起一行（不同 ext_ref）')
+      assert.deepEqual({ ...rows[0] }, {
+        source_kind: 'http', agent: 'harness-x', clarity: 0.9, defense: 'none',
+        declaration: 0, quote: null, align: null, boundary: null, rubric_version: null,
+      }, '旧形行不得带任何 al-v1 字段（代际不混算）')
+      assert.deepEqual({ ...rows[1] }, {
+        source_kind: 'http', agent: 'harness-y', clarity: null, defense: null,
+        declaration: 0, quote: '你还没命名的那处结构', align: 4, boundary: 'none', rubric_version: 'al-v1',
+      }, '新形行：clarity/defense NULL + align/boundary/rubric_version 齐全')
       raw.close()
     }
   } finally {

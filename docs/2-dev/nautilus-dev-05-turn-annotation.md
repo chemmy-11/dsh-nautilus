@@ -53,7 +53,7 @@ CREATE TABLE IF NOT EXISTS annotation_sample (        -- 抽样队列（一行�
 
 ## 4. 抽样生成器 `scripts/annotation-sample.mjs`（会话侧，直连自家库）
 
-- 池：`turn_read` ∩ `turn_text` 非空 ∩ **未标**（recheck 批次反之：**已标且未复标**）；默认限当前 L 场指向（`--root all` 全局）。
+- 池：`turn_read` ∩ `turn_text` 非空 ∩ **未标**（recheck 批次反之：**已标且未复标**）；取数恒为**全局口径**（AL.4a 已撤除工作区指向两态：`--root` 只认 `all`，其它值响亮失败）。
 - 分层：会话（`--per-session` 上限）× 周桶 × 形态（`analyze()` 的 shape/无形态）；`--seed` 确定性 PRNG（可复跑复现）；`--size N --kind sample|recheck`；产出 `batch_id=T-<UTC日期>-<kind>-<序号>`。
 - 只 INSERT `annotation_sample`（幂等：PK 冲突跳过），不碰其它表。
 
