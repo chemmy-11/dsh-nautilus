@@ -25,7 +25,7 @@
 | 存储 | `src/pulse/store.ts` + `src/store.ts` migrateV7 | `ALERT_EVENT_DDL` **单一定义处**（主库迁移与 pulse 建表共用）；台账方法 insert/close/open/closeStaleAlerts/counts/recent/setAlertSnapshot/setAlertReport/setAlertVerdict/windowRows/activeSessions |
 | 路由 | `src/pulse/routes.ts` | `GET /pulse/alerts` · `POST /pulse/alerts/verdict` · `GET /pulse/alerts/report?id=`（同源门；只读口 405） |
 | 装配 | `src/pulse/index.ts` | tick 内检测 → 确认/解除落台账 → 冻结 → digest → 报告；启动自愈收口；prune 节拍里清快照 |
-| 客户端 | `src/client/alerts.ts` + workbench 接线 | `AlertsView` · `useAlertBadge` · `alertBadgeOf`/`ruleText` 纯函数 · 图标 `nt-icon-alert` 闪红 |
+| 客户端 | `src/client/alerts.ts` + workbench 接线 | `AlertsView` · `useAlertBadge` · `alertBadgeOf`/`ruleText` 纯函数 · 图标 `nt-icon-alert` 闪红；**U3（2026-09-24）**：手动档盲区条（`collectorMode` prop）· 两处口径注记 · 报告衬线排版 · 图标 `aria-label` 三态——规格见 [dev-02 §3.2](./nautilus-dev-02-ui-workbench.md) |
 | 回测 | `scripts/alert-threshold-backtest.mjs` | 只读 · 同判据（回放走 `AlertEngine`）· `--db/--days/--rule/--json/--candidates` |
 
 ## 3. 存储 schema（v7）
@@ -77,4 +77,4 @@ A.5：默认值 = D-A8 选定值（防漂移）+ 回看 4h + 滞回方向自洽 
      现存的 `.dsh-next` 库（user_version=8、`alert_event` 0 行）只能证明「v7 迁移与表结构曾在该机器上生效」。
   3. A.3 的模型段经**假模型**端到端验证；**真模型输出未验**（原 E28 也停在同一处：真模型输出待一次真实越线）。
   4. 阈值回测窗口从 8.5 天缩到 3.49 天（原库已删），D-A8 的 0.93 在新窗口上仍低于 p99 → OQ-A6。
-  5. 手动采样档下没有连续监测——静默不等于没越线（UI 与决策文档均已明示）。
+  5. 手动采样档下没有连续监测——静默不等于没越线。**明示落点（2026-09-24 更正）**：决策文档 §7.5 一直有，**UI 侧原先没有**（`src/client/alerts.ts` 里 `manual` 零命中——本条曾写「UI 与决策文档均已明示」，属**未经核对的声明**）；U3 已补：告警视图在 `mode==='manual'` 时显示朱红盲区条「手动采样档：没有连续监测——此时的静默不是『没越线』，是没在看」（规格见 dev-02 §3.2）。

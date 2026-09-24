@@ -448,7 +448,7 @@ test('client bundle：ModuleLoader 往返 + 命名导出面 + 面板注册契约
     },
   }
   exportsObj.apply(ctx)
-  // 2026-09-27：vault 观测 tab 与 L 场读数 tab 均已下线（能力已搬进工作台）——客户端 = 工作台双注册
+  // 2026-09-27：vault 观测 tab 与逐会话读数 tab 均已下线（能力已搬进工作台）——客户端 = 工作台双注册
   // + T 系列契合按钮（守谷人改口：assistant-actions 列表槽 IconActions 行内，见 dev-05 §3 / D-T5b）
   assert.deepEqual(calls, [
     'effect:@dsh-external/dsh-nautilus: workbench icon',
@@ -466,9 +466,9 @@ test('client bundle：ModuleLoader 往返 + 命名导出面 + 面板注册契约
   assert.deepEqual(panelIds, ['nautilus-workbench', 'nautilus-workbench'])
 })
 
-// ── 工作台渲染冒烟（真实 react SSR；删旧 L 场 tab 的前置证据）──────────────────
+// ── 工作台渲染冒烟（真实 react SSR；删旧读数 tab 的前置证据）────────────────────
 
-test('workbench 渲染冒烟：真实 react SSR 渲染五视图 + L 场面板并断言内容', async () => {
+test('workbench 渲染冒烟：真实 react SSR 渲染四视图并断言内容', async () => {
   const esbuild = await import('esbuild')
   const rds = await import('react-dom/server')
   const react = await import('react')
@@ -494,7 +494,6 @@ test('workbench 渲染冒烟：真实 react SSR 渲染五视图 + L 场面板并
     const pt = (turn, session, miss, cache) => ({ session, turn, ts: now - (40 - turn) * 60000, tokenIn: miss, tokenOut: 100, cacheRead: cache, durationMs: 1200, tps: 42.5, clarity: 0.7, defense: 'none', declaration: 0 })
     const curve = [pt(1, 'session-aaaa1111', 500, 100), pt(2, 'session-aaaa1111', 400, 300), pt(3, 'session-bbbb2222', 100, 900), pt(4, 'session-bbbb2222', 50, 950)]
     const m2 = {
-      pointing: 'L:\\ws\\demo',
       totals: { turns: 4, tokenIn: 1050, tokenOut: 400, cacheRead: 2250, missToken: 1050, hitRate: 0.68 },
       curve, recent: curve.slice().reverse(),
       selfcheck: { checked: 3, total: 4, bySession: { 'session-aaaa1111': { checked: 2, total: 2, missing: [] }, 'session-bbbb2222': { checked: 1, total: 2, missing: [9] } } },
@@ -510,30 +509,28 @@ test('workbench 渲染冒烟：真实 react SSR 渲染五视图 + L 场面板并
         { metric: 'pulse.proc.dsh.rss', value: 5.5e8, ts: now, tags: {} },
       ],
     }
-    const lfield = { revision: 1, active: 'L:\\ws\\demo', counts: { '': 91, 'L:\\ws\\demo': 10 }, known: [{ root: 'L:\\ws\\demo', displayName: null, active: 1, confirmedAt: null }] }
-    const ann = { revision: 1, annotations: [{ prophecy: 'P1', status: 'checked', note: 'n', updatedAt: now }] }
     const analysis = [{ session: 'session-aaaa1111', shape: 'sigmoid', tauE: 2, burst: { fromTurn: 2, toTurn: 3, direction: 'up' } }]
 
-    // ① 总览：OS 读数 + **L 场面板与其控件（视图两态 / 切换指向）**
-    const ov = h(el(wb.OverviewView, { m2, pulse, lfield, viewMode: 'all', onViewMode: noop, newRoot: '', onNewRoot: noop, switching: false, onSwitchLfield: noop, onOpenTurn: noop }))
-    for (const s of ['系统层读数', 'L 场读数（独立指向）', '切换指向', '确认切换', '全局', '指向', 'CPU 利用率', '读数规模']) {
+    // ① 总览：OS 读数（AL.4a：工作区指向面板与其控件已撤除）
+    const ov = h(el(wb.OverviewView, { m2, pulse, onOpenTurn: noop }))
+    for (const s of ['系统层读数', 'CPU 利用率', '读数规模']) {
       assert.ok(ov.includes(s), '总览缺内容: ' + s)
     }
-    // ② 曲线：旧 L 场 tab 的三件套（累计输入 / 轮次轴 / 自评覆盖）
+    for (const s of ['L 场', '切换指向', '确认切换', '归属根']) {
+      assert.ok(!ov.includes(s), '总览仍有已撤除的工作区指向残留: ' + s)
+    }
+    // ② 曲线：逐会话读数三件套（累计输入 / 轮次轴 / 自评覆盖）
     const cv = h(el(wb.CurveView, { m2, era: 'api', pulse, analysis, sessionNameOf: () => ({ name: 'ws', title: 'demo' }) }))
     for (const s of ['未命中率', '累计输入', '轮次轴', '日期轴', '自评覆盖', 'NEXUS 轮次', 'PULSE 采样']) {
       assert.ok(cv.includes(s), '曲线缺内容: ' + s)
     }
-    // ③ 假设 / 预言 / 报告
-    const hy = h(el(wb.HypothesesView, { m2, ann, analysis, onProphecy: noop }))
-    for (const s of ['白盒分析', '证据位', 'S 形']) assert.ok(hy.includes(s), '假设缺内容: ' + s)
-    const pr = h(el(wb.ProphecyView, { ann, m2, toast: noop, reload: noop }))
-    for (const s of ['预言标注', 'P1']) assert.ok(pr.includes(s), '预言缺内容: ' + s)
-    const rp = h(el(wb.ReportView, { m2, pulse, era: 'api', ann, analysis }))
-    for (const s of ['导出 JSON 快照', '四、白盒分析', '人工标注']) assert.ok(rp.includes(s), '报告缺内容: ' + s)
+    // ③ 报告（AL.4a：假设 / 预言两视图与标注层已撤除；白盒分析保留）
+    const rp = h(el(wb.ReportView, { m2, pulse, era: 'api', analysis }))
+    for (const s of ['导出 JSON 快照', '四、白盒分析']) assert.ok(rp.includes(s), '报告缺内容: ' + s)
+    for (const s of ['人工标注', '预言']) assert.ok(!rp.includes(s), '报告仍有已撤除的标注层残留: ' + s)
     // ④ 根组件：数据全缺席也不得抛错（首帧渲染路径）
     const root = h(el(wb.Workbench, { onExitToConversation: noop }))
-    for (const s of ['NAUTILUS', '总览', '曲线', '假设', '预言', '报告', '心跳', '返回会话', '主题', '跟随', '浅色', '深色']) {
+    for (const s of ['NAUTILUS', '总览', '曲线', '报告', '心跳', '返回会话', '主题', '跟随', '浅色', '深色']) {
       assert.ok(root.includes(s), '根组件缺内容: ' + s)
     }
     // U2 主题档位：根属性是覆盖把手（host 档不落覆盖块 → 走 body 级跟随块）
@@ -556,7 +553,7 @@ test('workbench 视图必须渲染为元素：禁止 View({...}) 直调（hooks 
   // 教训（§E13）：把带 hooks 的视图当普通函数调用，切视图时 hooks 数量变化 → React 整页渲染失败。
   // 只查「带 hooks 的组件」：Stat / Panel / Empty / Spark 是无 hooks 的纯呈现助手，按契约允许直调。
   const src = readFileSync(new URL('../src/client/workbench.ts', import.meta.url), 'utf8')
-  const components = ['Workbench', 'OverviewView', 'CurveView', 'HypothesesView', 'ProphecyView', 'ReportView', 'Drawer']
+  const components = ['Workbench', 'OverviewView', 'CurveView', 'ReportView', 'Drawer']
   const offenders = []
   for (const [i, line] of src.split(/\r?\n/).entries()) {
     const t = line.trim()
@@ -593,9 +590,7 @@ test('host bundle 单入口：pulse 作为子插件挂载并注册自身路由',
     while (Date.now() < deadline && !routes.includes('/api/nautilus/pulse/state')) await new Promise((r) => setTimeout(r, 25))
     // vault 观测腿下线（2026-09-27）后：无 /state · /vault · /action 三条；S1.1 新增 /selfcheck
     assert.deepEqual([...routes].sort(), [
-      '/api/nautilus/lfield',
       '/api/nautilus/m2/analysis',
-      '/api/nautilus/m2/annotations',
       '/api/nautilus/m2/state',
       '/api/nautilus/m2/turn-annotations',
       '/api/nautilus/m2/turn-text',
@@ -833,7 +828,6 @@ test('workbench 图表升级 SSR：总览 PULSE 网格/gauge/排行/健康带 + 
     const pt = (turn, session, miss, cache) => ({ session, turn, ts: now - (40 - turn) * 60000, tokenIn: miss, tokenOut: 100, cacheRead: cache, durationMs: 1200, tps: 42.5 })
     const curve = [pt(1, 'session-aaaa1111', 500, 100), pt(2, 'session-aaaa1111', 400, 300), pt(3, 'session-bbbb2222', 100, 900), pt(4, 'session-bbbb2222', 50, 950)]
     const m2 = {
-      pointing: 'L:\ws\demo',
       totals: { turns: 4, tokenIn: 1050, tokenOut: 400, cacheRead: 2250, missToken: 1050, hitRate: 0.68 },
       curve, recent: curve.slice().reverse(),
       selfcheck: { checked: 3, total: 4, bySession: {} },
@@ -852,7 +846,7 @@ test('workbench 图表升级 SSR：总览 PULSE 网格/gauge/排行/健康带 + 
       ],
     }
     // ① 总览：主图 2×2 + USE 资源族分区（仅次要指标）+ 占比 gauge + 健康带占位 + 会话排行/活跃带 + 折叠面板
-    const ov = h(el(wb.OverviewView, { m2, pulse, lfield: null, viewMode: 'all', onViewMode: noop, newRoot: '', onNewRoot: noop, switching: false, onSwitchLfield: noop, onOpenTurn: noop }))
+    const ov = h(el(wb.OverviewView, { m2, pulse, onOpenTurn: noop }))
     for (const s of ['采集健康带', '输入令牌排行', '会话活跃带', '悬停任一小图', 'nt-gauges', 'CPU 利用率', '内存占比', '2.0k · 2 轮', 'aaaa1111']) {
       assert.ok(ov.includes(s), '总览图表升级缺内容: ' + s)
     }

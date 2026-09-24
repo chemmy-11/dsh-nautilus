@@ -4,6 +4,14 @@
  * 入口三件（D-A4 裁决后收敛）：① 侧栏图标「活跃即闪红」+ 未裁决徽标；② 工作台「告警」视图（台账 + 规则运行态）；
  * ③ 报告查看入口（报告在磁盘，UI 只读）与人工裁决（真阳性/假阳性/未知，不设审批门）。
  *
+ * A.4 UI 续作（2026-09-24，U3）：
+ *  · **手动采样档明示**——dev-06 §7.5 与 planning §7.5 都声称「已在 UI/文档明示」，实际只有文档那半兑现；
+ *    本件补 UI 半：手动档下告警视图显式声明「静默 ≠ 没越线」。
+ *  · **口径注记块**——沿 S4「每个图表下方必带口径注记」纪律，把 planning §7 的诚实边界搬上屏
+ *    （未裁决不计入阳性率 / 冻结的是原始采样切片 / 阈值须换机重跑）。
+ *  · **报告排版对齐 S4 §4**——报告是全站唯一衬线正文处，原先裸 <pre> 是 11px 等宽观感。
+ *  · 未裁决口径（`reportStatus === 'pending'` 不计入）语义**不擅改**，仅在注释与 dev-02 写明。
+ *
  * 契约：GET /api/nautilus/pulse/alerts · POST /pulse/alerts/verdict · GET /pulse/alerts/report?id=
  * 纪律同 UI 线：零新依赖、自绘 SVG、样式走组件内 <style> 一次注入、class 前缀 `nt-`、--nt-* 令牌。
  */
@@ -79,7 +87,9 @@ export interface AlertBadge {
 /** 徽标数值（纯函数；SSR/测试可直接调）。 */
 export function alertBadgeOf(state: AlertsState | null): AlertBadge {
   if (state === null) return { active: 0, unjudged: 0, enabled: false }
-  // 未裁决数只数台账行（recent）并按 id 去重——active 是同一批行的子集，重复计数会虚高
+  // 未裁决数只数台账行（recent）并按 id 去重——active 是同一批行的子集，重复计数会虚高。
+  // `reportStatus === 'pending'` 不计入：**先读报告再裁决**是有意为之（报告生成中不算「待人裁决」）。
+  // 口径代价：若报告长期卡在 pending，该行不会进徽标（已知边界，语义不擅改，见 dev-02 §3.2 末段）。
   const seen = new Set<string>()
   let unjudged = 0
   for (const r of state.recent ?? []) {
@@ -172,11 +182,16 @@ const ALERT_CSS = [
   '.nt-al-state.hot{color:var(--nt-accent,#e6321e)}',
   '.nt-al-verdict{display:flex;gap:4px;align-items:center;flex-wrap:wrap}',
   '.nt-al-verdict input{border:1px solid var(--nt-border,#d9d9d5);background:var(--nt-panel,#fff);color:inherit;font-size:11px;padding:2px 5px;min-width:150px}',
-  '.nt-al-report{margin:0;padding:10px 12px;border:1px solid var(--nt-border,#d9d9d5);background:var(--nt-panel2,#f7f7f5);font-size:11px;line-height:1.6;white-space:pre-wrap;max-height:46vh;overflow:auto}',
+  // S4 §4：报告页是全站唯一使用衬线正文处（Georgia/思源宋栈，行高 1.95）——原文是 markdown，故只换排版不引渲染器
+  '.nt-al-report{margin:0;padding:12px 14px;border:1px solid var(--nt-border,#d9d9d5);background:var(--nt-panel2,#f7f7f5);font-family:Georgia,"Songti SC","Source Han Serif SC",serif;font-size:12.5px;line-height:1.95;white-space:pre-wrap;max-height:46vh;overflow:auto;font-variant-numeric:tabular-nums}',
   '.nt-al-report-head{display:flex;align-items:center;gap:8px;font-size:10px;letter-spacing:1px;color:var(--nt-faint,#9a9a95);margin-bottom:6px}',
   '.nt-icon-alert{animation:nt-al-flash 1.1s steps(1,end) infinite}',
   '@keyframes nt-al-flash{0%,55%{opacity:1}56%,100%{opacity:.22}}',
   '.nt-al-off{opacity:.5}',
+  // 手动档横幅：朱红＝需要人工注意（观测盲区，不是故障）
+  '.nt-al-warn{border:1px solid var(--nt-accent,#e6321e);color:var(--nt-accent,#e6321e);padding:3px 8px;font-size:10.5px;letter-spacing:.3px;text-transform:none}',
+  // 口径注记块（沿 workbench .nt-note 版式，独立定义以免依赖他文件样式表）
+  '.nt-al-note{margin:8px 0 0;padding:6px 9px;border-left:2px solid var(--nt-border2,#c8c8c3);font-size:10.5px;line-height:1.6;color:var(--nt-dim,#5f5f5c);text-transform:none;letter-spacing:0}',
 ]
 /** 让图标也能用到闪红样式（图标与视图可能各自先渲染）。 */
 export function ensureAlertStyle(): void { injectAlertStyle() }
@@ -208,6 +223,8 @@ export interface AlertsViewProps {
   state: AlertsState | null
   toast: (m: string) => void
   reload: () => void
+  /** 采集心跳档位（`pulse.collector.mode`）：`manual` = 没有连续监测，必须在本视图显式声明。 */
+  collectorMode?: 'auto' | 'manual'
 }
 
 export function AlertsView(props: AlertsViewProps): ReactNode {
@@ -252,6 +269,10 @@ export function AlertsView(props: AlertsViewProps): ReactNode {
             createElement('td', null, st?.firstExceededAt === null || st === null ? '—' : fmtTime(st.firstExceededAt)))
         })),
       ),
+      // 口径注记（S4 纪律：图表下方必带口径 / 混杂来源 / 诚实边界）
+      createElement('div', { className: 'nt-al-note' },
+        '判据 = 固定配置阈值（D-A8：p99 之上、max 之下）；确认窗是时间窗不是 tick 数，缺样本跳过且状态保持——',
+        '阈值只覆盖本机这段历史，换机器必须重跑 ', createElement('code', null, 'scripts/alert-threshold-backtest.mjs'), '。'),
     ),
   )
 
@@ -302,6 +323,10 @@ export function AlertsView(props: AlertsViewProps): ReactNode {
       createElement('span', { className: 'nt-al-chip' }, '近 24h ' + String(s.counts.last24h)),
       createElement('span', { className: 'nt-al-chip' }, '累计 ' + String(s.counts.total)),
       s.enabled ? null : createElement('span', { className: 'nt-al-chip red' }, '总开关已关（不检测、不收口台账）'),
+      // 手动采样档：没有连续监测 → 此刻的静默不是「没越线」，是没在看（planning §7.5 的 UI 落点）
+      props.collectorMode === 'manual'
+        ? createElement('span', { className: 'nt-al-warn' }, '手动采样档：没有连续监测——此时的静默不是「没越线」，是没在看')
+        : null,
       evidence,
       createElement('span', { className: 'nt-al-chip grey' }, '裁决只做事后标注，不设审批门'),
     ),
@@ -320,6 +345,9 @@ export function AlertsView(props: AlertsViewProps): ReactNode {
     createElement('div', { className: 'nt-panel' },
       createElement('h4', null, '告警台账', createElement('em', null, '结构化数据在 alert_event；本表取最近 50 条')),
       createElement('div', { className: 'body' }, table(s.recent, '台账为空（还没有越线确认）')),
+      createElement('div', { className: 'nt-al-note' },
+        '噪声地板由人工裁决量化（真阳性 / 假阳性 / 未知三分），未裁决的告警不计入阳性率；',
+        '冻结的是越线前的原始采样切片（采样周期内的尖峰可能被平滑，空洞见快照覆盖率），指纹为 sha256——它不是「越线那一刻的完整现场」。'),
     ),
     rules,
   )

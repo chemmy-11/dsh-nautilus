@@ -1,8 +1,8 @@
 /**
  * @dsh-external/dsh-nautilus — nautilus.db (SQLite, node:sqlite, zero deps).
- * turn_read/turn_text/step_seen/annotation: M2/M3 L 场读数与人工标注（官方 session/event 直采）。
- * session_root: M4-L per-session L-field ownership ('' = owned by no pointing — global view only);
- * lfield_config: M4-L independent L-field pointing (single row; baseline_ts kept as legacy, no longer read).
+ * turn_read/turn_text/step_seen/annotation: M2/M3 逐轮读数与标注表（官方 session/event 直采）。
+ * session_root: M4-L 会话归属（'' = 未归属；AL.4a 撤除指向抽象后不再新增归属，表保留停用）;
+ * lfield_config: M4-L 指向配置（单行；AL.4a 后无写路径，仅历史值留档，baseline_ts 为遗留列）。
  * selfcheck_record: S1.1 多源自评（v5 迁移创建；唯一键 source_kind+ext_ref+turn_ordinal，见 1-planning 决策 D-SC3）。
  *
  * ⚠️ 历史残留表：`vault_meta` / `edit_event` / `vault_config`（vault 观测腿）已于 2026-09-27 下线。
@@ -467,28 +467,17 @@ export class NautilusStore {
   }
 
 
-  // ── M4-L：L 场读数独立指向（lfield_config / session_root） ──────────────────
-
-  /** L 场读数当前指向（采集归属；'' = 未指向——新会话将落入未归属桶）。 */
-  lfieldRoot(): string {
-    const r = this.db.prepare('SELECT root FROM lfield_config WHERE id = 1').get() as { root: string } | undefined
-    return r === undefined ? '' : String(r.root)
-  }
-
-  /** 切换 L 场读数指向（采集从此归入新根；既有会话归属不变）。 */
-  setLfieldRoot(root: string): void {
-    this.db.prepare(`
-      INSERT INTO lfield_config (id, root, updated_at) VALUES (1, ?, ?)
-      ON CONFLICT(id) DO UPDATE SET root = excluded.root, updated_at = excluded.updated_at
-    `).run(root, Date.now())
-  }
+  // ── 会话归属（session_root） ─────────────────────────────────────────────────
+  // AL.4a 撤除「工作区指向」抽象：lfield_config 不再有写路径（表保留、历史数据不动），
+  // 故此处只读冻结的历史值，归属判定行为与撤除前一致；调用方在 src/nexus/turns.ts。
 
   /**
-   * 会话首次落点分类（守谷人 2026-08-31 定稿；2026-09 口径修订保留）：cwd 在当前 L 场指向根之下（含等于）
-   * → vault 会话，归指向根；否则 → ''（不属于任何指向，只在全局视图出现）。INSERT OR IGNORE——首标定终身，不因后续改写。
+   * 会话首次落点分类（守谷人 2026-08-31 定稿；2026-09 口径修订保留）：cwd 在历史指向根之下（含等于）
+   * → 归该根；否则 → ''（不属于任何指向，只在全局口径出现）。INSERT OR IGNORE——首标定终身，不因后续改写。
    */
   classifySessionRoot(session: string, cwd: string | undefined, ts: number): void {
-    const root = this.lfieldRoot()
+    const r = this.db.prepare('SELECT root FROM lfield_config WHERE id = 1').get() as { root: string } | undefined
+    const root = r === undefined ? '' : String(r.root)
     const kb = cwd !== undefined && cwd !== '' && root !== '' && this.isUnderRoot(cwd, root)
     this.db.prepare('INSERT OR IGNORE INTO session_root (session, root, first_ts) VALUES (?, ?, ?)')
       .run(session, kb ? root : '', ts)
@@ -500,14 +489,6 @@ export class NautilusStore {
     const c = norm(cwd)
     const r = norm(root)
     return c === r || c.startsWith(r + '\\')
-  }
-
-  /** 各归属的会话数（键含 '' = 不属于任何指向）。 */
-  sessionRootCounts(): Record<string, number> {
-    const rows = this.db.prepare('SELECT root, COUNT(*) AS n FROM session_root GROUP BY root').all() as Array<{ root: string; n: number }>
-    const out: Record<string, number> = {}
-    for (const r of rows) out[String(r.root)] = Number(r.n)
-    return out
   }
 
   /** 每会话元信息（首轮时刻 + 轮数；会话选择器的友好标签数据源）。 */
@@ -697,7 +678,7 @@ export class NautilusStore {
     return Number((r as { n: number } | undefined)?.n ?? 0)
   }
 
-  /** 该会话的 L 场归属（session_root；'' = 未归属 → 返回 null，不存空串）。 */
+  /** 该会话的历史工作区归属（session_root；'' = 未归属 → 返回 null，不存空串）。 */
   selfcheckWorkspaceOf(session: string): string | null {
     const r = this.db.prepare('SELECT root FROM session_root WHERE session = ?').get(session) as { root: string } | undefined
     if (r === undefined || r.root === '') return null
@@ -946,31 +927,6 @@ export class NautilusStore {
     return { userText: r.user_text, assistantText: r.assistant_text }
   }
 
-  // ── M2 预言标注 ─────────────────────────────────────────────────────────────
-
-  listAnnotations(): Array<{ prophecy: string; status: string; note: string | null; session: string | null; turn: number | null; updatedAt: number }> {
-    const rows = this.db.prepare('SELECT prophecy, status, note, session, turn, updated_at FROM annotation ORDER BY prophecy').all() as Array<Record<string, unknown>>
-    return rows.map((r) => ({
-      prophecy: String(r.prophecy), status: String(r.status ?? 'pending'),
-      note: r.note === null || r.note === undefined ? null : String(r.note),
-      session: r.session === null || r.session === undefined ? null : String(r.session),
-      turn: r.turn === null || r.turn === undefined ? null : Number(r.turn),
-      updatedAt: Number(r.updated_at ?? 0),
-    }))
-  }
-
-  upsertAnnotation(row: { prophecy: string; status: string; note?: string | null; session?: string | null; turn?: number | null }): void {
-    this.db.prepare(`
-      INSERT INTO annotation (prophecy, status, note, session, turn, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?)
-      ON CONFLICT(prophecy) DO UPDATE SET
-        status = excluded.status,
-        note = excluded.note,
-        session = excluded.session,
-        turn = excluded.turn,
-        updated_at = excluded.updated_at
-    `).run(row.prophecy, row.status, row.note ?? null, row.session ?? null, row.turn ?? null, Date.now())
-  }
 }
 
 /** 行 → TurnReadRow（含 M3-F.1 预留/自评三列）。 */
