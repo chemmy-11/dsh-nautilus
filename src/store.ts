@@ -143,6 +143,7 @@ export class NautilusStore {
       { version: 6, owner: 'nautilus', name: 'T 系列 turn_annotation', apply: () => this.migrateV6() },
       { version: 7, owner: 'nautilus', name: 'A 系列 alert_event', apply: () => this.migrateV7() },
       { version: 8, owner: 'nautilus', name: 'AL 对齐量表 1–5（turn_annotation 重建 + selfcheck_record 追加）', apply: () => this.migrateV8() },
+      { version: 9, owner: 'nautilus', name: 'AL.3 selfcheck_record 重建（clarity/defense 转可空）', apply: () => this.migrateV9() },
     ]
   }
 
@@ -373,6 +374,71 @@ export class NautilusStore {
       // receive 语义未定（OQ-AL1）——列留位但**不写入**，见决策文档 §10
       addCol('receive', 'receive INTEGER CHECK (receive IN (0,1,2))')
       this.db.exec('PRAGMA user_version = 8')
+      this.db.exec('COMMIT')
+    } catch (e) {
+      this.db.exec('ROLLBACK')
+      throw e
+    }
+  }
+
+  /**
+   * AL.3 迁移（user_version 8→9）：`selfcheck_record` **重建**——`clarity`/`defense` 转为**可空**。
+   *
+   * 理由：AL 把自评收成一维 `align` 1–5；新行的旧三行维度**没有值可填**，而 v5 建表时两列是 NOT NULL——
+   * 继续塞 0/'none' 等于造假数据。SQLite 改不了 NOT NULL → 「建新表 → 搬数据 → 换名」（同 v8 手法）。
+   * 旧行一个不丢、字段一个不改；CHECK 保留（NULL 不触发 BETWEEN/枚举约束，天然兼容新旧两代）。
+   */
+  private migrateV9(): void {
+    this.db.exec('BEGIN')
+    try {
+      const hasSc = this.db.prepare("SELECT 1 AS x FROM sqlite_master WHERE type='table' AND name='selfcheck_record'").get() !== undefined
+      if (!hasSc) {
+        console.warn('[nautilus] migrateV9：selfcheck_record 缺席——跳过重建（该表由 v5 创建；版本号与表结构不一致，请人工核对）')
+      } else {
+        const cols = this.db.prepare('PRAGMA table_info(selfcheck_record)').all() as Array<{ name: string; notnull: number }>
+        const clarityStrict = cols.find((c) => c.name === 'clarity')?.notnull === 1
+        const hasAlign = cols.some((c) => c.name === 'align')
+        if (clarityStrict && hasAlign) {
+          this.db.exec(`
+            CREATE TABLE selfcheck_record_v9 (
+              id             INTEGER PRIMARY KEY AUTOINCREMENT,
+              ts_ms          INTEGER NOT NULL,
+              ts_client      INTEGER,
+              schema_version INTEGER NOT NULL DEFAULT 1,
+              source_kind    TEXT    NOT NULL CHECK (source_kind IN ('dsh_tool','http','backfill','mcp')),
+              agent          TEXT    NOT NULL,
+              model          TEXT,
+              workspace      TEXT,
+              ext_ref        TEXT    NOT NULL,
+              turn_ordinal   INTEGER NOT NULL,
+              clarity        REAL    CHECK (clarity IS NULL OR clarity BETWEEN 0 AND 1),
+              defense        TEXT    CHECK (defense IS NULL OR defense IN ('none','light','heavy')),
+              declaration    INTEGER NOT NULL CHECK (declaration IN (0,1)),
+              quote          TEXT,
+              align          INTEGER CHECK (align BETWEEN 1 AND 5),
+              boundary       TEXT    CHECK (boundary IS NULL OR boundary IN ('none','substitution','possession','coercion','projection')),
+              self_align     INTEGER CHECK (self_align BETWEEN 1 AND 5),
+              evidence       TEXT,
+              rubric_version TEXT,
+              receive        INTEGER CHECK (receive IN (0,1,2)),
+              CHECK (declaration = 0 OR quote IS NOT NULL)
+            );
+            INSERT INTO selfcheck_record_v9
+              (id, ts_ms, ts_client, schema_version, source_kind, agent, model, workspace, ext_ref, turn_ordinal,
+               clarity, defense, declaration, quote, align, boundary, self_align, evidence, rubric_version, receive)
+            SELECT id, ts_ms, ts_client, schema_version, source_kind, agent, model, workspace, ext_ref, turn_ordinal,
+                   clarity, defense, declaration, quote, align, boundary, self_align, evidence, rubric_version, receive
+            FROM selfcheck_record;
+            DROP TABLE selfcheck_record;
+            ALTER TABLE selfcheck_record_v9 RENAME TO selfcheck_record;
+            CREATE UNIQUE INDEX IF NOT EXISTS ux_sc_key ON selfcheck_record (source_kind, ext_ref, turn_ordinal);
+            CREATE INDEX IF NOT EXISTS ix_sc_ts ON selfcheck_record(ts_ms);
+          `)
+        } else if (!hasAlign) {
+          console.warn('[nautilus] migrateV9：selfcheck_record 缺 align 列（v8 未生效？）——跳过重建')
+        }
+      }
+      this.db.exec('PRAGMA user_version = 9')
       this.db.exec('COMMIT')
     } catch (e) {
       this.db.exec('ROLLBACK')

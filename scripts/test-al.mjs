@@ -52,15 +52,15 @@ test('AL.2 迁移账本：新库按序到 v8、跳号（v1/v4）如实记录、�
   try {
     const file = join(tmp, 'n.db')
     const s1 = openStore(file)
-    assert.equal(s1.schemaVersion(), 8)
+    assert.equal(s1.schemaVersion(), 9)
     const run1 = s1.migrationLog()
-    assert.deepEqual(run1.applied.map((m) => m.version), [2, 3, 5, 6, 7, 8], '按版本升序应用本腿注册的迁移')
+    assert.deepEqual(run1.applied.map((m) => m.version), [2, 3, 5, 6, 7, 8, 9], '按版本升序应用本腿注册的迁移')
     assert.deepEqual(run1.skipped, [1, 4], '跳号如实记录（v1 已废弃 / v4 属 pulse，不假装连续）')
-    assert.deepEqual(run1.applied.map((m) => m.owner), ['nautilus', 'nautilus', 'nautilus', 'nautilus', 'nautilus', 'nautilus'])
+    assert.ok(run1.applied.every((m) => m.owner === 'nautilus'), '本腿注册的迁移 owner 均为 nautilus（长度不写死，随版本自然增长）')
     s1.close()
     const s2 = openStore(file)
     assert.deepEqual(s2.migrationLog().applied, [], '重开不再应用任何迁移（幂等）')
-    assert.equal(s2.schemaVersion(), 8, '不回退')
+    assert.equal(s2.schemaVersion(), 9, '不回退')
     s2.close()
     // 账本自身的守卫：重复版本号 = 装配错误（后一条永远不会被应用）
     const db = new DatabaseSync(join(tmp, 'ledger.db'))
@@ -111,7 +111,7 @@ test('AL.2 v8 重建：旧 0–4 契合行一个不丢（schema_version=1 / alig
       raw.close()
     }
     const s = openStore(file)
-    assert.equal(s.schemaVersion(), 8, 'v7 → v8')
+    assert.equal(s.schemaVersion(), 9, 'v7 → v8')
     const rows = s.listTurnAlignments()
     assert.equal(rows.length, 3, '旧行一个不丢')
     const r1 = rows.find((r) => r.session === 's-a' && r.turn === 1)

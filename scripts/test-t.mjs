@@ -37,15 +37,15 @@ test('migrateV6: v5 存库升级幂等、turn_read 数字不变、新库直达�
       raw.close()
     }
     const s1 = openStore(file)
-    assert.equal(s1.schemaVersion(), 8, 'v5 存库经 v6(T)+v7(A)+v8(AL) 后到最新')
+    assert.equal(s1.schemaVersion(), 9, 'v5 存库经 v6(T)+v7(A)+v8(AL) 后到最新')
     assert.deepEqual(s1.turnTotals(), { turns: 3, tokenIn: 0, tokenOut: 0, cacheRead: 0 }, 'turn_read 数字不变')
     assert.deepEqual({ ...s1.turnAnnotationCoverage() }.total, 0)
     s1.close()
     const s2 = openStore(file)
-    assert.equal(s2.schemaVersion(), 8, '重开不回退不重复')
+    assert.equal(s2.schemaVersion(), 9, '重开不回退不重复')
     s2.close()
     const fresh = openStore(join(tmp, 'fresh.db'))
-    assert.equal(fresh.schemaVersion(), 8)
+    assert.equal(fresh.schemaVersion(), 9)
     fresh.close()
     // CHECK 双门：fit=4 无引文直插必须炸；合法对照（fit 档、exempt 档）直插必须成。
     // AL.2/v8 起：旧 fit 行必须显式声明 schema_version=1（新表的 CHECK 用它把两代量表分层）——
