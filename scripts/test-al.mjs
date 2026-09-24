@@ -6,11 +6,14 @@
  *  · AL.2 迁移账本与 v8 迁移：按序应用 / 跳号如实记录 / 幂等 / 旧契合行一个不丢 / 1–5 与边界 CHECK。
  *  · AL.3 自评通道换 al-v1 对齐量表：工具面 = rubric 注入面 / 硬门零写入 / 双形 ingest / 覆盖语义。
  *  · AL.4a 收敛守卫：假设/预言/工作区指向零残留（源码级）+ 抽样生成器不再查已删的 store.lfieldRoot。
- *  · AL.4b 对齐读侧：GET /m2/alignments 契约形状 / 同源门与方法门 / 覆盖与一致性数字 / 口径单点守卫。
+ *  · AL.4b 对齐读侧：GET /m2/alignments 契约形状 / 同源门与方法门 / 覆盖与一致性数字 / 口径单点守卫；
+ *    v2 增量：scale.min（阈值单点）· selfTotal/selfRatio（selfTotal=0 → null）· legacySelfRows（与 human 侧各自独立计数）·
+ *    consistency.holdout（与 AL.5 脚本同库逐字相同）· self[] 只含 al-v1 行（代际行只计数）。
  * 已知例外（记在案）：`../store.js` 允许 nexus import——数据核心仍共享，真正抽离属 OQ-AL4。
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { execFileSync } from 'node:child_process'
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -22,6 +25,7 @@ import { runMigrations, readUserVersion } from '../lib/migrations.js'
 import { openStore } from '../lib/store.js'
 import { processSelfCheck, buildSelfCheckTool } from '../lib/nexus/selfcheck.js'
 import { ingestSelfCheck, QUOTE_MAX, EVIDENCE_MAX, RUBRIC_VERSION } from '../lib/nexus/selfcheck-ingest.js'
+import { MIN_PAIRS } from '../lib/nexus/consistency.js'
 
 const REPO = fileURLToPath(new URL('..', import.meta.url))
 const SRC = join(REPO, 'src')
@@ -468,9 +472,12 @@ test('AL.4b 路由门与空库：同源 403 / 非 GET 405 / 空库结构齐备�
     assert.equal(g.statusCode, 200)
     assert.deepEqual(Object.keys(g.body).sort(), TOP_KEYS, '顶层契约形状')
     assert.equal(typeof g.body.revision, 'number')
-    assert.deepEqual(Object.keys(g.body.scale).sort(), ['anchors', 'rubricVersion', 'schemaVersion'])
+    assert.deepEqual(Object.keys(g.body.scale).sort(), ['anchors', 'min', 'rubricVersion', 'schemaVersion'])
     assert.equal(g.body.scale.schemaVersion, 2)
     assert.equal(g.body.scale.rubricVersion, 'al-v1')
+    // v2：样本不足阈值从契约读（UI 删掉本地 ALIGN_MIN_PAIRS 常量，改读 scale.min）
+    assert.equal(g.body.scale.min, MIN_PAIRS, 'v2：scale.min = 共享模块的样本不足阈值（单点来源）')
+    assert.equal(g.body.scale.min, 50)
     assert.deepEqual(g.body.scale.anchors.map((a) => a.score), [1, 2, 3, 4, 5], '锚文 1–5 齐备')
     assert.deepEqual(Object.keys(g.body.scale.anchors[0]).sort(), ['score', 'text'])
     // 同源守卫：面板显示的锚文 = agent 看到的注入面（逐字同源，不各写一份）
@@ -485,8 +492,12 @@ test('AL.4b 路由门与空库：同源 403 / 非 GET 405 / 空库结构齐备�
       humanTotal: 0, humanAligned: 0, exempted: 0, legacyFitRows: 0,
       byAlign: { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 },
       byBoundary: { none: 0, substitution: 0, possession: 0, coercion: 0, projection: 0 },
-      selfAligned: 0, selfByAlign: { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 },
+      selfTotal: 0, selfAligned: 0, selfRatio: null, selfByAlign: { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 },
+      legacySelfRows: 0,
     })
+    // v2 空库：分母为 0 → selfRatio **必须 null**（0/0 报 0 是假读数），且不许写成 0
+    assert.equal(g.body.coverage.selfTotal, 0, '空库：turn_read 全局轮数 = 0')
+    assert.equal(g.body.coverage.selfRatio, null, 'v2：selfTotal=0 → selfRatio null（不是 0）')
   } finally { await m.close() }
 })
 
@@ -513,6 +524,17 @@ test('AL.4b 预置双路样本：覆盖数字正确（legacyFitRows 分层不混
     // 干扰行（必须不进 self 台账）：① http 通道新形；② dsh_tool 旧三行（align NULL，代际分层）
     ingestSelfCheck(s, { sourceKind: 'http', agent: 'harness', extRef: 's-1', turnOrdinal: 1, align: 1, declaration: 0 })
     ingestSelfCheck(s, { sourceKind: 'dsh_tool', agent: 's-9', extRef: 's-9', turnOrdinal: 1, clarity: 0.5, defense: 'none', declaration: 0 })
+    // ③ v2 代际干扰行：dsh_tool + align 非空，但 rubric_version 早于 al-v1——
+    //    只进 coverage.legacySelfRows 计数，**不得进 self[]**（直写以便构造非当期版本；ingest 只产 al-v1）
+    s.insertSelfCheckRecord({
+      tsMs: 1, tsClient: null, schemaVersion: 2, sourceKind: 'dsh_tool', agent: 's-9', model: null, workspace: null,
+      extRef: 's-9', turnOrdinal: 2, clarity: null, defense: null, declaration: 0, quote: null,
+      align: 4, boundary: 'none', evidence: null, rubricVersion: 'al-v0',
+    })
+    // v2 分母：turn_read 全局轮数（与 /m2/state 的 totals.turns 同式、不加 root）= 5 轮
+    for (let t = 1; t <= 5; t++) {
+      s.upsertTurnRead({ session: 's-1', turn: t, ts: 1_700_000_000_000 + t, question: 'q' + String(t), tokenIn: 1, tokenOut: 1, cacheRead: 0, durationMs: 10 })
+    }
   })
   try {
     const g = await m.call('GET')
@@ -527,8 +549,14 @@ test('AL.4b 预置双路样本：覆盖数字正确（legacyFitRows 分层不混
     assert.equal(cov.humanTotal, cov.humanAligned + cov.exempted, 'humanTotal 恒等于 有分 + 豁免（旧行不混入）')
     assert.deepEqual(cov.byAlign, { 1: 0, 2: 1, 3: 1, 4: 1, 5: 1 })
     assert.deepEqual(cov.byBoundary, { none: 3, substitution: 1, possession: 1, coercion: 0, projection: 0 })
-    assert.equal(cov.selfAligned, 4, 'self 只认 dsh_tool × align 非空（http 行与旧三行均排除）')
+    assert.equal(cov.selfAligned, 4, 'self 只认 dsh_tool × align 非空 × rubric=al-v1（http 行 / 旧三行 / al-v0 行均排除）')
     assert.deepEqual(cov.selfByAlign, { 1: 0, 2: 0, 3: 2, 4: 1, 5: 1 })
+    // v2：自评覆盖率（分子 = 当期代际自评行，分母 = turn_read 全局轮数）
+    assert.equal(cov.selfTotal, 5, 'v2：selfTotal = turn_read 全局轮数（与 /m2/state 同式，无 root）')
+    assert.equal(cov.selfRatio, 4 / 5, 'v2：selfRatio = selfAligned / selfTotal')
+    assert.equal(cov.legacySelfRows, 2, 'v2：自评旧代际 = 旧三行(align NULL) 1 + rubric≠al-v1 的 1')
+    assert.equal(cov.legacyFitRows, 1, 'human 侧旧契合行数不变')
+    assert.notEqual(cov.legacySelfRows, cov.legacyFitRows, '两侧旧代际**各自独立计数**（不混算、不互相推算）')
     // 双路台账
     assert.equal(g.body.human.length, 4, 'human 只出 align 非空行（豁免行与旧行不出）')
     assert.deepEqual(Object.keys(g.body.human[0]).sort(), HUMAN_KEYS, 'human 行契约形状')
@@ -536,9 +564,14 @@ test('AL.4b 预置双路样本：覆盖数字正确（legacyFitRows 分层不混
     assert.deepEqual(Object.keys(g.body.self[0]).sort(), SELF_KEYS, 'self 行契约形状')
     assert.deepEqual(g.body.self.map((x) => x.align).sort(), [3, 3, 4, 5])
     assert.ok(g.body.self.every((x) => x.rubricVersion === RUBRIC_VERSION), 'rubric_version 原样带出')
+    assert.equal(g.body.self.filter((x) => x.rubricVersion !== RUBRIC_VERSION).length, 0, 'v2：self[] 不含 rubric_version ≠ al-v1 的行')
+    assert.ok(!g.body.self.some((x) => x.extRef === 's-9'), 'v2：代际行（al-v0）只进 legacySelfRows，不出现在 self[]')
     assert.equal(g.body.self.filter((x) => x.turnOrdinal === 1).length, 2)
     // 一致性：4 对 (2,3)(3,3)(4,4)(5,5) → exact 3/4 · near 4/4 · κ = 1 − (1/16)/0.5 = 0.875
-    assert.deepEqual(Object.keys(g.body.consistency).sort(), ['exact', 'kappa', 'near', 'pairs'])
+    assert.deepEqual(Object.keys(g.body.consistency).sort(), ['exact', 'holdout', 'kappa', 'near', 'pairs'])
+    assert.deepEqual(Object.keys(g.body.consistency.holdout).sort(), ['exact', 'kappa', 'near', 'pairs'], 'v2：留出集四字段')
+    // 确定性切分（FNV-1a % 5）：本 fixture 四对里 s-1:2 与 s-2:2 落留出集 —— 两对全对且边际有方差 → κ = 1
+    assert.deepEqual(g.body.consistency.holdout, { pairs: 2, exact: 1, near: 1, kappa: 1 }, 'v2：holdout 与脚本同一份切分')
     assert.equal(g.body.consistency.pairs, 4)
     assert.equal(g.body.consistency.exact, 0.75)
     assert.equal(g.body.consistency.near, 1)
@@ -563,6 +596,42 @@ test('AL.4b 单对样本：pairs<2 → consistency null（一对恒「完全一�
   } finally { await m.close() }
 })
 
+test('AL.4b v2 留出集：路由 holdout 与 AL.5 脚本同库输出逐字相同（同一切分函数，禁第二份实现）', async () => {
+  // 四对：s-1:1(3↔3) · s-1:2(2↔4) · s-2:1(4↔4) · s-2:2(5↔5)
+  // 确定性切分（FNV-1a % 5 === 0）把 s-1:2 与 s-2:2 分进留出集——故意放一对不一致，让三指标都是真数字
+  const m = await mountAlignRoutes((s) => {
+    s.upsertTurnAlignment({ session: 's-1', turn: 1, align: 3, exempt: 0, boundary: 'none', quote: null, note: null, origin: 'spot' })
+    s.upsertTurnAlignment({ session: 's-1', turn: 2, align: 2, exempt: 0, boundary: 'substitution', quote: null, note: null, origin: 'spot' })
+    s.upsertTurnAlignment({ session: 's-2', turn: 1, align: 4, exempt: 0, boundary: 'none', quote: '「人工引文一」', note: null, origin: 'spot' })
+    s.upsertTurnAlignment({ session: 's-2', turn: 2, align: 5, exempt: 0, boundary: 'possession', quote: '「人工引文二」', note: null, origin: 'sample' })
+    ingestSelfCheck(s, { sourceKind: 'dsh_tool', agent: 's-1', extRef: 's-1', turnOrdinal: 1, align: 3, declaration: 0 })
+    ingestSelfCheck(s, { sourceKind: 'dsh_tool', agent: 's-1', extRef: 's-1', turnOrdinal: 2, align: 4, quote: '「自评引文一」', declaration: 0 })
+    ingestSelfCheck(s, { sourceKind: 'dsh_tool', agent: 's-2', extRef: 's-2', turnOrdinal: 1, align: 4, quote: '「自评引文二」', declaration: 0 })
+    ingestSelfCheck(s, { sourceKind: 'dsh_tool', agent: 's-2', extRef: 's-2', turnOrdinal: 2, align: 5, quote: '「自评引文三」', declaration: 0 })
+  })
+  try {
+    const g = await m.call('GET')
+    assert.equal(g.statusCode, 200)
+    const ho = g.body.consistency.holdout
+    assert.equal(ho.pairs, 2, '确定性切分：s-1:2 与 s-2:2 落留出集（hash(session:turn)%5===0）')
+    assert.equal(ho.exact, 0.5)
+    assert.equal(ho.near, 0.5)
+    assert.ok(Math.abs(ho.kappa - 3 / 7) < 1e-12, '留出集二次加权 κ = 3/7，实得 ' + String(ho.kappa))
+    // 脚本同库跑一遍：holdout 四指标必须逐字相同（两边都走 lib/nexus/consistency.js 的 splitHoldout + metrics）
+    const out = execFileSync(process.execPath, [join(REPO, 'scripts', 'alignment-consistency.mjs'), '--db', m.file, '--json'], { encoding: 'utf8' })
+    const script = JSON.parse(out)
+    assert.deepEqual(
+      { pairs: script.holdout.n, exact: script.holdout.exact, near: script.holdout.near, kappa: script.holdout.kappa },
+      ho,
+      '同一库上路由 holdout 与脚本输出必须逐字相同',
+    )
+    assert.equal(script.pairs, g.body.consistency.pairs, '全部配对数也同源')
+    assert.equal(script.holdoutEvery, 5, '切分除数走共享模块默认值')
+    assert.equal(script.min, g.body.scale.min, 'v2：阈值单点——脚本 --min 默认值与 scale.min 同源')
+    assert.equal(script.legacySelfRows, g.body.coverage.legacySelfRows, '代际计数同判据')
+  } finally { await m.close() }
+})
+
 test('AL.4b 口径守卫：一致性只有一份实现——脚本 import 共享模块，不得内联第二套', () => {
   const text = readFileSync(join(REPO, 'scripts', 'alignment-consistency.mjs'), 'utf8')
   assert.ok(text.includes("from '../lib/nexus/consistency.js'"), '脚本必须 import 构建产物 lib/nexus/consistency.js')
@@ -572,6 +641,13 @@ test('AL.4b 口径守卫：一致性只有一份实现——脚本 import 共享
   for (const bad of ['function metrics', 'function bucketOf', 'Math.pow(i - j, 2)']) {
     assert.ok(!text.includes(bad), '脚本仍内联了第二套口径：' + bad)
   }
+  // v2：切分数与样本阈值也只许来自共享模块（脚本里不得再出现 5 / 50 这类常量，rubric 版本同理）
+  for (const need of ['HOLDOUT_EVERY', 'MIN_PAIRS', 'RUBRIC_VERSION', "from '../lib/nexus/selfcheck-ingest.js'"]) {
+    assert.ok(text.includes(need), '脚本必须从共享模块取：' + need)
+  }
+  for (const bad of ['holdout: 5', 'min: 50', "'al-v1'"]) {
+    assert.ok(!text.includes(bad), '脚本仍写死了第二份常量：' + bad)
+  }
   // 适配层必须在：SQL 行是 snake_case，共享模块要 camelCase——漏映射会静默配出 0 对（实测踩到）
   for (const need of ['extRef: String(r.ext_ref)', 'turnOrdinal: Number(r.turn_ordinal)']) {
     assert.ok(text.includes(need), '脚本缺 SQL→领域形状的映射：' + need)
@@ -580,5 +656,8 @@ test('AL.4b 口径守卫：一致性只有一份实现——脚本 import 共享
   const rt = readFileSync(join(SRC, 'routes.ts'), 'utf8')
   assert.ok(rt.includes("from './nexus/consistency.js'"), '路由必须 import 共享一致性模块')
   assert.ok(!rt.includes('Math.pow('), 'routes.ts 不得自己算 κ')
+  // v2：scale.min 与 self[] 的代际过滤都取共享常量，不许在路由里写死
+  assert.ok(rt.includes('min: MIN_PAIRS'), '路由 scale.min 必须取共享阈值常量（UI 读它，不再写本地常量）')
+  assert.ok(rt.includes("listSelfAlignments('dsh_tool', RUBRIC_VERSION)"), 'self[] 过滤三件套走共享 rubric 常量')
 })
 

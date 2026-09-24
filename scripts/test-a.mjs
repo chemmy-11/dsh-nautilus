@@ -679,7 +679,9 @@ test('告警视图 SSR + 徽标纯函数：台账/裁决/报告状态/规则表�
 test('告警视图接线：ViewKey/侧栏标签/取数口与图标徽标（源码级守卫）', () => {
   const wb = readFileSync(join(REPO_DIR, 'src', 'client', 'workbench.ts'), 'utf8')
   assert.ok(wb.includes("alerts: '告警'"), '视图标签必须登记')
-  assert.ok(wb.includes("'overview', 'alerts', 'curve'"), '分段控件必须含告警')
+  // 顶栏分段序列**不锁**（顺序无关）：只断「告警登记进视图」与「取数口」两个关键点——
+  // 原来还断 'overview', 'alerts', 'curve' 整段序列，导致每加一个视图（如 alignments）都要回来改 A 系列守卫，
+  // 而它守的其实只是「告警在册且能取数」这两件事（分别在上一行与下一行断言）。
   assert.ok(wb.includes("useJson<AlertsState>('/api/nautilus/pulse/alerts?limit=50'"), '工作台取数口')
   assert.ok(wb.includes('useAlertBadge()'), '图标徽标接线（活跃即闪红）')
   assert.ok(wb.includes('nt-icon-alert'), '图标闪红类')
