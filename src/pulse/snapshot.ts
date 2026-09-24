@@ -204,12 +204,17 @@ export function snapshotStats(root: string): { dirs: number; bytes: number; olde
   return { dirs, bytes, oldestTs: oldest, newestTs: newest }
 }
 
-/** 台账三分层日志：ledger.md（总台账，追加式）。存在即追加，不存在则建头。 */
-export function appendLedger(ledgerPath: string, line: string): void {
+/** 台账人读日志：ledger.md（追加式）。存在即追加，不存在则创建表头。 */
+export function appendLedgerText(ledgerPath: string, text: string): void {
   mkdirSync(dirname(ledgerPath), { recursive: true })
-  const head = '# Nautilus · OS 层红线告警台账\n\n> 由 A 系列自动追加（越线确认 / 解除 / 报告落盘）。\n> 结构化数据以 ~/.dsh/nautilus/nautilus.db 的 alert_event 为准，本文件只是人读日志。\n\n'
+  const head = '# Nautilus · OS 层红线告警台账\n\n> 由 A 系列自动追加（越线确认 / 证据冻结 / 报告 / 解除 / 裁决）。\n> 结构化数据以 ~/.dsh/nautilus/nautilus.db 的 alert_event 为准，本文件只是人读日志（含报告内联副本）。\n\n'
   if (!existsSync(ledgerPath)) writeFileSync(ledgerPath, head, 'utf8')
   let body = ''
   try { body = readFileSync(ledgerPath, 'utf8') } catch { body = head }
-  writeFileSync(ledgerPath, body + line + '\n', 'utf8')
+  writeFileSync(ledgerPath, body + text, 'utf8')
+}
+
+/** 台账一行（自动加时间戳前缀）。 */
+export function appendLedger(ledgerPath: string, line: string): void {
+  appendLedgerText(ledgerPath, '- `' + new Date().toISOString() + '` ' + line + '\n')
 }

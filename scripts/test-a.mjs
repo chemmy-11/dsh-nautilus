@@ -6,7 +6,7 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { existsSync, mkdtempSync, readFileSync, rmSync, mkdirSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, mkdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
@@ -14,6 +14,7 @@ import { gunzipSync } from 'node:zlib'
 
 import { AlertEngine, DEFAULT_ALERT_RULES, alertIdFor, alertMetricExpr, validateAlertRules } from '../lib/pulse/alerts.js'
 import { computeCoverage, freezeSnapshot, pruneSnapshots, samplesToJsonl, snapshotStats } from '../lib/pulse/snapshot.js'
+import { aggregateMetrics, buildDigest, composeReport, composeResultNote, digestFacts, parseHypotheses } from '../lib/pulse/report.js'
 import { openPulseStore } from '../lib/pulse/store.js'
 import { openStore } from '../lib/store.js'
 
@@ -233,6 +234,9 @@ test('pulse/alerts 路由：403 同源门 + 规则/运行态/台账结构 + 真�
         ],
       },
     })
+    let disposed = false
+    const dispose = async () => { if (!disposed) { disposed = true; await fiber.dispose() } }
+    try {
     const deadline0 = Date.now() + 5000
     while (Date.now() < deadline0 && !handlers.has('/api/nautilus/pulse/alerts')) await new Promise((r) => setTimeout(r, 25))
     const h = handlers.get('/api/nautilus/pulse/alerts')
@@ -286,8 +290,17 @@ test('pulse/alerts 路由：403 同源门 + 规则/运行态/台账结构 + 真�
     assert.equal(ev.snapshotPath, join(snapDir, 'samples.jsonl.gz'))
     const ledgerText = readFileSync(join(tmp, 'alerts', 'ledger.md'), 'utf8')
     assert.ok(ledgerText.includes('确认') && ledgerText.includes('冻结'), '台账人读日志含确认与冻结两行')
+    // A.3：门禁默认关 → 报告照样落盘（事实段在场，假设段如实缺席，绝不假装有结论）
+    const reportPath = join(tmp, 'alerts', 'reports', ev.id + '.md')
+    assert.equal(existsSync(reportPath), true, '报告文件必须落盘（门禁关也要有事实段）')
+    const reportText = readFileSync(reportPath, 'utf8')
+    assert.ok(reportText.includes('## 一、事实（程序生成，不经模型）'), '事实段永远在场')
+    assert.ok(reportText.includes('门禁默认关'), '缺席原因如实写明')
+    assert.ok(reportText.includes('## 三、待查'), '三段结构完整')
+    assert.equal(ev.reportStatus, 'skipped', '台账报告态 = skipped')
+    assert.ok(ledgerText.includes('报告'), '台账人读日志含报告行')
     assert.ok(snap.evidence !== null && snap.evidence.dirs >= 1, '证据目录现状随快照一起可见')
-    await fiber.dispose()
+    } finally { await dispose() }
   } finally {
     if (prevHome === undefined) delete process.env.DSH_HOME
     else process.env.DSH_HOME = prevHome
@@ -389,6 +402,150 @@ test('pruneSnapshots：只清理过期 a-* 快照与对应报告，不动新目�
     assert.equal(existsSync(join(tmp, 'someone-elses-dir')), true, '只碰自己命名的 a-* 目录（红线 3）')
     assert.equal(pruneSnapshots(join(tmp, 'nope'), now).length, 0, '目录不存在 = 无操作')
   } finally {
+    try { rmSync(tmp, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }) } catch { /* 容忍残留 */ }
+  }
+})
+
+// ── A.3 报告：确定性 digest / 事实段 / 解析 / 三段式 ─────────────────────────
+
+test('aggregateMetrics + buildDigest + digestFacts：确定性、定序、空值不计、措辞带 era 分级', () => {
+  const rows = [
+    { ts: 1, metric: 'pulse.mem.used', value: 10, tags: '{}' },
+    { ts: 1, metric: 'pulse.mem.total', value: 100, tags: '{}' },
+    { ts: 2, metric: 'pulse.mem.used', value: 30, tags: '{}' },
+    { ts: 2, metric: 'pulse.mem.used', value: null, tags: '{}' },
+    { ts: 3, metric: 'pulse.mem.used', value: 20, tags: '{}' },
+  ]
+  const agg = aggregateMetrics(rows)
+  const used = agg.find((m) => m.metric === 'pulse.mem.used')
+  assert.deepEqual(used, { metric: 'pulse.mem.used', n: 3, min: 10, max: 30, last: 20, mean: 20 }, 'null 不计入 n，末值取最后一个非空')
+  assert.deepEqual(agg.map((m) => m.metric), ['pulse.mem.total', 'pulse.mem.used'], '按指标名定序')
+  const meta = {
+    alertId: 'a-1-r', ruleId: 'r', metric: 'pulse.mem.used', op: 'gte', threshold: 0.9, clear: 0.85,
+    from: 0, to: 1800000, lookbackMs: 1800000, rows: 5, metrics: ['pulse.mem.used'], distinctTicks: 3,
+    cadenceMs: 5, coverage: 0.82, missingMs: 1000, gapCount: 2, maxGapMs: 1260000, gaps: [],
+    activeSessions: 2, era: 'api', createdAt: 5, generator: 'x',
+  }
+  const d = buildDigest({
+    alertId: 'a-1-r', ruleId: 'r', ruleLabel: '内存占比', metric: 'pulse.mem.used / pulse.mem.total',
+    op: 'gte', threshold: 0.9, clear: 0.85, firstExceededAt: 1000, confirmedAt: 31000, peak: 0.98,
+    meta, snapshotHash: 'f'.repeat(64), metrics: agg, now: 99999,
+  })
+  assert.equal(d.window.lookbackMs, 1800000)
+  assert.equal(d.evidence.coverage, 0.82)
+  assert.equal(d.metrics.length, 2)
+  const facts = digestFacts(d)
+  assert.ok(facts[0].includes('内存占比') && facts[0].includes('gte 0.9'))
+  assert.ok(facts[1].includes('首次越线') && facts[1].includes('连续 30s'))
+  assert.ok(facts.some((f) => f.includes('覆盖 82.0%') && f.includes('最大 21min')), '覆盖率与最大空洞进事实段')
+  assert.ok(facts.some((f) => f.includes('仅作对照')), 'api 时代措辞分级写进事实段')
+  assert.deepEqual(digestFacts(d), facts, '纯函数：同输入同事实段')
+})
+
+test('parseHypotheses + composeReport + composeResultNote：两段解析、缺格式不丢内容、缺席不假装有结论', () => {
+  const raw = '前缀\n=== 候选假设 ===\n- A（依据 x；验证 y）\n=== 待查 ===\n- 需要 z\n'
+  const parsed = parseHypotheses(raw)
+  assert.equal(parsed.parsed, true)
+  assert.ok(parsed.hypotheses.includes('A（依据 x'))
+  assert.ok(parsed.toCheck.includes('需要 z'))
+  const bad = parseHypotheses('模型随口答的一段话')
+  assert.equal(bad.parsed, false)
+  assert.equal(bad.hypotheses, '模型随口答的一段话', '格式不符也不丢内容')
+  assert.equal(bad.toCheck, '')
+
+  const d = {
+    alertId: 'a-1-r', ruleId: 'r', ruleLabel: '内存占比', metric: 'm', op: 'gte', threshold: 0.9, clear: 0.85,
+    firstExceededAt: 0, confirmedAt: 1000, peak: 0.99,
+    window: { from: 0, to: 1000, lookbackMs: 1000 },
+    evidence: { rows: 10, distinctTicks: 2, cadenceMs: 500, coverage: 1, gapCount: 0, maxGapMs: 0, activeSessions: 1, snapshotHash: 'a'.repeat(64) },
+    metrics: [], era: 'api', generatedAt: 0,
+  }
+  const facts = digestFacts(d)
+  const withModel = composeReport({ digest: d, facts, raw, skipReason: null, model: 'fake/mod-1', now: 0 })
+  for (const s of ['# 告警报告', '## 一、事实（程序生成，不经模型）', '## 二、候选假设（模型输出，仅供人工判定）', '## 三、待查', 'a-report-v1', 'fake/mod-1', '只作对照']) {
+    assert.ok(withModel.includes(s), '报告缺内容: ' + s)
+  }
+  const noModel = composeReport({ digest: d, facts, raw: null, skipReason: '门禁默认关', model: null, now: 0 })
+  assert.ok(noModel.includes('本段缺席：门禁默认关'), '缺席必须写明原因')
+  assert.ok(noModel.includes('## 一、事实'), '事实段不受门禁影响')
+  assert.ok(!noModel.includes('=== 候选假设 ==='), '未调用模型时不应有分隔符残留')
+  const note = composeResultNote({ clearedAt: 5000, durationMs: 4000, peak: 0.99, value: 0.8 })
+  assert.ok(note.includes('## 附：结果补记（程序生成）') && note.includes('持续：4s') && note.includes('不调用模型'))
+})
+
+test('告警报告端到端：门禁开 + 假 llm seam → done（模型段+台账内联），解除只补记不重调模型', async () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'nautilus-alertreport-'))
+  const prevHome = process.env.DSH_HOME
+  process.env.DSH_HOME = tmp
+  try {
+    const dbFile = join(tmp, 'n.db')
+    const { Context } = await import('@deepseek-ai/cordis')
+    const mod = await import(new URL('../lib/index.js', import.meta.url).href)
+    const handlers = new Map()
+    let calls = 0
+    const fakeText = '=== 候选假设 ===\n- 会话拉长了存活期（依据：占比 0.98；验证：对比活跃会话数）\n=== 待查 ===\n- 需要同窗口的 dsh 进程 RSS'
+    const ctx = new Context()
+    ctx.provide('webServer', { register(route) { handlers.set(route.path, route.handler); return () => {} } })
+    ctx.provide('tools', { register() {} })
+    ctx.provide('llm', {
+      stream(opts) {
+        calls += 1
+        // 断言插件确实按契约传参（provider/model/messages/maxTokens/signal）
+        if (typeof opts.provider !== 'string' || typeof opts.model !== 'string') throw new Error('bad options')
+        if (!Array.isArray(opts.messages) || typeof opts.signal === 'undefined') throw new Error('bad options')
+        async function* gen() { yield { type: 'reasoning-delta', text: '不计入' }; yield { type: 'text-delta', text: fakeText } }
+        return gen()
+      },
+    })
+    ctx.provide('agentDefaultModel', { currentSelection: () => ({ provider: 'fake', model: 'mod-1' }) })
+    const fiber = ctx.plugin(mod, {
+      pulse: {
+        enabled: true, enableCounters: false, enableGpu: false, intervalMs: 1000, dbFile,
+        alertLlmEnabled: true,
+        alertRules: [{ id: 'mem-occupancy', label: '内存占比', metric: 'pulse.mem.used', refMetric: 'pulse.mem.total', op: 'gte', threshold: 0, clear: -1, forMs: 0 }],
+      },
+    })
+    let disposed = false
+    const dispose = async () => { if (!disposed) { disposed = true; await fiber.dispose() } }
+    try {
+    const dl = Date.now() + 8000
+    let reportPath = ''
+    while (Date.now() < dl) {
+      const dir = join(tmp, 'alerts', 'reports')
+      if (existsSync(dir)) {
+        const any = readdirSync(dir).filter((f) => f.endsWith('.md'))
+        if (any.length > 0) { reportPath = join(dir, any[0]); break }
+      }
+      await new Promise((x) => setTimeout(x, 100))
+    }
+    assert.ok(reportPath !== '', '报告必须生成')
+    const text = readFileSync(reportPath, 'utf8')
+    assert.ok(text.includes('会话拉长了存活期'), '模型段进报告')
+    assert.ok(text.includes('fake/mod-1') && text.includes('a-report-v1'), '模型与模板版本记账')
+    assert.ok(text.includes('需要同窗口的 dsh 进程 RSS'), '待查段进报告')
+    assert.equal(calls, 1, '一次告警只调一次模型（去重）')
+    const alertId = reportPath.split(/[\\/]/).pop().replace(/\.md$/, '')
+    // 台账结构化回读：done + 模型名
+    const s = openPulseStore(dbFile)
+    const row = s.alertById(alertId)
+    assert.equal(row.reportStatus, 'done')
+    assert.equal(row.reportModel, 'fake/mod-1')
+    assert.equal(row.promptVersion, 'a-report-v1')
+    assert.ok(row.snapshotHash !== null)
+    assert.equal(row.clearedAt, null, '该轮尚未解除')
+    // 台账人读日志内联了报告全文
+    const ledgerText = readFileSync(join(tmp, 'alerts', 'ledger.md'), 'utf8')
+    assert.ok(ledgerText.includes('候选假设'), 'ledger.md 内联报告')
+    assert.ok(ledgerText.includes('**报告**'), '台账报告行')
+    // 解除 → 补记（不重调模型）
+    s.close()
+    const before = calls
+    await dispose()
+    assert.equal(calls, before, '解除不触发新模型调用（补记是程序生成的）')
+    } finally { await dispose() }
+  } finally {
+    if (prevHome === undefined) delete process.env.DSH_HOME
+    else process.env.DSH_HOME = prevHome
     try { rmSync(tmp, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }) } catch { /* 容忍残留 */ }
   }
 })

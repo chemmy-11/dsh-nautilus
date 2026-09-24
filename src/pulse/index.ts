@@ -23,7 +23,9 @@ import { CountersSession, type ChildLike, type ChildSpawner } from './counters.j
 import { openPulseStore, type PulseStore } from './store.js'
 import { registerPulseRoutes, type PulseControl } from './routes.js'
 import { AlertEngine, DEFAULT_ALERT_RULES, alertMetricExpr, type AlertRule } from './alerts.js'
-import { appendLedger, freezeSnapshot, pruneSnapshots, snapshotStats } from './snapshot.js'
+import { appendLedger, appendLedgerText, freezeSnapshot, pruneSnapshots, snapshotStats, type FreezeResult } from './snapshot.js'
+import { REPORT_PROMPT_VERSION, aggregateMetrics, buildDigest, buildPrompt, composeReport, composeResultNote, digestFacts, type AlertDigest } from './report.js'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 
 export const name = 'pulse'
 /** webServer 必需（校验路由）；subprocess 可选，经 ctx.get 取（AGENTS.md §2）。 */
@@ -59,6 +61,12 @@ export interface Config {
   alertLookbackMs: number
   /** A 系列：快照独立保留期（天；与 metric_sample 的 retentionDays 无关）。 */
   alertSnapshotRetentionDays: number
+  /** A 系列：LLM 报告门禁（D-A2 **默认关**——开启动作本身是部署决策）。 */
+  alertLlmEnabled: boolean
+  /** A 系列：报告单次生成上限（token）。 */
+  alertLlmMaxTokens: number
+  /** A 系列：报告单次超时。 */
+  alertLlmTimeoutMs: number
 }
 
 export const Config = z.object({
@@ -93,6 +101,9 @@ export const Config = z.object({
   alertsDir: z.string().default(''),
   alertLookbackMs: z.number().min(60_000).default(2 * 3600_000),
   alertSnapshotRetentionDays: z.number().min(1).default(30),
+  alertLlmEnabled: z.boolean().default(false),
+  alertLlmMaxTokens: z.number().min(64).max(8192).default(900),
+  alertLlmTimeoutMs: z.number().min(1000).default(60000),
 })
 
 export interface PulseCollectorStatus {
@@ -189,6 +200,10 @@ export function apply(ctx: Context, config: Config): void {
     const stale = store.closeStaleAlerts(Date.now())
     if (stale.length > 0) console.warn('[pulse] 告警启动自愈：收口 ' + stale.length + ' 条遗留未解除告警（' + stale.join(', ') + '）')
   }
+  // A.3：报告落点与去重（同一告警只成文一次；在飞请求可随插件卸载中止）
+  const reportsDir = join(alertsRoot, 'reports')
+  const reportedIds = new Set<string>()
+  const reportAborts = new Set<AbortController>()
   /** 台账人读日志一行（结构化数据仍以 alert_event 为准）。 */
   const ledger = (text: string): void => {
     try { appendLedger(ledgerPath, '- `' + new Date().toISOString() + '` ' + text) } catch (err) {
@@ -282,6 +297,7 @@ export function apply(ctx: Context, config: Config): void {
             console.info('[pulse] 告警解除 ' + t.alertId + '（持续 ' + String(Math.round(t.durationMs / 1000)) + 's' + (closed ? '' : '，台账行已收口') + '）')
             ledger('**解除** `' + t.alertId + '` · 值 ' + String(t.value) + ' · 持续 ' + String(Math.round(t.durationMs / 1000)) + 's' +
               (closed ? '' : '（台账行本已收口）'))
+            appendResultNote({ alertId: t.alertId, clearedAt: t.ts, durationMs: t.durationMs, peak: t.peak, value: t.value })
           }
         }
       }
@@ -335,6 +351,9 @@ export function apply(ctx: Context, config: Config): void {
   ctx.effect(() => () => {
     stopped = true
     if (timer !== null) clearTimeout(timer)
+    // A.3：在飞的报告请求随插件卸载中止（不留孤儿请求；台账仍是 pending，重启后不会静默补写）
+    for (const ac of reportAborts) { try { ac.abort(new Error('plugin-dispose')) } catch { /* 已结束 */ } }
+    reportAborts.clear()
     status.sealed = true
   })
 
@@ -342,14 +361,17 @@ export function apply(ctx: Context, config: Config): void {
   console.info('[pulse] 采集启动：mode=' + status.mode + ' interval=' + status.intervalMs + 'ms counters=' + config.countersIntervalMs + 'ms gpu=' + config.gpuIntervalMs + 'ms exec=' + (exec !== null ? 'ctx.subprocess' : '不可用（只采本地族）') + ' db=' + dbFile)
 
   /**
-   * A.2：冻结越线证据。冻结失败**不改判定结果**（告警已确认、已落台账），只把报告态标 failed
-   * 并留一条警告——「证据没冻上」本身是必须被看见的事实，不能静默吞掉。
+   * A.2 + A.3：冻结越线证据 → 写确定性 digest → 生成报告（门禁默认关）。
+   * 冻结失败**不改判定结果**（告警已确认、已落台账），只把报告态标 failed 并留一条警告——
+   * 「证据没冻上」本身是必须被看见的事实，不能静默吞掉。
    */
-  function freezeEvidence(t: { rule: AlertRule; alertId: string; confirmedAt: number }): void {
+  function freezeEvidence(t: { rule: AlertRule; alertId: string; confirmedAt: number; firstExceededAt: number; peak: number }): void {
     const from = t.confirmedAt - config.alertLookbackMs
+    let res: FreezeResult
+    let rows: Array<{ ts: number; metric: string; value: number | null; tags: string }>
     try {
-      const rows = store.windowRows(from, t.confirmedAt)
-      const res = freezeSnapshot({
+      rows = store.windowRows(from, t.confirmedAt)
+      res = freezeSnapshot({
         root: alertsRoot, alertId: t.alertId, ruleId: t.rule.id,
         metric: alertMetricExpr(t.rule), op: t.rule.op,
         threshold: t.rule.threshold, clear: t.rule.clear,
@@ -369,6 +391,97 @@ export function apply(ctx: Context, config: Config): void {
       try { store.setAlertReport(t.alertId, 'failed', null, null) } catch { /* 连标记都失败：下面还有日志 */ }
       console.error('[pulse] 证据冻结失败 ' + t.alertId + '：' + msg)
       ledger('**冻结失败** `' + t.alertId + '` · ' + msg)
+      return
+    }
+    // A.3：digest 是「事实段」的唯一素材，无论模型开不开都落盘（证据自足、可离线复算）
+    try {
+      const digest = buildDigest({
+        alertId: t.alertId, ruleId: t.rule.id, ruleLabel: t.rule.label,
+        metric: alertMetricExpr(t.rule), op: t.rule.op,
+        threshold: t.rule.threshold, clear: t.rule.clear,
+        firstExceededAt: t.firstExceededAt, confirmedAt: t.confirmedAt, peak: t.peak,
+        meta: res.meta, snapshotHash: res.snapshotHash,
+        metrics: aggregateMetrics(rows), now: Date.now(),
+      })
+      writeFileSync(join(res.dir, 'digest.json'), JSON.stringify(digest, null, 2), 'utf8')
+      void generateReport(digest)
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      try { store.setAlertReport(t.alertId, 'failed', null, null) } catch { /* 见上 */ }
+      console.error('[pulse] digest 生成失败 ' + t.alertId + '：' + msg)
+      ledger('**报告失败** `' + t.alertId + '` · digest 生成失败：' + msg)
+    }
+  }
+
+  /**
+   * A.3：生成报告并落三处日志（台账行 / ledger.md 内联报告 / reports/<id>.md）。
+   * 门禁：默认关；关或不可用时**照样写完整事实段**，只把假设段标缺席（禁止假装有结论）。
+   */
+  async function generateReport(digest: AlertDigest): Promise<void> {
+    if (reportedIds.has(digest.alertId)) return
+    reportedIds.add(digest.alertId)
+    const facts = digestFacts(digest)
+    const target = join(reportsDir, digest.alertId + '.md')
+    let raw: string | null = null
+    let skipReason: string | null = null
+    let model: string | null = null
+    let status: 'done' | 'skipped' | 'failed' = 'skipped'
+    const picked = config.alertLlmEnabled ? pickLlm(ctx) : null
+    if (!config.alertLlmEnabled) skipReason = '门禁默认关（pulse.alertLlmEnabled=false）'
+    else if (picked === null) skipReason = '无 ctx.llm seam 或默认模型未选定'
+    else {
+      model = picked.provider + '/' + picked.model
+      const ac = new AbortController()
+      reportAborts.add(ac)
+      const timer = setTimeout(() => { ac.abort(new Error('report-timeout')) }, config.alertLlmTimeoutMs)
+      try {
+        const { system, user } = buildPrompt(digest, facts)
+        raw = await collectLlmText(picked.llm, {
+          provider: picked.provider,
+          model: picked.model,
+          system,
+          messages: [{ role: 'user', content: [{ type: 'text', text: user }] }],
+          maxTokens: config.alertLlmMaxTokens,
+          signal: ac.signal,
+        })
+        if (raw.trim() === '') { status = 'failed'; skipReason = '模型返回空文本'; raw = null } else status = 'done'
+      } catch (err) {
+        status = 'failed'
+        skipReason = err instanceof Error ? err.message : String(err)
+        raw = null
+      } finally {
+        clearTimeout(timer)
+        reportAborts.delete(ac)
+      }
+    }
+    try {
+      mkdirSync(reportsDir, { recursive: true })
+      const body = composeReport({ digest, facts, raw, skipReason, model })
+      writeFileSync(target, body, 'utf8')
+      store.setAlertReport(digest.alertId, status, model, raw === null ? null : REPORT_PROMPT_VERSION)
+      console.info('[pulse] 告警报告 ' + digest.alertId + ' → ' + status + (skipReason === null ? '' : '（' + skipReason + '）') + ' · ' + target)
+      ledger('**报告** `' + digest.alertId + '` · ' + status + (model === null ? '' : ' · ' + model) + (skipReason === null ? '' : ' · ' + skipReason))
+      // 三层日志之「ledger 内联报告」：全文投进人读台账；超长截断（全文永远在 reports/<id>.md）
+      const cap = 4000
+      appendLedgerText(ledgerPath, '\n' + (body.length > cap ? body.slice(0, cap) + '\n…（截断，全文见 reports/' + digest.alertId + '.md）\n' : body) + '\n---\n')
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      try { store.setAlertReport(digest.alertId, 'failed', model, null) } catch { /* 见上 */ }
+      console.error('[pulse] 报告落盘失败 ' + digest.alertId + '：' + msg)
+      ledger('**报告失败** `' + digest.alertId + '` · 落盘失败：' + msg)
+    }
+  }
+
+  /** 解除补记（不重复调模型；报告文件在则追加）。 */
+  function appendResultNote(t: { alertId: string; clearedAt: number; durationMs: number; peak: number; value: number }): void {
+    const target = join(reportsDir, t.alertId + '.md')
+    try {
+      if (!existsSync(target)) return
+      const note = composeResultNote({ clearedAt: t.clearedAt, durationMs: t.durationMs, peak: t.peak, value: t.value })
+      writeFileSync(target, readFileSync(target, 'utf8') + note, 'utf8')
+      appendLedgerText(ledgerPath, '\n' + note + '---\n')
+    } catch (err) {
+      console.warn('[pulse] 解除补记失败（不影响台账）：' + (err instanceof Error ? err.message : String(err)))
     }
   }
 
@@ -396,4 +509,54 @@ export function apply(ctx: Context, config: Config): void {
       } catch { return null }
     }
   }
+}
+
+// ── A.3：LLM seam 与流式取文（宿主契约 duck-type；不 import 宿主实现）──────────────
+
+/** `ctx.llm` 的最小鸭子类型：只要一个 stream()。 */
+interface LlmLike {
+  stream(options: Record<string, unknown>): AsyncIterable<{ type?: unknown; text?: unknown }>
+}
+
+/** 默认模型选择（`ctx.agentDefaultModel.currentSelection()`）。 */
+interface DefaultModelLike {
+  currentSelection?: () => { provider?: unknown; model?: unknown; reasoningEffort?: unknown }
+}
+
+export interface PickedLlm {
+  llm: LlmLike
+  provider: string
+  model: string
+  reasoningEffort: string | undefined
+}
+
+/**
+ * 取 LLM seam + 跟随默认模型（决策 D-A2）。任一缺席 → null（报告标 skipped，不编第二条通道）。
+ * 可选服务一律 `ctx.get()`（AGENTS §2：未注入的 `ctx.x` 会走 shadow 解析并抛错）。
+ */
+export function pickLlm(ctx: Context): PickedLlm | null {
+  const get = (ctx as unknown as { get?: (name: string) => unknown }).get
+  if (typeof get !== 'function') return null
+  const llm = get.call(ctx, 'llm') as LlmLike | undefined
+  if (llm === undefined || llm === null || typeof llm.stream !== 'function') return null
+  const dm = get.call(ctx, 'agentDefaultModel') as DefaultModelLike | undefined
+  const sel = dm?.currentSelection?.()
+  if (sel === undefined || typeof sel.provider !== 'string' || typeof sel.model !== 'string') return null
+  if (sel.provider === '' || sel.model === '') return null
+  return {
+    llm,
+    provider: sel.provider,
+    model: sel.model,
+    reasoningEffort: typeof sel.reasoningEffort === 'string' ? sel.reasoningEffort : undefined,
+  }
+}
+
+/** 把 stream 里的 text-delta 拼成完整文本（只认 `text-delta`；reasoning 不进报告）。 */
+export async function collectLlmText(llm: LlmLike, options: Record<string, unknown>): Promise<string> {
+  let out = ''
+  const stream = llm.stream(options)
+  for await (const chunk of stream) {
+    if (chunk !== null && typeof chunk === 'object' && chunk.type === 'text-delta' && typeof chunk.text === 'string') out += chunk.text
+  }
+  return out
 }
