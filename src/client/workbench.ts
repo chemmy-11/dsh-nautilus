@@ -1605,7 +1605,7 @@ export function AlignmentsView(props: { align: AlignmentsState | null }): ReactN
     }),
     Panel({
       title: '边界计数（正交轴）', fig: 'FIG.13',
-      note: '边界只记「有没有越界」：五类计数与 1–5 分数是两个轴，不相加、不合并。零计数照实显示。**边界计数是描述性的**——一致性三指标只基于 align、不含 boundary，此处不构成「边界一致性已被度量」的证据。',
+      note: '边界只记「有没有越界」：五类计数与 1–5 分数是两个轴，不相加、不合并。零计数照实显示。**边界计数是描述性的**——一致性三指标只基于 align、不含 boundary，此处不构成「边界一致性已被度量」的证据。**人工打分件不采集边界 → 人工侧计数恒为 none；边界轴当前只有自评侧有信息**（撤下边界的代价，照实标注）。',
       children: boundTbl,
     }),
     Panel({

@@ -540,6 +540,7 @@ test('AL.4b 源码守卫：视图不自造接口 / 术语零残留 / 自评覆�
   assert.ok(wb.includes('c.legacySelfRows'), '代际隔离必须两侧各自独立计数')
   // A7 两句诚实声明：边界是描述性的、三指标只算 align
   assert.ok(wb.includes('边界计数是描述性的'), '边界面板必须声明「描述性」')
+  assert.ok(wb.includes('人工打分件不采集边界'), 'AL.4d：边界面板必须标注「人工侧恒为 none / 边界轴只剩自评」')
   assert.ok(wb.includes('口径仅 align，不含 boundary'), '一致性面板必须声明「只算 align」')
 })
 // ── AL.4b 对齐读侧（GET /m2/alignments：契约形状 / 覆盖与一致性数字 / 路径安全）──────────
@@ -838,7 +839,7 @@ async function withClientModule(entry, fn) {
   } finally { rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }) }
 }
 
-test('AL.4c 打分件换代：SSR 可见结果（对齐文案 / 无契合 / 无 tNN / 单输入框 / 提交在 N/A 右）', async () => {
+test('AL.4c/4d 打分件：SSR 可见结果（对齐文案 / 无契合 / 无 tNN / 单输入控件 / 提交右上 / 无边界行）', async () => {
   await withClientModule('turn-annotate.ts', async ({ mod: ta, react, h }) => {
     const snap = { nodes: new Map([
       ['k2', { kind: 'turn-tail', location: { kind: 'turn', turn: { turn: 5 } }, data: { turn: 5, closing: { finalNode: { messageId: 'msg-xyz' } } } }],
@@ -850,28 +851,40 @@ test('AL.4c 打分件换代：SSR 可见结果（对齐文案 / 无契合 / 无 
     assert.ok(open.includes('对齐'), 'B1：按钮文案必须是「对齐」')
     assert.ok(!open.includes('契合'), 'B1：已废止术语「契合」不得出现')
     assert.ok(!/>t\d+</.test(open), 'B5：渲染结果不得出现 tNN 轮次角标')
-    assert.equal((open.match(/<input/g) ?? []).length, 1, 'B3：只允许一个输入框')
-    assert.ok(!open.includes('<textarea'), 'B3：textarea 必须撤除')
+    // AL.4d：仍只有一个输入控件，但由单行 input 换成 textarea（多行 + 高度翻倍）
+    assert.equal((open.match(/<textarea/g) ?? []).length, 1, 'AL.4d：只允许一个输入控件（textarea）')
+    assert.equal((open.match(/<input/g) ?? []).length, 0, 'AL.4d：单行 input 已撤（高度翻倍靠 textarea+min-height）')
     assert.ok(open.includes('>提交<'), 'B4：提交按钮文案 = 「提交」')
     assert.ok(!open.includes('提交 4'), 'B4：旧文案「提交 4」不得残留')
-    // B6：同一排（row nowrap）内 N/A 在提交左侧；边界行在下一排
-    // 注意：不能用 indexOf('边界') 当右界——主按钮 title 里就有「边界正交」，会切出错区间
+    // AL.4d：提交键移出分值排、固定浮层右上角；分值排只剩 5 档 + N/A（故一排更不会被挤压）
     const rowStart = open.indexOf('row nowrap')
     const rowEnd = open.indexOf('class="row"', rowStart + 1)
     const rowSeg = open.slice(rowStart, rowEnd > rowStart ? rowEnd : open.length)
-    assert.ok(rowSeg.includes('N/A') && rowSeg.includes('>提交<'), 'B6：N/A 与提交必须在同一排')
-    assert.ok(rowSeg.indexOf('N/A') < rowSeg.indexOf('>提交<'), 'B6：提交必须在 N/A 右侧')
-    // A3：边界五类 + 正交声明 + 非必填（默认「无」）
-    for (const s of ['边界', '替代', '占有', '强迫', '投射']) assert.ok(open.includes(s), 'A3：边界行缺 ' + s)
-    assert.ok(open.includes('与分数正交'), 'A3：边界必须声明与分数正交')
-    assert.ok(open.includes('title="N/A = 无判断对象'), 'A3：N/A 豁免提示保留')
+    assert.ok(rowSeg.includes('N/A'), '分值排必须含 N/A')
+    assert.ok(!rowSeg.includes('提交'), 'AL.4d：提交键已移出分值排（改挂浮层右上角）')
+    assert.ok(open.includes('class="opt sub"'), '提交键仍在（.opt.sub）')
+    assert.ok(open.includes('title="N/A = 无判断对象'), 'N/A 豁免提示保留')
+    // AL.4d：浮层**不再有边界行**（渲染 + 文案一并撤）——人工侧不再采集 boundary
+    for (const s of ['替代', '占有', '强迫', '投射', '与分数正交', '>边界<']) {
+      assert.ok(!open.includes(s), 'AL.4d：浮层不得再出现边界内容: ' + s)
+    }
     // B2/B7：定位与宽度按加总给定（CSS 级——几何不是 SSR 能断的）
     const src = readFileSync(join(SRC, 'client', 'turn-annotate.ts'), 'utf8')
     assert.ok(src.includes('bottom:calc(100% + 6px)'), 'B2：浮层必须置于按钮上方')
     assert.ok(!src.includes('top:calc(100% + 6px)'), 'B2：旧的「按钮下方」定位不得残留')
     assert.ok(src.includes('max-height:min(70vh,420px)'), 'B2：贴顶兜底 = 限高可滚')
-    assert.ok(src.includes('min-width:272px'), 'B7：最小宽度按加总定值（5×28 + 40 + ~38 + 24 + 20 = 262 → 272）')
+    assert.ok(src.includes('min-width:272px'), 'B7：最小宽度按加总定值（分值排 200 + 内边距边框 20 = 220 → 272 留余量）')
     assert.ok(src.includes('box-sizing:border-box'), 'B7：控件统一 border-box，宽度才可加总')
+    // AL.4d-②：提交键绝对定位右上角（top/right 各 8px）；浮层 padding-top 30px 即它的净空
+    assert.ok(/\.nt-fitpop \.opt\.sub\{position:absolute;top:8px;right:8px/.test(src), 'AL.4d：提交键必须固定右上角')
+    assert.ok(src.includes('padding:30px 9px 8px'), 'AL.4d：浮层顶部净空 30px（不压分值排与输入框）')
+    // AL.4d-③：输入框高度翻倍（改前单行 ≈27px → min-height 56px）
+    assert.ok(src.includes('min-height:56px'), 'AL.4d：输入框 min-height = 56px（改前 ≈27px 的 2 倍）')
+    assert.ok(!src.includes("type: 'text'"), 'AL.4d：单行 input 已换成多行 textarea')
+    assert.ok(!src.includes('BOUNDARY_SCALE'), 'AL.4d：边界量表常量必须撤除（UI 不采集 boundary）')
+    // 但 **body 仍必须带 boundary 键**——它是服务端「新形判据」，随 UI 一起删会让 N/A 落旧代际（下面 ③ 抓 body 验证）
+    // 必须锚到 **POST body** 那一行：缓存写入里也有一份同名表达式，只断子串会被它蒙混过去（实测踩到）
+    assert.ok(src.includes("JSON.stringify({ session, turn, boundary: body.boundary ?? 'none'"), 'AL.4d：POST body 仍须恒带 boundary 键（不得随 UI 一起删）')
     // ② 读态（A2 + v3）：**单端点** human[] 同时给「有分」与「豁免」两种行 —— 不再有第二条补充读
     const origFetch = globalThis.fetch
     let fetchedUrls = []

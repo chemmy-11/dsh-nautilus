@@ -7,8 +7,12 @@
  * 选择面板为最小中性浮层，**置于按钮上方**（B2：不遮挡会话；贴顶由 max-height + 滚动兜底）。
  * 此前 turnTail 链槽方案废弃（端上实测最新轮的 tail 不稳定出现）。
  *
- * 量表来源（AL.4c）：本文件**不写死锚文**——1–5 锚文取读侧契约 `GET /m2/alignments` 的 `scale.anchors`；
- * 边界五类与契约 `coverage.byBoundary` 枚举同源。**正交轴**：边界与分数各自落库，UI 不做任何方向的互相推导。
+ * 量表来源（AL.4c）：本文件**不写死锚文**——1–5 锚文取读侧契约 `GET /m2/alignments` 的 `scale.anchors`。
+ *
+ * 边界（AL.4d，守谷人裁决，**覆盖先前 B 方案**）：打分件**不采集 boundary**——浮层里那一行已撤。
+ * 但 POST body **仍恒带 `boundary: 'none'`**：它是服务端「新形判据」的键（`align` 或 `boundary` 键在场即判新形），
+ * 删掉会让 N/A 落回 schema_version=1 的代际错行（AL.4c 实测）。后果如实记在边界面板注记：
+ * **人工侧 boundary 恒为 none，边界轴当前只有自评侧有信息**。
  *
  * messageId → 轮序映射：`useChat` 快照扫描（SessionStandardProps 文档化 hook）——
  * 找 kind='turn-tail' 且 data.closing.finalNode.messageId === messageId 的节点，
@@ -29,14 +33,6 @@ const ALIGNMENTS_URL = '/api/nautilus/m2/alignments'
 const TURN_ANNOTATIONS_URL = '/api/nautilus/m2/turn-annotations'
 const QUOTE_MAX = 200
 const NOTE_MAX = 500
-/** 边界五类（与契约 byBoundary 枚举同源）；正交轴——只记「有没有越界」，不改分数也不由分数推导。 */
-export const BOUNDARY_SCALE: Array<{ key: string; label: string }> = [
-  { key: 'none', label: '无' },
-  { key: 'substitution', label: '替代' },
-  { key: 'possession', label: '占有' },
-  { key: 'coercion', label: '强迫' },
-  { key: 'projection', label: '投射' },
-]
 /** 契约锚文（1–5）；未加载时为空数组——选项只显档位数字，不编造锚文。 */
 export interface AnchorRow { score: number; text: string }
 
@@ -199,19 +195,22 @@ const CSS_LINES = [
   // 选择浮层：最小中性面（宿主令牌；无 Nautilus 装饰）。
   // B2：置于按钮**上方**（bottom:100%+6px，去掉 top）——不遮挡会话正文；贴顶由 max-height + 滚动兜底（不翻转，
   //     翻转会让同一控件在视口不同位置弹向两侧，用户更难预期）。
-  // B7「先量后画」：min-width 由**加总**得出，不靠目测——
-  //     5 档 × 28 + N/A 40 + 提交 ≈38 + 间距 6×4 + 内边距 9×2 + 边框 1×2 = 262 → 取 272 留字体度量余量。
-  //     （改前 min-width:230px 且控件是 content-box：档位实际 ≈42px/个 → 一排需 ≈340px，故「提交 4」被挤到第二行。）
-  '.nt-fitpop{position:absolute;bottom:calc(100% + 6px);right:0;z-index:30;display:flex;flex-direction:column;gap:6px;padding:8px 9px;border:1px solid var(--nt-border2,#c8c8c3);border-radius:8px;background:var(--dsw-alias-button-floating-fill,var(--nt-panel,#fff));box-shadow:0 6px 22px var(--nt-shadow-color,rgba(0,0,0,.16));min-width:272px;max-height:min(70vh,420px);overflow-y:auto;font-size:var(--dsh-content-font-size-secondary,13px);color:var(--nt-text,#101010)}',
+  // AL.4d「先量后画」：min-width 仍由**加总**得出——
+  //     分值排 = 5 档 × 28 + N/A 40 + 间距 5×4 = 200；＋内边距 9×2 ＋边框 1×2 = 220 → 取 272 留余量（提交键已移出该排，
+  //     故 200 落进 272−20 = 252 的内容宽里有 52px 富余，一排不会被挤压）。
+  //     顶部 30px 是给绝对定位的提交键留的净空（键高 ≈22 + 上下各 8），分值排与输入框都不会被它压住。
+  '.nt-fitpop{position:absolute;bottom:calc(100% + 6px);right:0;z-index:30;display:flex;flex-direction:column;gap:6px;padding:30px 9px 8px;border:1px solid var(--nt-border2,#c8c8c3);border-radius:8px;background:var(--dsw-alias-button-floating-fill,var(--nt-panel,#fff));box-shadow:0 6px 22px var(--nt-shadow-color,rgba(0,0,0,.16));min-width:272px;max-height:min(70vh,420px);overflow-y:auto;font-size:var(--dsh-content-font-size-secondary,13px);color:var(--nt-text,#101010)}',
   '.nt-fitpop .row{display:flex;gap:4px;flex-wrap:wrap;align-items:center}',
-  // B6：档位 + N/A + 提交必须同排（nowrap）；宽度不够时由 min-width 保证，不靠换行兜底
+  // AL.4d：档位 + N/A 同排（提交键已移出此排，见 .sub）
   '.nt-fitpop .row.nowrap{flex-wrap:nowrap}',
   '.nt-fitpop .opt{box-sizing:border-box;min-width:28px;padding:4px 6px;border:1px solid var(--nt-border2,#c8c8c3);border-radius:6px;background:transparent;color:inherit;font-size:12px;line-height:1;cursor:pointer;font-variant-numeric:tabular-nums}',
   '.nt-fitpop .opt:hover{border-color:var(--nt-faint,#9a9a95)}',
   '.nt-fitpop .opt.on{border-color:var(--nt-accent,#e6321e);color:var(--nt-accent,#e6321e);font-weight:700}',
   '.nt-fitpop .opt.na{min-width:40px}',
-  '.nt-fitpop .opt.sub{min-width:0;padding:4px 9px}',
-  '.nt-fitpop .inp{width:100%;box-sizing:border-box;border:1px solid var(--nt-border2,#c8c8c3);border-radius:6px;background:transparent;color:inherit;font:inherit;font-size:12px;padding:5px 6px}',
+  // AL.4d：提交键固定在浮层右上角（不占分值排的宽度）；浮层 padding-top 30px 即它的净空
+  '.nt-fitpop .opt.sub{position:absolute;top:8px;right:8px;min-width:0;padding:4px 9px}',
+  // AL.4d：输入框高度翻倍（改前单行 input ≈27px → 改后 56px）——多行以便引文可读，仍只此一个输入控件
+  '.nt-fitpop .inp{width:100%;box-sizing:border-box;min-height:56px;line-height:1.45;resize:vertical;border:1px solid var(--nt-border2,#c8c8c3);border-radius:6px;background:transparent;color:inherit;font:inherit;font-size:12px;padding:5px 6px}',
   '.nt-fitpop .err{color:var(--nt-accent,#e6321e);font-size:11px}',
   '.nt-fitpop .hint{color:var(--nt-faint,#9a9a95);font-size:10.5px}',
 ]
@@ -243,7 +242,6 @@ export function TurnFitAction(props: TurnFitActionProps): ReactNode {
   useEffect(() => { ensureAlignLoaded() }, [])
   const [open, setOpen] = useState(props.defaultOpen === true)
   const [score, setScore] = useState<number | null>(null)
-  const [boundary, setBoundary] = useState('none')
   const [text, setText] = useState('')
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState<string | null>(null)
@@ -264,16 +262,15 @@ export function TurnFitAction(props: TurnFitActionProps): ReactNode {
     if (!r.ok) { setErr(errText(r.error ?? '未知错误')); return }
     setText('')
     setScore(null)
-    setBoundary('none')
     setOpen(false)
   }
   const submitScore = (): void => {
     if (!canSubmit || score === null) return
     const t = text.trim()
+    // AL.4d：UI 不采集 boundary——不在 body 里传它，交给 postHumanAlign 恒填 'none'
+    //（服务端「新形判据」靠这个键，不能连它一起删）。
     void submit({
       align: score,
-      // 正交：边界独立落库——标了「占有」不回改分数，改分数也不清边界
-      boundary,
       quote: quoteRequired ? t.slice(0, QUOTE_MAX) : undefined,
       note: quoteRequired || t === '' ? undefined : t.slice(0, NOTE_MAX),
     })
@@ -286,7 +283,13 @@ export function TurnFitAction(props: TurnFitActionProps): ReactNode {
       : createElement('span', null, '对齐', createElement('span', { className: 'nv' }, String(row.align) + (row.origin === 'sample' ? '样' : '')))
   const pop = open
     ? createElement('div', { className: 'nt-fitpop', role: 'menu' },
-      // 第一排（B6）：1–5 档 + N/A + 提交，同排不换行；N/A 仍是「一点即豁免」
+      // AL.4d：提交键固定右上角（绝对定位；浮层 padding-top:30px 是它的净空，不压分值排与输入框）
+      createElement('button', {
+        className: 'opt sub', disabled: !canSubmit,
+        title: quoteRequired ? '4/5 档必附引文后才能提交' : '提交本轮判读',
+        onClick: submitScore,
+      }, '提交'),
+      // 第一排（B6/AL.4d）：1–5 档 + N/A 同排不换行；N/A 仍是「一点即豁免」
       createElement('div', { className: 'row nowrap' },
         ...[1, 2, 3, 4, 5].map((n) => createElement('button', {
           key: 'a' + String(n), className: 'opt' + (score === n ? ' on' : ''),
@@ -296,25 +299,12 @@ export function TurnFitAction(props: TurnFitActionProps): ReactNode {
           className: 'opt na' + (row !== undefined && row.exempt === 1 ? ' on' : ''),
           title: 'N/A = 无判断对象（纯操作性指令轮）→ 豁免，不进分母', disabled: busy, onClick: onExempt,
         }, 'N/A'),
-        createElement('button', {
-          className: 'opt sub', disabled: !canSubmit,
-          title: quoteRequired ? '4/5 档必附引文后才能提交' : '提交本轮判读',
-          onClick: submitScore,
-        }, '提交'),
       ),
-      // 第二排：边界（可选，默认「无」；非必填——纯操作性轮走 N/A 豁免，不被必填堵死）
+      // 第二排（B3/AL.4d）：**单一输入控件**，高度翻倍（min-height 56px ≈ 改前 27px 的 2 倍）；
+      // 4/5 走引文、1–3 走一句话理由，提交时映射到服务端两列
       createElement('div', { className: 'row' },
-        createElement('span', { className: 'hint' }, '边界'),
-        ...BOUNDARY_SCALE.map((b) => createElement('button', {
-          key: b.key, className: 'opt' + (boundary === b.key ? ' on' : ''),
-          title: '与分数正交：只记有没有越界（' + b.label + '），不改分数也不由分数推导',
-          disabled: busy, onClick: () => setBoundary(b.key),
-        }, b.label)),
-      ),
-      // 第三排（B3）：**单一输入框**——4/5 走引文、1–3 走一句话理由，提交时映射到服务端两列
-      createElement('div', { className: 'row' },
-        createElement('input', {
-          className: 'inp', type: 'text', maxLength: quoteRequired ? QUOTE_MAX : NOTE_MAX,
+        createElement('textarea', {
+          className: 'inp', rows: 2, maxLength: quoteRequired ? QUOTE_MAX : NOTE_MAX,
           placeholder: quoteRequired ? '4/5 必附引文：我引用 / 追问 / 改道于哪句？（≤200 字）' : '一句话理由（可空）',
           value: text, onChange: (e: { target: { value: string } }) => setText(e.target.value),
         })),
@@ -325,7 +315,7 @@ export function TurnFitAction(props: TurnFitActionProps): ReactNode {
     createElement('button', {
       className: 'nt-fitact', 'data-marked': row === undefined ? '0' : '1',
       'data-session': props.sessionId, 'data-turn': String(turnNo),
-      title: '对齐：守谷人对本轮的人工判读（1–5 档锚定 · 边界正交 · N/A 豁免）',
+      title: '对齐：守谷人对本轮的人工判读（1–5 档锚定 · N/A 豁免）',
       onClick: () => { setOpen((v) => !v); setErr(null) },
     }, label),
     pop,

@@ -139,6 +139,8 @@ receive     INTEGER CHECK (receive IN (0,1,2))            -- 预留未启用（O
 | 增 | 一个「**对齐**」视图：双路台账（人工/自评）+ 分布 + 一致性 + boundary 计数 + 版本号 |
 | 留 | 未命中率/时长/tps 等曲线**全留**（A 投影只作对照读数）；`analysis`（白盒 τ_e/形态）保留（曲线与报告仍用） |
 
+**AL.4d（2026-09-28 守谷人裁决，覆盖 §6.1 的 B 方案）**：打分件撤下边界行——**人工侧不采集 boundary**，故边界轴的**人工计数恒为 none、只剩自评侧有信息**（`byBoundary` 如实呈现这一非对称）；POST body 仍带 `boundary:'none'` 作服务端新形判据。
+
 ### 6.1 AL.4 交接给 UI 线（2026-09-28 守谷人「UI 线已指派」）
 
 **动工前置**：UI 线的检出在 `feat/ui`，而 AL.1/AL.2/AL.6a 落在 `feat/nautilus`（origin tip `b2087d6`）。
