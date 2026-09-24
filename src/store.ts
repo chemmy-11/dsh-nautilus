@@ -921,7 +921,7 @@ export class NautilusStore {
 
   /**
    * 对齐分布与边界计数（AL.5 一致性对照的输入）。
-   * `legacyFitRows` = 旧 0–4 契合行（`schema_version=1`）——**与新量表分层，永不合并统计**（诚实边界 3）。
+   * `legacyFitRows` = 旧代际对齐行（原 fit 0–4 尺，`schema_version=1`）——**与新量表分层，永不合并统计**（诚实边界 3）。
    */
   turnAlignmentCoverage(): {
     total: number; aligned: number; exempted: number; legacyFitRows: number

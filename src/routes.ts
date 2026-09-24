@@ -10,8 +10,10 @@
  * POST /api/nautilus/selfcheck      → 外部 harness 自评 ingest（token 门，默认关；S1.1 通道 + AL.3 双形：
  *                                      旧形 clarity/defense/declaration 与新形 align/boundary 同门，硬门与校验在共享 ingest）
  * GET  /api/nautilus/m2/turn-annotations   → T 系列逐轮人工标注清单 + spot/sample 双口径覆盖
- * POST /api/nautilus/m2/turn-annotations   → 标注 upsert（origin 服务端判定；fit=4 必附引文；无原文拒）
- * GET  /api/nautilus/m2/alignments   → AL.4b 对齐读侧：双路台账（人工 align + 自评 align）+ 覆盖 + 一致性（v2：含留出集；只 GET）
+ * POST /api/nautilus/m2/turn-annotations   → 标注 upsert **双形**（AL.4，不新开端点）：body 存在 `align` 键（含显式 null）
+ *                                            或 `boundary` 键 → 对齐量表 1–5（align≥4 必附引文；align:null + exempt:1 = N/A 豁免）；
+ *                                            否则旧 fit 0–4 路**逐字不变**。两形同门：无原文拒 + origin 服务端判定。
+ * GET  /api/nautilus/m2/alignments   → AL.4b 对齐读侧：双路台账（人工 align + 自评 align）+ 覆盖 + 一致性（v3：留出集 + human[] 收豁免行；只 GET）
  * Same-origin marker guard; registered as effect.（/selfcheck 例外：调用方非浏览器，以 token 为门。）
  */
 import type { IncomingMessage, ServerResponse } from 'node:http'
@@ -19,7 +21,8 @@ import type { WebRoute } from '@deepseek-ai/dsh-host-webserver'
 import type { NautilusStore } from './store.js'
 import { analyze } from './nexus/analysis.js'
 import { ALIGN_ANCHORS } from './nexus/selfcheck.js'
-import { ingestSelfCheck, QUOTE_MAX, RUBRIC_VERSION, SCHEMA_VERSION_ALIGN } from './nexus/selfcheck-ingest.js'
+import { ingestSelfCheck, ALIGN_MAX, ALIGN_MIN, BOUNDARIES, QUOTE_MAX, RUBRIC_VERSION, SCHEMA_VERSION_ALIGN } from './nexus/selfcheck-ingest.js'
+import type { Boundary } from './nexus/selfcheck-ingest.js'
 import { pairAlignments, consistencyOf, MIN_PAIRS } from './nexus/consistency.js'
 
 /** 集中常量：路由前缀（AGENTS.md §1-4）。 */
@@ -172,7 +175,8 @@ export function registerNautilusRoutes(ctx: { webServer: { register(route: WebRo
     },
   }
 
-  // T 系列：逐轮人工标注（契合 · 混合入口；决策 D-T3）。同源门（守谷人 / 工作台专用）。
+  // T 系列：逐轮人工标注（对齐 · 混合入口；决策 D-T3）；AL.4 起双形（align 1–5 与旧 fit 0–4 同门）。
+  // 同源门（守谷人 / 工作台专用）。
   // 语义校验在落库前做完——库里 CHECK 只是最后一道墙，不是第一道。
   const NOTE_MAX = 500
   const turnAnnotations: WebRoute = {
@@ -187,6 +191,7 @@ export function registerNautilusRoutes(ctx: { webServer: { register(route: WebRo
       if (req.method !== 'POST') return json(res, 405, { ok: false, error: 'method-not-allowed' })
       const body = await readJson(req) as {
         session?: unknown; turn?: unknown; fit?: unknown; exempt?: unknown; quote?: unknown; note?: unknown
+        align?: unknown; boundary?: unknown
       } | null
       if (body === null || typeof body !== 'object' || Array.isArray(body)) return json(res, 400, { ok: false, error: 'bad-json' })
       const session = typeof body.session === 'string' ? body.session.trim() : ''
@@ -194,6 +199,52 @@ export function registerNautilusRoutes(ctx: { webServer: { register(route: WebRo
       if (session === '' || session.length > 160 || turn === null) return json(res, 400, { ok: false, error: 'invalid:session_or_turn' })
       // 被标轮次的原文必须在场（锁版口径 §3：不让人对着摘要打五分制）
       if (deps.store.getTurnText(session, turn) === null) return json(res, 400, { ok: false, error: 'no-turn-text' })
+
+      // ── 新形（AL.4：对齐量表 1–5 + 四边界 = 自评侧同一把尺子）──────────────────────
+      // 判据 = body 里**存在** `align` 键（含显式 null）**或** `boundary` 键——不是「align 非空」：
+      // N/A 豁免由客户端发 `align:null + exempt:1 + boundary`，只认「align 非空」会把它误判成旧形
+      // → 落 schema_version=1 行 → 既不进 exempted、又混进 legacyFitRows（代际错判）。
+      // 硬门与枚举常量一律取共享 ingest 那几份（红线 4：集中常量，不写第二套字面量）。
+      if (Object.prototype.hasOwnProperty.call(body, 'align') || Object.prototype.hasOwnProperty.call(body, 'boundary')) {
+        const align = typeof body.align === 'number' && Number.isInteger(body.align)
+          && body.align >= ALIGN_MIN && body.align <= ALIGN_MAX ? body.align : null
+        if (body.align !== undefined && body.align !== null && align === null) return json(res, 400, { ok: false, error: 'invalid:align' })
+        const exempt = body.exempt === 1 || body.exempt === true ? 1 : 0
+        // 与 v8 CHECK 同构：有分与豁免恰好二分（align NULL ⟺ exempt=1），谁也不许兼得
+        if ((align === null) !== (exempt === 1)) return json(res, 400, { ok: false, error: 'invalid:align-xor-exempt' })
+        let boundary: Boundary = 'none'
+        if (body.boundary !== undefined && body.boundary !== null) {
+          if (typeof body.boundary !== 'string' || !(BOUNDARIES as readonly string[]).includes(body.boundary)) {
+            return json(res, 400, { ok: false, error: 'invalid:boundary' })
+          }
+          boundary = body.boundary as Boundary
+        }
+        let quote: string | null = null
+        if (body.quote !== undefined && body.quote !== null) {
+          if (typeof body.quote !== 'string') return json(res, 400, { ok: false, error: 'invalid:quote' })
+          const q = body.quote.trim()
+          if (q !== '') {
+            if (q.length > QUOTE_MAX) return json(res, 400, { ok: false, error: 'quote-too-long' })
+            quote = q
+          }
+        }
+        // 签-2 硬门（与自评 ingest 同码同义）：align≥4 无引文即拒、**零写入**；引文只在 4/5 有语义
+        if (align !== null && align >= 4 && quote === null) return json(res, 400, { ok: false, error: 'align-quote-required' })
+        if (align === null || align < 4) quote = null
+        let note: string | null = null
+        if (body.note !== undefined && body.note !== null) {
+          if (typeof body.note !== 'string') return json(res, 400, { ok: false, error: 'invalid:note' })
+          const t = body.note.trim()
+          if (t !== '') note = t.length > NOTE_MAX ? t.slice(0, NOTE_MAX) : t
+        }
+        // origin 服务端判定（同一口径、同一次队列回填）：未完成队列命中 = sample，否则 spot
+        const origin = deps.store.resolveAnnotationOrigin(session, turn)
+        const result = deps.store.upsertTurnAlignment({ session, turn, align, exempt, boundary, quote, note, origin })
+        json(res, 200, { ok: true, origin, result, overwritten: result === 'overwritten' })
+        return
+      }
+
+      // ── 旧形（fit 0–4）：改造前行为**逐字保留**（老调用方不断线）────────────────────
       const exempt = body.exempt === 1 || body.exempt === true ? 1 : 0
       const fit = typeof body.fit === 'number' && Number.isInteger(body.fit) && body.fit >= 0 && body.fit <= 4 ? body.fit : null
       if ((fit === null) !== (exempt === 1)) return json(res, 400, { ok: false, error: 'invalid:fit-xor-exempt' })
@@ -222,7 +273,9 @@ export function registerNautilusRoutes(ctx: { webServer: { register(route: WebRo
   }
 
   // AL.4b：对齐读侧（双路台账 = 人工 turn_annotation.align + 自评 selfcheck_record.align）。
-  // 契约 v2（UI 线已按 v1 写好视图，只增量读这几个新字段；**形状只加不改**——不改名、不删字段）：
+  // 契约 v3（**只加不改**——v1/v2 的字段名 / 类型 / 单位一字不动，UI 线已按它们写好视图）：
+  //   v2 增量 = scale.{rubricVersion,anchors,min} + coverage 三字段 + consistency.holdout；
+  //   v3 增量 = human[] **收豁免行**（`align:null, exempt:1`，其余字段照旧；见下文「口径纪律」第二条）。
   //   { revision, scale:{schemaVersion,rubricVersion,anchors[{score,text}],min},
   //     coverage:{humanTotal,humanAligned,exempted,legacyFitRows,byAlign{1..5},byBoundary{5 枚举},
   //               selfTotal,selfAligned,selfRatio,selfByAlign{1..5},legacySelfRows},
@@ -230,10 +283,14 @@ export function registerNautilusRoutes(ctx: { webServer: { register(route: WebRo
   //     self:[{extRef,turnOrdinal,align,boundary,declaration,quote,evidence,rubricVersion,tsMs,agent}],
   //     consistency:{pairs,exact,near,kappa,holdout:{pairs,exact,near,kappa}} | null }
   // 口径纪律：
-  //   · human 只出 align 非空行；self 只出 align 非空 ∧ source_kind=dsh_tool ∧ rubric_version=al-v1 的行
+  //   · human 出**全部新量表行**（有分 + 豁免，`schemaVersion ≥ 2`）；v3 起豁免行（`align:null, exempt:1`）
+  //     也在数组里——只给有分行会让已标 N/A 的轮次在 UI 上退回「未标注」，那是**静默丢状态**（UI 线实测）；
+  //     self 只出 align 非空 ∧ source_kind=dsh_tool ∧ rubric_version=al-v1 的行
   //     （旧代际 align NULL 与早于 al-v1 的对齐行都不出场，§9.3）；
-  //   · humanTotal = **新量表**人工行数（有分 + 豁免；v8 CHECK 保证二者恰好二分）= aligned + exempted；
-  //     旧契合行不进它、也不进 byAlign/byBoundary/humanAligned，只由 legacyFitRows 单列（分层不混算，§9.3）——
+  //   · humanTotal = **新量表**人工行数（有分 + 豁免；v8 CHECK 保证二者恰好二分）= aligned + exempted
+  //     = `human[].length`（v3 起两者同集合）；humanAligned 仍只数 align NOT NULL 的行、exempted 语义不变；
+  //     旧代际对齐行（`schema_version=1` 的 0–4 旧尺）不进它、也不进 byAlign/byBoundary/humanAligned，
+  //     只由 legacyFitRows 单列（分层不混算，§9.3）——
   //     与 UI 线已落地的 AlignmentsView fixture 读法一致（humanTotal 7 = humanAligned 6 + exempted 1，旧行 3 另计）；
   //   · v2 新增：selfTotal = turn_read 的全局轮数（与 /m2/state 的 totals.turns 同式——同源、不加 root），
   //     作自评覆盖率的分母；selfRatio = selfAligned / selfTotal，**selfTotal=0 → null**（0/0 报 0 是假读数）；
@@ -252,11 +309,13 @@ export function registerNautilusRoutes(ctx: { webServer: { register(route: WebRo
       if (req.method !== 'GET') return json(res, 405, { ok: false, error: 'method-not-allowed' })
       if (!browserSameOriginMarker(req)) return json(res, 403, { ok: false, error: 'forbidden' })
       const cov = deps.store.turnAlignmentCoverage()
-      const human = deps.store.listTurnAlignments().filter((a): a is typeof a & { align: number } => a.align !== null)
+      // v3：human[] = **全部新量表行**（有分 + 豁免）——旧代际（schema_version=1）不出场，只由 legacyFitRows 计数。
+      const human = deps.store.listTurnAlignments().filter((a) => a.schemaVersion >= 2 && (a.align !== null || a.exempt === 1))
       // v2 过滤三件套一次到位：通道(dsh_tool) + align 非空 + 当期 rubric 版本——代际行只进 legacySelfRows 计数
       const self = deps.store.listSelfAlignments('dsh_tool', RUBRIC_VERSION)
       const selfByAlign: Record<string, number> = { '1': 0, '2': 0, '3': 0, '4': 0, '5': 0 }
       for (const s of self) selfByAlign[String(s.align)] = (selfByAlign[String(s.align)] ?? 0) + 1
+      // 豁免行（align null）在 pairAlignments 内部即被跳过——v3 放宽 human[] 不动配对与三指标
       const consistency = consistencyOf(pairAlignments(human, self))
       // 自评覆盖率的分母：turn_read 全局轮数（/m2/state 的 totals.turns 同式，无 root 过滤）
       const selfTotal = deps.store.turnTotals().turns
