@@ -9,6 +9,9 @@
  *  · AL.4b 对齐读侧：GET /m2/alignments 契约形状 / 同源门与方法门 / 覆盖与一致性数字 / 口径单点守卫；
  *    v2 增量：scale.min（阈值单点）· selfTotal/selfRatio（selfTotal=0 → null）· legacySelfRows（与 human 侧各自独立计数）·
  *    consistency.holdout（与 AL.5 脚本同库逐字相同）· self[] 只含 al-v1 行（代际行只计数）。
+ *  · AL.4 写路径：POST /m2/turn-annotations 双形（body 有 align/boundary 键 → 对齐 1–5 与豁免；否则旧 fit 0–4
+ *    逐字不变）· 硬门零写入（align≥4 无引文）· 新量表豁免判据（不再掉进 legacyFitRows 的代际错判）·
+ *    契约 v3 的 human[] 收豁免行（humanAligned/exempted 语义不变）。
  * 已知例外（记在案）：`../store.js` 允许 nexus import——数据核心仍共享，真正抽离属 OQ-AL4。
  */
 import { test } from 'node:test'
@@ -539,6 +542,7 @@ test('AL.4b 源码守卫：视图不自造接口 / 术语零残留 / 自评覆�
 // ── AL.4b 对齐读侧（GET /m2/alignments：契约形状 / 覆盖与一致性数字 / 路径安全）──────────
 
 const ALIGN_PATH = '/api/nautilus/m2/alignments'
+const TURN_ANNOTATIONS_PATH = '/api/nautilus/m2/turn-annotations'
 const TOP_KEYS = ['consistency', 'coverage', 'human', 'revision', 'scale', 'self']
 const HUMAN_KEYS = ['align', 'annotatedAt', 'boundary', 'exempt', 'note', 'origin', 'quote', 'schemaVersion', 'session', 'turn', 'updatedAt']
 const SELF_KEYS = ['agent', 'align', 'boundary', 'declaration', 'evidence', 'extRef', 'quote', 'rubricVersion', 'tsMs', 'turnOrdinal']
@@ -546,8 +550,9 @@ const SELF_KEYS = ['agent', 'align', 'boundary', 'declaration', 'evidence', 'ext
 /**
  * 真实装配：临时 DSH_HOME + 真 ctx.plugin（不手挂路由——手动挂载绕过的正是 postmortem 0001 崩掉的那条路径）。
  * seed 在装配前落库（apply 自己会开同一个库文件）。
+ * call 打**任意已注册路由**（path 指定；body 走同一只读流）——AL.4 写路径（POST）与读侧共用这一条真实装配。
  */
-async function mountAlignRoutes(seed) {
+async function mountApi(seed) {
   const { Context } = await import('@deepseek-ai/cordis')
   const tmp = tmpDir('nautilus-al4b-')
   const prevHome = process.env.DSH_HOME
@@ -562,20 +567,20 @@ async function mountAlignRoutes(seed) {
   const fiber = ctx.plugin(mod, { pulse: { enabled: false } })
   const deadline = Date.now() + 5000
   while (Date.now() < deadline && !routes.has(ALIGN_PATH)) await new Promise((r) => setTimeout(r, 25))
-  const route = routes.get(ALIGN_PATH)
-  assert.equal(typeof route?.handler, 'function', 'AL.4b 路由必须注册：' + ALIGN_PATH)
-  const call = async (method, { sameOrigin = true, url = ALIGN_PATH } = {}) => {
-    const h = routes.get(ALIGN_PATH).handler
+  const call = async (method, { path = ALIGN_PATH, sameOrigin = true, url = path, body } = {}) => {
+    const h = routes.get(path)?.handler
+    assert.equal(typeof h, 'function', '路由必须注册：' + path)
     const r = new Readable({ read() {} })
     r.method = method
     r.url = url
     r.headers = sameOrigin ? { 'sec-fetch-site': 'same-origin' } : {}
+    if (body !== undefined) r.push(Buffer.from(typeof body === 'string' ? body : JSON.stringify(body), 'utf8'))
     r.push(null)
     const res = { statusCode: 0, body: null, writeHead(s) { this.statusCode = s }, end(t) { this.body = JSON.parse(String(t ?? '{}')) } }
     h(r, res)
     const dl = Date.now() + 3000
     while (Date.now() < dl && res.statusCode === 0) await new Promise((x) => setTimeout(x, 10))
-    assert.notEqual(res.statusCode, 0, '路由未在 3s 内响应（挂起）')
+    assert.notEqual(res.statusCode, 0, '路由未在 3s 内响应（挂起）：' + path)
     return res
   }
   const close = async () => {
@@ -584,7 +589,15 @@ async function mountAlignRoutes(seed) {
     else process.env.DSH_HOME = prevHome
     cleanup(tmp)
   }
-  return { call, close, routes, route, file }
+  return { call, close, routes, file }
+}
+
+/** AL.4b 读侧装配：固定打 /m2/alignments（既有用例的 call 形状保持不变）。 */
+async function mountAlignRoutes(seed) {
+  const m = await mountApi(seed)
+  const route = m.routes.get(ALIGN_PATH)
+  assert.equal(typeof route?.handler, 'function', 'AL.4b 路由必须注册：' + ALIGN_PATH)
+  return { ...m, route, call: (method, opts) => m.call(method, { ...opts, path: ALIGN_PATH }) }
 }
 
 test('AL.4b 路由门与空库：同源 403 / 非 GET 405 / 空库结构齐备（consistency=null）', async () => {
@@ -696,7 +709,9 @@ test('AL.4b 预置双路样本：覆盖数字正确（legacyFitRows 分层不混
     assert.equal(cov.legacyFitRows, 1, 'human 侧旧契合行数不变')
     assert.notEqual(cov.legacySelfRows, cov.legacyFitRows, '两侧旧代际**各自独立计数**（不混算、不互相推算）')
     // 双路台账
-    assert.equal(g.body.human.length, 4, 'human 只出 align 非空行（豁免行与旧行不出）')
+    assert.equal(g.body.human.length, 5, 'v3：human[] 出**全部新量表行**（4 有分 + 1 豁免）；旧代际行不出场')
+    assert.equal(g.body.human.filter((r) => r.align === null).length, 1, 'v3：豁免行以 align:null 入场（其余字段照旧）')
+    assert.equal(g.body.human.length, cov.humanTotal, 'v3：human[] 与 humanTotal 同集合（旧代际仍只算 legacyFitRows）')
     assert.deepEqual(Object.keys(g.body.human[0]).sort(), HUMAN_KEYS, 'human 行契约形状')
     assert.equal(g.body.self.length, 4)
     assert.deepEqual(Object.keys(g.body.self[0]).sort(), SELF_KEYS, 'self 行契约形状')
@@ -899,5 +914,165 @@ test('AL.4c 术语守卫（全量）：src/client 五文件不得出现已废止
   assert.ok(ta.includes('postHumanAlign'), '写路径必须换成对齐语义的函数')
   assert.ok(ta.includes('{ exempt: 1 }'), 'N/A 豁免路径保留（仅 exempt → 旧形豁免分支）')
   assert.ok(!ta.includes('invalid:align='), '不得编造契约外的错误码映射')
+})
+
+// ── AL.4 写路径（POST /m2/turn-annotations 双形同门）────────────────────────────
+
+/** 直读落库列值（外部世界断言：不信路由自报的 result）。 */
+function rawAnnotation(file, session, turn) {
+  const db = new DatabaseSync(file)
+  try {
+    return db.prepare(`SELECT align, fit, exempt, boundary, quote, note, origin, schema_version, align_prev, fit_prev
+      FROM turn_annotation WHERE session = ? AND turn = ?`).get(session, turn)
+  } finally { db.close() }
+}
+
+test('AL.4 写路径双形：带 align → schema_version=2 行；align=4 无引文 → 400 零写入；不带 align 的旧形逐字回归', async () => {
+  const m = await mountApi((s) => {
+    for (let t = 1; t <= 7; t++) s.upsertUserText('s-1', t, '第 ' + String(t) + ' 轮原文')
+    s.insertSampleBatch([{ batchId: 'b-al4', session: 's-1', turn: 5, kind: 'sample', strata: 'w=test' }])
+  })
+  try {
+    // 门序回归①：非同源 403（新形同门，不是新出口）
+    const foreign = await m.call('POST', { path: TURN_ANNOTATIONS_PATH, sameOrigin: false, body: { session: 's-1', turn: 1, align: 3 } })
+    assert.equal(foreign.statusCode, 403); assert.equal(foreign.body.error, 'forbidden')
+    // 门序回归②：无 turn_text 原文即拒（新形也走同一条原文门——不让人对着摘要打五分制）
+    const noText = await m.call('POST', { path: TURN_ANNOTATIONS_PATH, body: { session: 's-1', turn: 99, align: 3 } })
+    assert.equal(noText.statusCode, 400); assert.equal(noText.body.error, 'no-turn-text')
+
+    // ① 新形（带 align + boundary）→ schema_version=2 行
+    const a3 = await m.call('POST', { path: TURN_ANNOTATIONS_PATH, body: { session: 's-1', turn: 1, align: 3, boundary: 'substitution', note: '顺了一层' } })
+    assert.equal(a3.statusCode, 200)
+    assert.deepEqual({ ok: a3.body.ok, origin: a3.body.origin, result: a3.body.result }, { ok: true, origin: 'spot', result: 'inserted' })
+    assert.deepEqual(Object.keys(a3.body).sort(), ['ok', 'origin', 'overwritten', 'result'], '两形响应形状一致（未新增字段）')
+    const row1 = rawAnnotation(m.file, 's-1', 1)
+    assert.deepEqual(
+      { align: row1.align, fit: row1.fit, exempt: row1.exempt, boundary: row1.boundary, quote: row1.quote, schema_version: row1.schema_version },
+      { align: 3, fit: null, exempt: 0, boundary: 'substitution', quote: null, schema_version: 2 },
+      '新形落 schema_version=2 行（fit 保持 NULL——代际分层）')
+
+    // ② 硬门：align=4 无引文 → 400 align-quote-required 且**零写入**
+    const a4 = await m.call('POST', { path: TURN_ANNOTATIONS_PATH, body: { session: 's-1', turn: 2, align: 4 } })
+    assert.equal(a4.statusCode, 400); assert.equal(a4.body.error, 'align-quote-required')
+    assert.equal(rawAnnotation(m.file, 's-1', 2), undefined, '硬门零写入（不是先写后拒）')
+
+    // ③ 4/5 带引文 → 收（引文原样落库）
+    const a5 = await m.call('POST', { path: TURN_ANNOTATIONS_PATH, body: { session: 's-1', turn: 3, align: 5, boundary: 'projection', quote: '「他引用了这句」' } })
+    assert.equal(a5.statusCode, 200)
+    const row3 = rawAnnotation(m.file, 's-1', 3)
+    assert.deepEqual({ align: row3.align, quote: row3.quote, boundary: row3.boundary, schema_version: row3.schema_version }, { align: 5, quote: '「他引用了这句」', boundary: 'projection', schema_version: 2 })
+
+    // ④ 旧形逐字回归：不带 align/boundary 键 → fit 0–4 路，落 schema_version=1
+    const f3 = await m.call('POST', { path: TURN_ANNOTATIONS_PATH, body: { session: 's-1', turn: 4, fit: 3, note: '推进了问题' } })
+    assert.equal(f3.statusCode, 200)
+    const row4 = rawAnnotation(m.file, 's-1', 4)
+    assert.deepEqual(
+      { fit: row4.fit, align: row4.align, exempt: row4.exempt, boundary: row4.boundary, note: row4.note, schema_version: row4.schema_version },
+      { fit: 3, align: null, exempt: 0, boundary: 'none', note: '推进了问题', schema_version: 1 },
+      '旧形落 schema_version=1 行——代际分层与列值逐字不变')
+    // 旧形 xor 门逐字不变（fit 与 exempt 必须二选一）
+    const xor = await m.call('POST', { path: TURN_ANNOTATIONS_PATH, body: { session: 's-1', turn: 4, fit: 3, exempt: 1 } })
+    assert.equal(xor.statusCode, 400); assert.equal(xor.body.error, 'invalid:fit-xor-exempt')
+
+    // ⑤ 门序回归③：队列命中 → origin 服务端判 sample，并回填 annotated_at（两形同一口径）
+    const smp = await m.call('POST', { path: TURN_ANNOTATIONS_PATH, body: { session: 's-1', turn: 5, align: 2, boundary: 'none' } })
+    assert.equal(smp.statusCode, 200); assert.equal(smp.body.origin, 'sample')
+    const db = new DatabaseSync(m.file)
+    try {
+      const q = db.prepare('SELECT annotated_at FROM annotation_sample WHERE session = ? AND turn = 5').get('s-1')
+      assert.notEqual(q.annotated_at, null, '队列命中回填 annotated_at')
+    } finally { db.close() }
+
+    // ⑥ 新形语义门（全部 400 且零写入）：越界 / align NULL 非豁免 / boundary 枚举
+    for (const [body, code] of [
+      [{ session: 's-1', turn: 6, align: 6 }, 'invalid:align'],
+      [{ session: 's-1', turn: 6, align: 0 }, 'invalid:align'],
+      [{ session: 's-1', turn: 6, boundary: 'none' }, 'invalid:align-xor-exempt'],
+      [{ session: 's-1', turn: 6, align: 3, boundary: 'weird' }, 'invalid:boundary'],
+    ]) {
+      const r = await m.call('POST', { path: TURN_ANNOTATIONS_PATH, body })
+      assert.equal(r.statusCode, 400, '必须 400：' + JSON.stringify(body))
+      assert.equal(r.body.error, code, '错误码：' + JSON.stringify(body))
+    }
+    assert.equal(rawAnnotation(m.file, 's-1', 6), undefined, '语义门全部零写入')
+
+    // ⑦ 分支优先级：带 align 即新形——旧 fit 字段被忽略、不落库（不产生两代混装行）
+    const mix = await m.call('POST', { path: TURN_ANNOTATIONS_PATH, body: { session: 's-1', turn: 7, align: 3, fit: 2 } })
+    assert.equal(mix.statusCode, 200)
+    const row7 = rawAnnotation(m.file, 's-1', 7)
+    assert.deepEqual({ align: row7.align, fit: row7.fit, schema_version: row7.schema_version }, { align: 3, fit: null, schema_version: 2 })
+  } finally { await m.close() }
+})
+
+test('AL.4 新量表豁免：有 align/boundary 键 → schema_version=2 豁免行 + 进 exempted 且不进 legacyFitRows', async () => {
+  const m = await mountApi((s) => {
+    for (let t = 1; t <= 3; t++) s.upsertUserText('s-1', t, '原文 ' + String(t))
+  })
+  try {
+    // ① N/A 的实际客户端形状（align:null + exempt:1 + boundary）——旧判据会误判成旧形，此处必须进新量表
+    const na = await m.call('POST', { path: TURN_ANNOTATIONS_PATH, body: { session: 's-1', turn: 1, align: null, exempt: 1, boundary: 'none' } })
+    assert.equal(na.statusCode, 200); assert.equal(na.body.result, 'inserted')
+    const row1 = rawAnnotation(m.file, 's-1', 1)
+    assert.deepEqual(
+      { align: row1.align, fit: row1.fit, exempt: row1.exempt, boundary: row1.boundary, schema_version: row1.schema_version },
+      { align: null, fit: null, exempt: 1, boundary: 'none', schema_version: 2 },
+      '豁免行 = 新量表代际（schema_version=2），不是旧 fit 行')
+    // ② 同一判据的另一半：只发 boundary 不发 align 键 → 仍是新量表豁免
+    const na2 = await m.call('POST', { path: TURN_ANNOTATIONS_PATH, body: { session: 's-1', turn: 2, exempt: 1, boundary: 'none' } })
+    assert.equal(na2.statusCode, 200)
+    assert.equal(rawAnnotation(m.file, 's-1', 2).schema_version, 2, 'boundary 键单独在场即判新形')
+    // ③ 代际边界：既无 align 键也无 boundary 键的旧形豁免 → 仍旧代际（老调用方不断线）
+    const oldNa = await m.call('POST', { path: TURN_ANNOTATIONS_PATH, body: { session: 's-1', turn: 3, exempt: 1 } })
+    assert.equal(oldNa.statusCode, 200)
+    const row3 = rawAnnotation(m.file, 's-1', 3)
+    assert.deepEqual({ exempt: row3.exempt, schema_version: row3.schema_version }, { exempt: 1, schema_version: 1 }, '无 align/boundary 键 = 旧形（老客户端不同代际混装）')
+
+    // ④ 覆盖计数：新形豁免进 exempted、**不进** legacyFitRows（预判缺口已闭合）
+    const g = await m.call('GET')
+    assert.equal(g.statusCode, 200)
+    assert.deepEqual(
+      { humanTotal: g.body.coverage.humanTotal, humanAligned: g.body.coverage.humanAligned, exempted: g.body.coverage.exempted, legacyFitRows: g.body.coverage.legacyFitRows },
+      { humanTotal: 2, humanAligned: 0, exempted: 2, legacyFitRows: 1 },
+      '新形豁免两条进 exempted；旧代际豁免才进 legacyFitRows')
+    assert.deepEqual(g.body.coverage.byAlign, { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 }, '豁免不进档位分布')
+  } finally { await m.close() }
+})
+
+test('AL.4 契约 v3：human[] 收豁免行（align:null）且 humanAligned 不把豁免算进有分', async () => {
+  const m = await mountApi((s, file) => {
+    s.upsertTurnAlignment({ session: 's-1', turn: 1, align: 3, exempt: 0, boundary: 'none', quote: null, note: null, origin: 'spot' })
+    s.upsertTurnAlignment({ session: 's-1', turn: 2, align: null, exempt: 1, boundary: 'none', quote: null, note: '纯操作性指令轮', origin: 'spot' })
+    s.upsertTurnAlignment({ session: 's-2', turn: 1, align: 4, exempt: 0, boundary: 'none', quote: '「引文」', note: null, origin: 'sample' })
+    // 旧代际豁免行（schema_version=1）：只准进 legacyFitRows，绝不出现在 human[]
+    const raw = new DatabaseSync(file)
+    raw.prepare(`INSERT INTO turn_annotation (session, turn, fit, exempt, quote, note, origin, boundary, schema_version, annotated_at, updated_at)
+      VALUES ('s-3', 1, NULL, 1, NULL, NULL, 'spot', 'none', 1, 1, 1)`).run()
+    raw.close()
+    ingestSelfCheck(s, { sourceKind: 'dsh_tool', agent: 's-1', extRef: 's-1', turnOrdinal: 1, align: 3, declaration: 0 })
+    ingestSelfCheck(s, { sourceKind: 'dsh_tool', agent: 's-1', extRef: 's-1', turnOrdinal: 2, align: 4, quote: '「自评引文」', declaration: 0 })
+    ingestSelfCheck(s, { sourceKind: 'dsh_tool', agent: 's-2', extRef: 's-2', turnOrdinal: 1, align: 4, quote: '「自评引文二」', declaration: 0 })
+  })
+  try {
+    const g = await m.call('GET')
+    assert.equal(g.statusCode, 200)
+    assert.equal(g.body.human.length, 3, 'v3：human[] = 全部新量表行（有分 2 + 豁免 1）')
+    assert.equal(g.body.human.length, g.body.coverage.humanTotal, 'v3：humanTotal 与 human[] 同集合')
+    assert.equal(g.body.coverage.humanAligned, 2, 'humanAligned 仍只数 align NOT NULL 的行')
+    assert.equal(g.body.coverage.exempted, 1, 'exempted 计数语义不变')
+    assert.equal(g.body.coverage.legacyFitRows, 1, '旧代际豁免行只计数、不出场')
+    assert.ok(!g.body.human.some((r) => r.session === 's-3'), '旧代际行不进 human[]')
+    assert.ok(g.body.human.every((r) => r.schemaVersion >= 2), 'human[] 全是新量表行')
+    const ex = g.body.human.find((r) => r.session === 's-1' && r.turn === 2)
+    assert.deepEqual(Object.keys(ex).sort(), HUMAN_KEYS, '豁免行与有分行**逐字段同键**（只加不改，UI 无需第二形状）')
+    assert.deepEqual(
+      { align: ex.align, exempt: ex.exempt, boundary: ex.boundary, quote: ex.quote, note: ex.note, origin: ex.origin, schemaVersion: ex.schemaVersion },
+      { align: null, exempt: 1, boundary: 'none', quote: null, note: '纯操作性指令轮', origin: 'spot', schemaVersion: 2 },
+      '豁免行实际形状：align:null + exempt:1，其余字段照旧')
+    // 豁免行不参与配对：三条自评里只有两条能与人工有分行配上
+    assert.equal(g.body.self.length, 3)
+    assert.equal(g.body.consistency.pairs, 2, 'v3 放宽 human[] 不动配对——pairAlignments 内跳过 align null')
+    assert.equal(g.body.consistency.exact, 1)
+    assert.ok(Math.abs(g.body.consistency.kappa - 1) < 1e-12)
+  } finally { await m.close() }
 })
 
