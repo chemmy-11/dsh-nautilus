@@ -17,10 +17,12 @@ import { PulseHeartbeat } from './pulse-controls'
 import { BarGauge, MiniChart, Sparkline, StackedBars, StateBand, TopList } from './charts'
 // A 系列：OS 层红线告警视图 + 图标徽标（活跃即闪红）；独立文件，避免与本文件的长历史并写冲突
 import { AlertsView, ensureAlertStyle, useAlertBadge, type AlertsState } from './alerts'
+// 令牌层 + 主题档位控件（U2：亮暗双主题跟随 DSH；--nt-* 唯一定义处）
+import { ThemeSeg, ensureNautilusTheme, readThemeMode, writeThemeMode, type ThemeMode } from './theme'
 
 export const WORKBENCH_ID = 'nautilus-workbench'
 
-// ── 样式（--nt-* 令牌由 index.ts 注入；此处只补工作台专属类）───────────────────
+// ── 样式（--nt-* 令牌层在 theme.ts：跟随宿主亮暗 + 手动档；此处只补工作台专属类）───
 
 let styleDone = false
 const CSS_LINES = [
@@ -30,6 +32,7 @@ const CSS_LINES = [
   '.nt-wb-brand small{display:block;font-size:9px;letter-spacing:1.5px;font-weight:400;color:var(--nt-faint,#9a9a95);text-transform:uppercase}',
   '.nt-wb-seg{display:flex;border:1px solid var(--nt-border,#d9d9d5)}',
   '.nt-wb-seg button{border:0;background:transparent;color:var(--nt-dim,#5f5f5c);font-size:11px;letter-spacing:1.5px;padding:5px 11px;cursor:pointer;text-transform:uppercase}',
+  '.nt-wb-seg button:hover{background:var(--nt-hover,rgba(20,20,18,.05))}',
   '.nt-wb-seg button.on{background:var(--nt-text,#101010);color:var(--nt-panel,#fff)}',
   '.nt-wb-right{margin-left:auto;display:flex;align-items:center;gap:10px;font-size:10px;letter-spacing:1.5px;color:var(--nt-faint,#9a9a95);text-transform:uppercase}',
   '.nt-hb{display:flex;align-items:center;gap:4px}',
@@ -64,7 +67,7 @@ const CSS_LINES = [
   '.nt-drawer .dh button{margin-left:auto}',
   '.nt-drawer .db{flex:1;overflow:auto;padding:12px 14px}',
   '.nt-drawer h5{font-size:9.5px;letter-spacing:2px;color:var(--nt-faint,#9a9a95);margin:14px 0 5px;text-transform:uppercase}',
-  '.nt-scrim{position:fixed;inset:0;background:rgba(0,0,0,.28);z-index:39}',
+  '.nt-scrim{position:fixed;inset:0;background:var(--nt-mask,rgba(0,0,0,.28));z-index:39}',
   '.nt-toast{position:fixed;left:50%;bottom:26px;transform:translateX(-50%);background:var(--nt-text,#101010);color:var(--nt-panel,#fff);font-size:11px;letter-spacing:1px;padding:7px 14px;border-radius:2px;z-index:60}',
   '.nt-card{border:1px solid var(--nt-border,#d9d9d5);background:var(--nt-panel,#fff);border-radius:2px;padding:10px 12px;margin-top:10px}',
   '.nt-card .hd{display:flex;gap:8px;align-items:center;font-size:12px}',
@@ -78,11 +81,11 @@ const CSS_LINES = [
   '.nt-report .prose{font-family:Georgia,serif;font-size:13px;line-height:1.95;margin-top:12px}',
   '.nt-report .gate{margin-top:14px;border:1px solid var(--nt-accent,#e6321e);padding:10px 12px;font-size:11px;display:flex;gap:10px;align-items:center}',
   '.nt-btn{border:1px solid var(--nt-border2,#c8c8c3);background:transparent;color:var(--nt-text,#101010);font-size:11px;padding:3px 9px;cursor:pointer;border-radius:2px}',
-  '.nt-btn:hover{border-color:var(--nt-text,#101010)}',
+  '.nt-btn:hover{border-color:var(--nt-text,#101010);background:var(--nt-hover,rgba(20,20,18,.05))}',
   '.nt-btn.on{border-color:var(--nt-accent,#e6321e);color:var(--nt-accent,#e6321e)}',
   '.nt-select,.nt-input{border:1px solid var(--nt-border2,#c8c8c3);background:var(--nt-panel,#fff);color:var(--nt-text,#101010);font-size:11px;padding:3px 6px;border-radius:2px}',
   '.nt-wb-pickwrap{position:relative;display:inline-block}',
-  '.nt-wb-picker{position:absolute;top:calc(100% + 6px);left:0;width:380px;max-width:88vw;max-height:360px;overflow:auto;background:var(--nt-panel,#fff);border:1px solid var(--nt-border2,#c8c8c3);box-shadow:0 8px 26px rgba(0,0,0,.16);z-index:30}',
+  '.nt-wb-picker{position:absolute;top:calc(100% + 6px);left:0;width:380px;max-width:88vw;max-height:360px;overflow:auto;background:var(--nt-panel,#fff);border:1px solid var(--nt-border2,#c8c8c3);box-shadow:0 8px 26px var(--nt-shadow-color,rgba(0,0,0,.16));z-index:30}',
   '.nt-wb-picker .row{padding:7px 10px;border-bottom:1px solid var(--nt-border,#d9d9d5);cursor:pointer;border-left:2px solid transparent}',
   '.nt-wb-picker .row:hover{background:var(--nt-panel2,#f7f7f5)}',
   '.nt-wb-picker .row.on{border-left-color:var(--nt-accent,#e6321e)}',
@@ -91,7 +94,7 @@ const CSS_LINES = [
   '.nt-wb-picker .row .mt{color:var(--nt-faint,#9a9a95);font-size:10px;font-variant-numeric:tabular-nums}',
   '.nt-wb-scrim2{position:fixed;inset:0;z-index:29}',
   '.nt-chart{position:relative;cursor:crosshair}',
-  '.nt-tip{position:absolute;z-index:35;background:var(--nt-panel,#fff);border:1px solid var(--nt-border2,#c8c8c3);box-shadow:0 4px 16px rgba(0,0,0,.16);padding:7px 9px;font-size:10.5px;color:var(--nt-text,#101010);pointer-events:none;white-space:nowrap;font-variant-numeric:tabular-nums;line-height:1.6}',
+  '.nt-tip{position:absolute;z-index:35;background:var(--nt-panel,#fff);border:1px solid var(--nt-border2,#c8c8c3);box-shadow:0 4px 16px var(--nt-shadow-color,rgba(0,0,0,.16));padding:7px 9px;font-size:10.5px;color:var(--nt-text,#101010);pointer-events:none;white-space:nowrap;font-variant-numeric:tabular-nums;line-height:1.6}',
   '.nt-tip .dim{color:var(--nt-faint,#9a9a95)}',
   // ── 图表语法升级（2026-09-20 方案 A）：gauge / 小图网格 / 状态带 / 排行 / 图例 ──
   '.nt-gauges{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin:10px 0 2px}',
@@ -1599,7 +1602,11 @@ export const WORKBENCH_LABEL = 'Nautilus 工作台'
 /** 工作台根组件。onExitToConversation 由宿主半区注入（ctx.layout.selectPanel(null)），用于回到会话。 */
 export function Workbench(props: { onExitToConversation?: () => void; sessionNameOf?: (id: string) => { name: string; title: string } | null } = {}): ReactNode {
   injectWorkbenchStyle()
+  ensureNautilusTheme()
   const [view, setView] = useState<ViewKey>('overview')
+  // 主题档位：默认跟随宿主；手动档持久化在插件自有键（不写宿主 ui-theme 设置）
+  const [theme, setTheme] = useState<ThemeMode>(() => readThemeMode())
+  const pickTheme = (m: ThemeMode): void => { setTheme(m); writeThemeMode(m) }
   const [drawer, setDrawer] = useState<DrawerTarget | null>(null)
   const [era, setEra] = useState<Era>('api')
   const [toast, setToast] = useState<string | null>(null)
@@ -1650,7 +1657,7 @@ export function Workbench(props: { onExitToConversation?: () => void; sessionNam
     : view === 'alerts' ? createElement(AlertsView, { state: alerts, toast: setToast, reload: () => setNonce((v) => v + 1) })
     : view === 'prophecy' ? createElement(ProphecyView, { ann, m2, toast: setToast, reload: () => setNonce((v) => v + 1) })
     : createElement(ReportView, { m2, pulse, era, ann, analysis })
-  return createElement('div', { className: 'nt-wb' },
+  return createElement('div', { className: 'nt-wb', 'data-nt-theme': theme },
     createElement('div', { className: 'nt-wb-top' },
       props.onExitToConversation !== undefined
         ? createElement('button', { className: 'nt-btn', style: { marginRight: 2 }, onClick: () => { if (props.onExitToConversation !== undefined) props.onExitToConversation() } }, '← 返回会话')
@@ -1673,6 +1680,8 @@ export function Workbench(props: { onExitToConversation?: () => void; sessionNam
           reload: () => setNonce((v) => v + 1),
         }),
         createElement('button', { className: 'nt-btn', onClick: () => setNonce((v) => v + 1) }, '立即取数'),
+        createElement('span', { className: 'nt-hb-lab' }, '主题'),
+        createElement(ThemeSeg, { mode: theme, onPick: pickTheme }),
       ),
     ),
     createElement('div', { className: 'nt-era' },

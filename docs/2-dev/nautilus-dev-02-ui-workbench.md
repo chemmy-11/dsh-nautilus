@@ -40,22 +40,59 @@
 
 ### 2.1 令牌表（`--nt-*`，组件内样式唯一取色处）
 
-| 令牌 | 浅色 | 暗色 | 宿主来源（随宿主亮暗自动切换） |
-|---|---|---|---|
-| `--nt-bg / --nt-panel / --nt-panel2` | `#f2f2f0 / #fff / #f7f7f5` | `#121314 / #1a1b1d / #232427` | `--dsw-alias-bg-layer-1 / -2 / -3` |
-| `--nt-border / --nt-border2` | `#d9d9d5 / #c8c8c3` | `#35363a / #4a4b50` | `--dsw-alias-border-l1 / -l2` |
-| `--nt-text / --nt-dim / --nt-faint` | `#101010 / #5f5f5c / #9a9a95` | `#f2f2f0 / #a9a9a4 / #70706b` | `--dsw-alias-label-primary / -secondary / -tertiary` |
-| `--nt-ok` | `#1a7f37` | `#3fb950` | `--dsw-alias-state-success-*`（兜底自持） |
-| `--nt-accent` | `#e6321e` | `#e6321e` | **静态色，不随主题**（Swiss 唯一颜色主张；语义：era 徽标 / 关键点 / 预警 / 假设进行中 / 标注环） |
-| `--nt-ink / --nt-gray` | `#101010 / #9a9a95` | `#f2f2f0 / #70706b` | 图表线色（墨线＝主读数，灰＝对照层），取 `label-primary/tertiary` |
-| `--nt-font` | Helvetica 栈优先 | 同 | `--dsw-font-family` 兜底 |
+**唯一定义处**：`src/client/theme.ts` 的 `NT_TOKENS` 表（生成 CSS，纯函数 `ntThemeCss()`）；组件内只允许 `var(--nt-*, <兜底>)` 取色，测试守卫「除该表外客户端零硬编码色」。
+
+| # | 令牌 | 浅色 | 暗色 | 宿主来源（有值即 `var(--dsw-alias-*, 兜底)`） |
+|---|---|---|---|---|
+| ① 面层（S4 签名，**自持不绑宿主**，理由见 §2.3） | | | | |
+| 1 | `--nt-bg` | `#f2f2f0` | `#121314` | —（图纸底） |
+| 2 | `--nt-panel` | `#ffffff` | `#1a1b1d` | —（卡片面） |
+| 3 | `--nt-panel2` | `#f7f7f5` | `#232427` | —（次级面：表头 / 条带 / 输入槽） |
+| ② 墨与线（**绑定宿主**） | | | | |
+| 4 | `--nt-text` | `#101010` | `#f2f2f0` | `--dsw-alias-label-primary` |
+| 5 | `--nt-dim` | `#5f5f5c` | `#a9a9a4` | `--dsw-alias-label-secondary` |
+| 6 | `--nt-faint` | `#9a9a95` | `#70706b` | `--dsw-alias-label-tertiary` |
+| 7 | `--nt-ink` | `#101010` | `#f2f2f0` | `--dsw-alias-label-primary`（图表主线＝主读数） |
+| 8 | `--nt-border` | `#d9d9d5` | `#35363a` | `--dsw-alias-border-l2` |
+| 9 | `--nt-border2` | `#c8c8c3` | `#4a4b50` | `--dsw-alias-border-l3` |
+| 10 | `--nt-ok` | `#1a7f37` | `#3fb950` | `--dsw-alias-state-success-primary`（正常 / 成功态） |
+| 11 | `--nt-hover` | `rgba(20,20,18,.05)` | `rgba(255,255,255,.08)` | `--dsw-alias-interactive-bg-hover` |
+| 12 | `--nt-mask` | `rgba(0,0,0,.28)` | `rgba(0,0,0,.5)` | `--dsw-alias-bg-mask-1`（抽屉遮罩） |
+| ③ 自持 / 静态 | | | | |
+| 13 | `--nt-shadow-color` | `rgba(0,0,0,.16)` | `rgba(0,0,0,.55)` | —（浮层投影色；暗色下黑投影不可见，必须加重） |
+| 14 | `--nt-accent` | `#e6321e` | `#e6321e` | **静态色，不随主题**（Swiss 唯一颜色主张；语义：era 徽标 / 关键点 / 预警 / 假设进行中 / 标注环） |
+| 15 | `--nt-font` | Helvetica 栈优先 | 同 | —（宿主无 `--dsw-font-family` 令牌，自持） |
+
+> 变更自 v0.2 表：新增 11/12/13；`--nt-gray`（图表对照线）**暂不入表**——当前实现无对照层消费者，死令牌会漂移成假规格（守卫：声明了却无人 `var()` 即测试失败），待对照层回场再加；`--nt-font` 原写「`--dsw-font-family` 兜底」，实测宿主无此令牌（0.1.7-rc.1），改为自持。
 
 ### 2.2 主题规则
 
-- 亮/暗切换 = **令牌源切换**，组件树零改动；宿主主题类驱动（现 client 已消费 `--dsw-alias-*`，机制同源）。
+- 亮/暗切换 = **令牌源切换**，组件树零改动。**驱动源 = 宿主投影的 `body[data-ds-dark-theme]`**：theme-presenter 把「解析后的主题快照」投影为 `html{color-scheme}` + 该 body 属性 + body 内联 `--dsw-alias-*`（`@deepseek-ai/dsh-client-ui-layout` `DARK_ATTRIBUTE`，0.1.7-rc.1 实测），故本层**不做 JS 监听**、不读 `ctx.theme`——宿主换肤 → 属性翻转 → 令牌整块切换，与宿主零竞态、零闪烁。
+- **档位**：默认「跟随宿主」；顶栏另给「浅色 / 深色」手动档（持久化在插件自有 localStorage 键 `dsh-nautilus:theme`）。手动档只覆盖 `.nt-wb` 子树，**不写宿主 body 属性、不调 `ctx.theme.setTheme`**——那会改掉整个 GUI 的主题，越「观测，不干预」的线。
 - 语义色使用纪律：朱红只用于「需要人工注意」的元素（阈值线、峰值标记、标注环、<80% 覆盖预警、验证中状态）；正常/成功一律中性或 `--nt-ok`。
 - 图表对比度优先：曲线主线浅色主题用墨黑、暗色主题用纸白（`--nt-ink`），不用朱红画常规线。
 - 版式语言：字距 1.5–2.5px 的大写微标签、大号细体数字（`font-variant-numeric: tabular-nums`）、直角（radius ≤2px）、FIG.NN 图号编排、口径注记块（`border-left: 2px` 灰）。
+
+### 2.3 绑定纪律：跟随发生在「模式」与「墨线」两层，面层自持（2026-09-24 落地实证）
+
+落地前逐条核过宿主别名实值（dsh 0.1.7-rc.1，`@deepseek-ai/dsh-client-ui-theme/lib/client.js` 内联样式表：`body` / `body[data-ds-dark-theme]` 两块），据此定下三条纪律：
+
+**① 墨 / 线 / 状态 / 交互 → 绑定宿主。** 宿主亮暗确实区分这些别名，且把宿主给的**半透明线压在本插件面上**算出的复合色与 S4 定版值几乎重合：
+
+| 令牌 | 宿主别名 | 浅色复合（压 `#f2f2f0`） | S4 定版 | 暗色复合（压 `#1a1b1d`） | S4 定版 |
+|---|---|---|---|---|---|
+| `--nt-border` | `--dsw-alias-border-l2` | `#d9d9d8` | `#d9d9d5` | `#363738` | `#35363a` |
+| `--nt-border2` | `--dsw-alias-border-l4` | `#cbcbc9` | `#c8c8c3` | `#48494a` | `#4a4b50` |
+
+> 最初把 `--nt-border2` 绑在 `border-l3` 上——复合出 `#d5d5d3` / `#3f4041`，浅暗两侧都偏离定版；换 `-l4` 后两态同时贴合，故改绑（数值即选型依据，不靠手感）。
+
+**② 三级面 → 自持 S4 定版色。** 宿主**浅色**把四级面折叠成同一个值：`bg-base` / `bg-layer-1` / `-2` / `-3` 全部 = `var(--dsw-static-neutral-bluish-00)` = `#fff`——照 §2.1 原表绑定，工作台会变成整片白，「图纸底 / 白卡片 / 次级面」的层次被抹平；暗色下宿主反而分四级（`#151517 / #232324 / #2c2c2e / #353638`）。**同一个别名在两态承载不同语义，不适合作设计层次的锚**，故面层自持原型定版值——宿主换肤时面层切到另一套定版值，墨线实时跟随宿主。
+
+**③ 朱红静态。** 不绑任何宿主别名（Swiss 唯一颜色主张），亮暗同值；测试守卫：「亮暗同值令牌只允许 `--nt-accent` 与 `--nt-font`」。
+
+**手动档为何不写宿主设置**：`ctx.theme.setTheme('dark')` 会连用户偏好（`ui-theme` 设置）一起改掉，越「观测，不干预」的红线；故手动档走 `.nt-wb[data-nt-theme]` 局部覆盖 + 插件自有 localStorage 键，且**只作用于工作台子树**——侧栏图标与流内契合条在 `.nt-wb` 之外，属宿主色谱面，永远跟随宿主。
+
+- **OQ-U7（留口，非阻塞）**：是否接受「浅色下也把三级面交给宿主」＝工作台整片白、只靠发丝线分层（更贴宿主、更失去 S4 图纸感）？——**2026-09-24 验收按自持形态判通过**（默认形态成立），此项仍留口待日后裁决。
 
 ---
 
@@ -235,6 +272,13 @@
 | PULSE 采样曲线 | 曲线视图数据源切换（NEXUS 轮次 / PULSE 采样）+ 指标下拉 + `/pulse/series?windowMs=3600000&maxPoints=240` | ✅ §E13 |
 | 视图错误隔离 | `ViewBoundary`（类组件）：单视图抛错只替换该视图并显示错误原文 + 重试 | ✅ §E13 |
 | **视图必须渲染为元素** | 禁 `CurveView({...})` 直调——子组件 hooks 会算进父组件，切视图即 hooks 数量变化 → 整页渲染失败 | ⚠️ 硬教训，见 §E13 |
+| **令牌层落地（U1/U2）** | `src/client/theme.ts`：`NT_TOKENS` 15 条 + `ntThemeCss()`（纯函数，四块：跟随亮/暗 + 覆盖浅/深）+ `ensureNautilusTheme()`（`index.ts` 的 `apply()` 与 `Workbench()` 双点幂等注入）；`body` 级定义让侧栏图标与流内契合条也吃到令牌 | ✅ 2026-09-24 落地 —— **此前只有引用没有定义**：153 处 `var(--nt-*, 浅色兜底)` 全部吃兜底，插件恒为浅色、宿主暗色零影响（workbench 旧注释称「由 index.ts 注入」，实为未兑现的注释） |
+| 主题跟随宿主 | 选择器 = `body[data-ds-dark-theme]`（ui-layout theme-presenter 的 `DARK_ATTRIBUTE`） | ✅ 纯 CSS 跟随：无 JS 监听、无 `ctx.theme` 依赖、无闪烁（宿主换肤 → 属性翻转 → 令牌整块切换） |
+| 主题手动档 | 顶栏 `ThemeSeg`（跟随 / 浅色 / 深色）+ 根属性 `data-nt-theme` + localStorage `dsh-nautilus:theme` | ✅ 默认「跟随」；只覆盖 `.nt-wb` 子树，不写宿主 body 属性、不调 `ctx.theme.setTheme`（§2.2） |
+| 跟随档标签 | 顶栏档位上的「跟随·浅 / ·深」两版文案由 `body[data-ds-dark-theme]` 纯 CSS 切换 | ✅ 跟随是否生效的肉眼证据，不需要 JS 读宿主状态 |
+| 流内契合条死令牌 | `turn-annotate.ts` 引用的 `--dsw-alias-{fill-hover,border-secondary,border-accent,surface-primary}` **四个名字在宿主别名表里不存在** → 浮层一直吃硬编码浅色（暗色下白盒） | ✅ 改走 `--nt-*`（`--dsh-content-font-size-secondary` 已核实存在，保留） |
+| 客户端取色守卫扩面 | `scripts/test.mjs`：从「仅 charts.ts」扩到 **整个客户端半区**（`theme.ts` 之外零硬编码色）+ 反向守卫「令牌表无死令牌」+ 产物哨兵（`lib/client.js` 含 `body[data-ds-dark-theme]` / `data-nt-theme`） | ✅ 57/57（新增 2 例） |
+| 端上双态目视验收 | 既有页面刷新后人工确认（亮/暗两态 + 手动档三态） | ✅ 2026-09-24 守谷人目视通过（「验证通过，收敛」，OQ-U6 闭合；协议与可观察量见 evidence-u2 §5。**截图未入仓**，见该文件 §6 诚实边界） |
 
 ---
 
@@ -252,10 +296,12 @@
 - **OQ-U3 标签枚举**：四值是否够用（如需「污染-预热 / 污染-截断」细分），守谷人裁定后回写 §5.3。
 - **OQ-U4 标注删除语义**：硬删 vs 软删留痕（审计诉求 vs 库体积）；倾向软删 + `deletedAt`。
 - **OQ-U5 标注 author**：多主体使用时的身份来源（宿主用户标识可得性）。
-- **OQ-U6 浏览器渲染验收**：实现已下发（§E10），但「图标出现 / 五视图成形 / 抽屉开合」需人工在既有页面刷新后确认；确认前不宣称 UI 交付完成。
+- **OQ-U7 面层是否也交给宿主**（§2.3，**留口非阻塞**）：浅色下三级面自持 S4 定版值 vs 全交宿主（整片白）——2026-09-24 验收按自持形态判通过，改动方案见 evidence-u2 §6。
+- ~~OQ-U6 浏览器渲染验收~~ **2026-09-24 闭合**：图表语法与令牌层两批均已端上目视（令牌层七步协议见 evidence-u2 §5，守谷人判「验证通过，收敛」）。
 
 ## 关联文件
 
-- [./ui-s4-prototype.html](./ui-s4-prototype.html) — 交互原型（视觉与交互权威参照，含双主题与人工标注演示）
+- [./ui-s4-prototype.html](./ui-s4-prototype.html) — 交互原型（视觉与交互权威参照，含双主题与人工标注演示；令牌块与实现同源）
+- [./evidence-u2-20260924.md](./evidence-u2-20260924.md) — U2 主题层证据归档（令牌层落地 / 宿主主题机制实测 / 绑定纪律数值依据 / 七步端上验收协议）
 - [../1-planning/nautilus-nautilus-positioning.md](../1-planning/nautilus-nautilus-positioning.md) — 上游：L2 阶梯、差异化矩阵
 - `../AGENTS.md` §3/§7 — 客户端半区契约、GUI 验收红线；`../../CONTRIBUTING.md` — 工程约定权威

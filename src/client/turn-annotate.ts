@@ -149,20 +149,24 @@ export function turnSelectorFor(messageId: string): (snapshot: unknown) => numbe
 let styleDone = false
 const CSS_LINES = [
   // 行内按钮：融入 IconActions（无框、透明底、secondary 标签色；hover 提级）
-  '.nt-fitact{position:relative;display:inline-flex;align-items:center;height:24px;padding:0 6px;border:0;border-radius:4px;background:transparent;color:var(--dsw-alias-label-secondary,var(--nt-dim,#5f5f5c));font-size:var(--dsh-content-font-size-secondary,13px);line-height:1;cursor:pointer;user-select:none;white-space:nowrap}',
-  '.nt-fitact:hover{color:var(--dsw-alias-label-primary,var(--nt-text,#101010));background:var(--dsw-alias-fill-hover,rgba(0,0,0,.05))}',
-  '.nt-fitact[data-marked="1"]{color:var(--dsw-alias-label-primary,var(--nt-text,#101010));font-weight:600}',
+  // 取色一律走 --nt-*（body 级令牌，绑宿主 --dsw-alias-*）：本件在工作台 .nt-wb 之外，
+  // 属宿主色谱面，永远跟随宿主、不受工作台手动档影响。
+  // 修（2026-10-02）：原先引用的 --dsw-alias-{fill-hover,border-secondary,border-accent,surface-primary}
+  // 四个名字在 dsh 0.1.7-rc.1 的别名表里**不存在** → 一直吃硬编码浅色兜底，暗色下浮层是白盒。
+  '.nt-fitact{position:relative;display:inline-flex;align-items:center;height:24px;padding:0 6px;border:0;border-radius:4px;background:transparent;color:var(--nt-dim,#5f5f5c);font-size:var(--dsh-content-font-size-secondary,13px);line-height:1;cursor:pointer;user-select:none;white-space:nowrap}',
+  '.nt-fitact:hover{color:var(--nt-text,#101010);background:var(--nt-hover,rgba(20,20,18,.05))}',
+  '.nt-fitact[data-marked="1"]{color:var(--nt-text,#101010);font-weight:600}',
   '.nt-fitact .nv{font-variant-numeric:tabular-nums;margin-left:3px}',
   // 选择浮层：最小中性面（宿主令牌；无 Nautilus 装饰）
-  '.nt-fitpop{position:absolute;top:calc(100% + 6px);right:0;z-index:30;display:flex;flex-direction:column;gap:6px;padding:8px 9px;border:1px solid var(--dsw-alias-border-secondary,rgba(0,0,0,.12));border-radius:8px;background:var(--dsw-alias-surface-primary,#fff);box-shadow:0 6px 22px rgba(0,0,0,.14);min-width:230px;font-size:var(--dsh-content-font-size-secondary,13px);color:var(--dsw-alias-label-primary,var(--nt-text,#101010))}',
+  '.nt-fitpop{position:absolute;top:calc(100% + 6px);right:0;z-index:30;display:flex;flex-direction:column;gap:6px;padding:8px 9px;border:1px solid var(--nt-border2,#c8c8c3);border-radius:8px;background:var(--dsw-alias-button-floating-fill,var(--nt-panel,#fff));box-shadow:0 6px 22px var(--nt-shadow-color,rgba(0,0,0,.16));min-width:230px;font-size:var(--dsh-content-font-size-secondary,13px);color:var(--nt-text,#101010)}',
   '.nt-fitpop .row{display:flex;gap:4px;flex-wrap:wrap;align-items:center}',
-  '.nt-fitpop .opt{min-width:26px;padding:4px 7px;border:1px solid var(--dsw-alias-border-secondary,rgba(0,0,0,.12));border-radius:6px;background:transparent;color:inherit;font-size:12px;line-height:1;cursor:pointer;font-variant-numeric:tabular-nums}',
-  '.nt-fitpop .opt:hover{border-color:var(--dsw-alias-label-tertiary,rgba(0,0,0,.3))}',
-  '.nt-fitpop .opt.on{border-color:var(--dsw-alias-border-accent,#e6321e);color:#e6321e;font-weight:700}',
+  '.nt-fitpop .opt{min-width:26px;padding:4px 7px;border:1px solid var(--nt-border2,#c8c8c3);border-radius:6px;background:transparent;color:inherit;font-size:12px;line-height:1;cursor:pointer;font-variant-numeric:tabular-nums}',
+  '.nt-fitpop .opt:hover{border-color:var(--nt-faint,#9a9a95)}',
+  '.nt-fitpop .opt.on{border-color:var(--nt-accent,#e6321e);color:var(--nt-accent,#e6321e);font-weight:700}',
   '.nt-fitpop .opt.na{min-width:34px}',
-  '.nt-fitpop textarea,.nt-fitpop input[type=text]{width:100%;box-sizing:border-box;border:1px solid var(--dsw-alias-border-secondary,rgba(0,0,0,.12));border-radius:6px;background:transparent;color:inherit;font:inherit;font-size:12px;padding:5px 6px;resize:vertical}',
-  '.nt-fitpop .err{color:#e6321e;font-size:11px}',
-  '.nt-fitpop .hint{color:var(--dsw-alias-label-tertiary,rgba(0,0,0,.35));font-size:10.5px}',
+  '.nt-fitpop textarea,.nt-fitpop input[type=text]{width:100%;box-sizing:border-box;border:1px solid var(--nt-border2,#c8c8c3);border-radius:6px;background:transparent;color:inherit;font:inherit;font-size:12px;padding:5px 6px;resize:vertical}',
+  '.nt-fitpop .err{color:var(--nt-accent,#e6321e);font-size:11px}',
+  '.nt-fitpop .hint{color:var(--nt-faint,#9a9a95);font-size:10.5px}',
 ]
 function injectFitStyle(): void {
   if (styleDone || typeof document === 'undefined') return
