@@ -692,6 +692,46 @@ db.prepare("SELECT sql FROM sqlite_master WHERE name='alert_event'").get()
 
 ---
 
+## E29 宿主适配 dsh 0.1.7-rc.1（2026-09-28，按 CONTRIBUTING「宿主版本适配」五步）
+
+**触发**：本机 `dsh --version` = **0.1.7-rc.1**；仓库 peer 原只到 `^0.1.6-alpha.1`、devDep pin `0.1.5-rc.2`。
+**先确认宿主实际版本，不凭 npm dist-tag 推断**（守则原文）。
+
+**① 依赖面**（实测安装产物，非推断）：`@deepseek-ai/dsh-host-webserver` = **0.1.7-rc.1** · `cordis` 4.0.4（仍在 `>=4.0.0-rc <5`）· `schemastery` 3.18.4（仍在 `^3.18.0`）。
+peer **追加** `^0.1.7-rc.1` 分支（旧四支保留，旧宿主仍受支持）；devDep 精确 pin 升 `0.1.7-rc.1`——
+npm registry 确有该版本（`npm view` 列出 `…0.1.7-alpha.2, 0.1.7-rc.1`），`npm install` 4 秒装成（changed 4 packages）。
+
+**② 契约面逐项核对**（读安装产物的 `.d.ts`，逐条对照本项目实际消费面）：
+
+| 契约 | 0.1.7-rc.1 实测 | 结论 |
+|---|---|---|
+| `WebRoute` | `{ kind: 'exact'\|'prefix'; path: string; handler(req,res) }` | 未变 |
+| `session/event` | `turn/start{turn}` · `step/start{turn,step}` · `user/message: UserMessage` · `assistant/message{turn,step,message,stream,usage?}` | 未变 |
+| `TokenUsage` | `inputTokens` / `outputTokens` / `cacheReadTokens?` / `cacheWriteTokens?` | 未变 |
+| `ToolDefinition` | `{ name, description, parameters, output }` | 未变 |
+| 客户端槽位 | `main` = kind `keyed`；`conversation.chat.assistant-actions` = `{ kind:'list', scope:'session', owner: AssistantActionOwnerProps{ messageId } }`；`conversation.chat.turnTail` 同形；`sidebar.panellist` 仍在 | 未变 |
+| A 系列新用 | `ctx.llm.stream(GenerateOptions{provider,model,messages,system?,maxTokens?,signal?})` · `ctx.agentDefaultModel.currentSelection()` · `ctx.jobs.start(JobSpec{kind,label,owner?,run})`（owner 可省 = 无主任务） | 存在且同形 |
+
+→ **契约没变就不改码**（守则原文）：本步**零代码改动**，只动依赖声明与文档。
+
+**③ 门禁**：`typecheck` 0 · `build` 0 · `test` **55/55** · `check:deps` OK（peer 覆盖 devDep pin：R3 通过）· `check:exports` OK · `check:meta` OK。
+
+**④ profile 实测**：见 **E30**（装配进 profile + 端上四元组）。
+
+**⑤ 记录**：README 双语「兼容性」节 + CONTRIBUTING 红线 1 的 peer 列表 + 本节。
+**vault 回写待守谷人点头**（决策文档 §9 同款纪律：分析结论回写 vault 需人工确认）。
+
+**诚实边界**：本轮只做到「契约面 + 门禁」；**端上四元组（真宿主加载 + 真实越线）在 E30**。
+0.1.5-rc.2 稳定线的端上读数来自更早的 E9–E24 批次，本次**未重跑**该线（devDep 已升，旧线只保留 peer 声明支持）。
+
+---
+
+## E30 A 系列端上四元组（装配 + 真实越线）
+
+（装配阶段回填：dsh 版本 · profile 名 · 装配方式 · `user_version` · 三路由 200 · 一次真实越线 → 台账/快照/报告三面一致。）
+
+---
+
 ## E8 诚实边界（引用本归档时必须一并引用）
 
 1. **端上读数口径**：§E8 初稿时本层尚未装配（证据全来自离线探针）；**§E9 起已热装配进 profile `web`**，宿主路径已有端上四元组读数（OQ-3 收敛）。但 E5 的 1 小时档仍只有中间读数，且「连续 1 小时无内存增长」尚未给出完整序列。
