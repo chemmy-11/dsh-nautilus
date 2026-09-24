@@ -13,6 +13,11 @@
  * POST /api/nautilus/m2/turn-annotations   → 标注 upsert **双形**（AL.4，不新开端点）：body 存在 `align` 键（含显式 null）
  *                                            或 `boundary` 键 → 对齐量表 1–5（align≥4 必附引文；align:null + exempt:1 = N/A 豁免）；
  *                                            否则旧 fit 0–4 路**逐字不变**。两形同门：无原文拒 + origin 服务端判定。
+ *                                            旧形压到已是 schema_version≥2 的 align 行 → **409 `generational-conflict`**
+ *                                            （零写入；不做 align→align_prev 的跨代际降级——那是静默销毁新量表标注）。
+ *                                            错误码（本路由）：forbidden(403) / bad-json·invalid:*·no-turn-text·
+ *                                            quote-required·align-quote-required·quote-too-long(400) /
+ *                                            **generational-conflict(409)**。
  * GET  /api/nautilus/m2/alignments   → AL.4b 对齐读侧：双路台账（人工 align + 自评 align）+ 覆盖 + 一致性（v3：留出集 + human[] 收豁免行；只 GET）
  * Same-origin marker guard; registered as effect.（/selfcheck 例外：调用方非浏览器，以 token 为门。）
  */
@@ -178,6 +183,8 @@ export function registerNautilusRoutes(ctx: { webServer: { register(route: WebRo
   // T 系列：逐轮人工标注（对齐 · 混合入口；决策 D-T3）；AL.4 起双形（align 1–5 与旧 fit 0–4 同门）。
   // 同源门（守谷人 / 工作台专用）。
   // 语义校验在落库前做完——库里 CHECK 只是最后一道墙，不是第一道。
+  // 代际门（AL.4 收口）：旧形落到 schema_version≥2 的 align 行 → 409 `generational-conflict`，零写入
+  // （含不碰 annotation_sample 队列）；不降级、不搬移 align。
   const NOTE_MAX = 500
   const turnAnnotations: WebRoute = {
     kind: 'exact',
@@ -265,6 +272,26 @@ export function registerNautilusRoutes(ctx: { webServer: { register(route: WebRo
         const t = body.note.trim()
         if (t !== '') note = t.length > NOTE_MAX ? t.slice(0, NOTE_MAX) : t
       }
+      // ── 代际冲突硬门（AL.4 收口，错误码 `generational-conflict`，登记于 dev-05 §3）──────────────
+      // 根因（上一轮实测复现）：旧形 upsert 只回填 fit、不清 align —— 压到已是**对齐量表行**的轮次上时
+      // 撞 v8 三态 CHECK（align 行不得携带 fit）→ SQLite 抛错冒到路由 → 客户端拿不到任何响应
+      // （状态码停在 0；库本身未被改坏）。触发面 = curl 脚本 / 陈旧缓存的旧 UI 半区；新打分件只发
+      // align/boundary，天然不走这条路。
+      //
+      // 裁决：**路由层显式拒绝，不做跨代际回退**。不把 align 挪进 align_prev 再清空降级为 v1 行——
+      // 那等于允许陈旧客户端**静默销毁新量表标注**，与「不静默降级」「代际不混算」两条纪律冲突。
+      //
+      // 门序纪律：本门排在**语义校验之后**（400 语义错误仍优先报出）、**origin 判定之前**。
+      // 后者不是洁癖：resolveAnnotationOrigin 会回填 annotation_sample.annotated_at（实测在崩溃前已写入），
+      // 排在它后面就等于「拒了还改了队列」。零写入 = 本行拒绝 + 队列不动。
+      const existing = deps.store.turnAlignmentSchemaVersion(session, turn)
+      if (existing !== null && existing >= SCHEMA_VERSION_ALIGN) {
+        return json(res, 409, {
+          ok: false, error: 'generational-conflict',
+          message: '该轮已是对齐量表行（schema_version≥2）：旧契合写不能覆盖新量表数据；请改用 align 1–5 重新标注。',
+        })
+      }
+
       // origin 服务端判定（申报制污染口径，杜绝）：在未完成队列中 = sample，否则 spot
       const origin = deps.store.resolveAnnotationOrigin(session, turn)
       const result = deps.store.upsertTurnAnnotation({ session, turn, fit, exempt, quote, note, origin, schemaVersion: 1 })

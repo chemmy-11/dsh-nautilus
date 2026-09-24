@@ -12,6 +12,9 @@
  *  · AL.4 写路径：POST /m2/turn-annotations 双形（body 有 align/boundary 键 → 对齐 1–5 与豁免；否则旧 fit 0–4
  *    逐字不变）· 硬门零写入（align≥4 无引文）· 新量表豁免判据（不再掉进 legacyFitRows 的代际错判）·
  *    契约 v3 的 human[] 收豁免行（humanAligned/exempted 语义不变）。
+ *  · AL.4 收口：旧形压到已是 align 行（schema_version≥2）的轮次 → **409 generational-conflict** + 人话，
+ *    整行逐列未变且队列 annotated_at 不回填（零写入；门序 = 409 先于 origin 判定）· 旧形空轮次 / 覆盖 v1 行
+ *    仍 200 逐字回归 · store 只读探针 turnAlignmentSchemaVersion（null / 1 / ≥2）· 错误码登记守卫。
  * 已知例外（记在案）：`../store.js` 允许 nexus import——数据核心仍共享，真正抽离属 OQ-AL4。
  */
 import { test } from 'node:test'
@@ -834,5 +837,140 @@ test('AL.4 契约 v3：human[] 收豁免行（align:null）且 humanAligned 不�
     assert.equal(g.body.consistency.exact, 1)
     assert.ok(Math.abs(g.body.consistency.kappa - 1) < 1e-12)
   } finally { await m.close() }
+})
+
+// ── AL.4 收口：旧形压 align 行 → 409 generational-conflict（零写入；不做跨代际降级）────────────
+
+/** 整行快照（**全列**；逐列未变的旁证——不给「看起来没变」留缺口）。 */
+function rawAnnotationRow(file, session, turn) {
+  const db = new DatabaseSync(file)
+  try {
+    return db.prepare('SELECT * FROM turn_annotation WHERE session = ? AND turn = ?').get(session, turn)
+  } finally { db.close() }
+}
+
+/** 直插一条**未完成**队列行（annotated_at IS NULL 才进 origin 判定）。 */
+function rawInsertSample(file, batchId, session, turn) {
+  const db = new DatabaseSync(file)
+  try {
+    db.prepare(`INSERT INTO annotation_sample (batch_id, session, turn, kind, strata, sampled_at, annotated_at)
+      VALUES (?, ?, ?, 'sample', 'w=gen', ?, NULL)`).run(batchId, session, turn, Date.now())
+  } finally { db.close() }
+}
+
+/** 队列行的 annotated_at（零写入的另一处旁证：拒了不许改队列）。 */
+function rawSampleAnnotatedAt(file, batchId) {
+  const db = new DatabaseSync(file)
+  try {
+    const r = db.prepare('SELECT annotated_at FROM annotation_sample WHERE batch_id = ?').get(batchId)
+    return r === undefined ? undefined : r.annotated_at
+  } finally { db.close() }
+}
+
+test('AL.4 收口：旧形压 align 行 → 409 generational-conflict，该行逐列未变 + 队列不动（零写入）', async () => {
+  // 根因（上一轮实测）：旧形 upsert 只回填 fit、不清 align → 撞 v8 三态 CHECK（align 行不得携带 fit）
+  // → SQLite 抛错冒到路由 → 客户端拿不到任何响应（状态码停在 0，库未坏但调用方看不到结构化结果）。
+  // 裁决：路由层显式 409，**不做**「align → align_prev 并清空、降级为 v1 行」——那等于允许陈旧客户端
+  // 静默销毁新量表标注（不静默降级 / 代际不混算）。
+  const m = await mountApi((s) => {
+    for (let t = 1; t <= 3; t++) s.upsertUserText('s-1', t, '第 ' + String(t) + ' 轮原文')
+  })
+  try {
+    // 前置：该轮的 align 行由**真实路由**产出（不靠直插构造"已经是新量表行"的状态）
+    const align = await m.call('POST', { path: TURN_ANNOTATIONS_PATH, body: { session: 's-1', turn: 1, align: 3, boundary: 'none', note: '顺了一层' } })
+    assert.equal(align.statusCode, 200)
+    assert.equal(rawAnnotationRow(m.file, 's-1', 1).schema_version, 2)
+    // 队列行**后置**插入：此刻仍是 pending（annotated_at NULL），旧形若走到 origin 判定就会回填它
+    rawInsertSample(m.file, 'b-gen', 's-1', 1)
+    const before = rawAnnotationRow(m.file, 's-1', 1)
+    assert.equal(rawSampleAnnotatedAt(m.file, 'b-gen'), null, '前置：队列行为未完成态')
+
+    // 旧形（fit 0–4，无 align/boundary 键）压同一轮 → 409 + 人话；**不是 500、不是挂起无响应**
+    const conflict = await m.call('POST', { path: TURN_ANNOTATIONS_PATH, body: { session: 's-1', turn: 1, fit: 2 } })
+    assert.equal(conflict.statusCode, 409, '409 代际冲突（不是 500，也不是无响应）')
+    assert.equal(conflict.body.ok, false)
+    assert.equal(conflict.body.error, 'generational-conflict')
+    assert.equal(typeof conflict.body.message, 'string', '409 必须带一句人话')
+    assert.ok(conflict.body.message.length > 0 && /对齐量表/.test(conflict.body.message), '人话须说明「该轮已是对齐量表行」：' + String(conflict.body.message))
+
+    // 零写入旁证①：整行**逐列**未变（全列快照 deepEqual——含 updated_at / *_prev / annotated_at）
+    const after = rawAnnotationRow(m.file, 's-1', 1)
+    assert.deepEqual(after, before, '409 后该行逐列未变（零写入）')
+    assert.equal(after.align, 3, '新量表标注在场（没被静默销毁）')
+    assert.equal(after.fit, null, 'align 行不得被塞进 fit（v8 CHECK 那条纪律的正面表述）')
+    assert.equal(after.schema_version, 2)
+    // 零写入旁证②：门序 = 409 排在 origin 判定**之前**——队列 annotated_at 不得被回填
+    assert.equal(rawSampleAnnotatedAt(m.file, 'b-gen'), null, '拒绝路径不得回填队列（拒了还改队列 = 没拒干净）')
+
+    // 同一条纪律的另一面：**已被拒绝**的轮次，新形仍可正常重标（不把该轮锁死）
+    const realign = await m.call('POST', { path: TURN_ANNOTATIONS_PATH, body: { session: 's-1', turn: 1, align: 4, boundary: 'none', quote: '「这句我抄进笔记了」' } })
+    assert.equal(realign.statusCode, 200, '新形重标不受 409 影响')
+    assert.equal(realign.body.origin, 'sample', '新形照常走 origin 判定并命中队列')
+    assert.equal(rawAnnotationRow(m.file, 's-1', 1).align_prev, 3, '重标照常把旧 align 挪进 align_prev')
+  } finally { await m.close() }
+})
+
+test('AL.4 收口逐字回归：旧形写**从未被标注过**的轮次仍 200 且 schema_version=1（老客户端不断线）', async () => {
+  const m = await mountApi((s) => {
+    for (let t = 1; t <= 2; t++) s.upsertUserText('s-1', t, '第 ' + String(t) + ' 轮原文')
+  })
+  try {
+    // ① 空轮次：旧形照旧落 v1 行（409 不得误伤正常旧客户端）
+    const r1 = await m.call('POST', { path: TURN_ANNOTATIONS_PATH, body: { session: 's-1', turn: 1, fit: 3, note: '推进了问题' } })
+    assert.equal(r1.statusCode, 200)
+    assert.deepEqual(Object.keys(r1.body).sort(), ['ok', 'origin', 'overwritten', 'result'], '旧形响应形状一字未改（未新增字段）')
+    assert.deepEqual(
+      { fit: r1.body.result, origin: r1.body.origin, overwritten: r1.body.overwritten },
+      { fit: 'inserted', origin: 'spot', overwritten: false },
+    )
+    const row1 = rawAnnotationRow(m.file, 's-1', 1)
+    assert.deepEqual(
+      { align: row1.align, fit: row1.fit, exempt: row1.exempt, boundary: row1.boundary, note: row1.note, origin: row1.origin, schema_version: row1.schema_version, fit_prev: row1.fit_prev },
+      { align: null, fit: 3, exempt: 0, boundary: 'none', note: '推进了问题', origin: 'spot', schema_version: 1, fit_prev: null },
+      '旧形空轮次：schema_version=1 且逐列照旧',
+    )
+    // ② 旧形覆盖**既有 v1 行**：仍 200 overwritten、旧值进 fit_prev（探针只挡 ≥2 的代际）
+    const r2 = await m.call('POST', { path: TURN_ANNOTATIONS_PATH, body: { session: 's-1', turn: 1, fit: 2, note: '复标改判' } })
+    assert.equal(r2.statusCode, 200)
+    assert.equal(r2.body.overwritten, true)
+    const row2 = rawAnnotationRow(m.file, 's-1', 1)
+    assert.deepEqual({ fit: row2.fit, fit_prev: row2.fit_prev, schema_version: row2.schema_version }, { fit: 2, fit_prev: 3, schema_version: 1 })
+    // ③ 旧形豁免（exempt 路径）同样放行（v1 行的 exempt 覆盖不得被 409 挡住）
+    const r3 = await m.call('POST', { path: TURN_ANNOTATIONS_PATH, body: { session: 's-1', turn: 2, exempt: 1 } })
+    assert.equal(r3.statusCode, 200)
+    assert.deepEqual({ exempt: rawAnnotationRow(m.file, 's-1', 2).exempt, schema_version: rawAnnotationRow(m.file, 's-1', 2).schema_version }, { exempt: 1, schema_version: 1 })
+  } finally { await m.close() }
+})
+
+test('AL.4 收口探针：turnAlignmentSchemaVersion 无行 null / 旧行 1 / 对齐行 2，且只读（行不被动）', () => {
+  const tmp = tmpDir('nautilus-al4-probe-')
+  try {
+    const file = join(tmp, 'n.db')
+    const s = openStore(file)
+    try {
+      assert.equal(s.turnAlignmentSchemaVersion('s-1', 1), null, '无行 → null（首次写入放行）')
+      s.upsertTurnAnnotation({ session: 's-1', turn: 1, fit: 3, exempt: 0, quote: null, note: null, origin: 'spot', schemaVersion: 1 })
+      assert.equal(s.turnAlignmentSchemaVersion('s-1', 1), 1, '旧契合行 → 1（旧形可覆盖）')
+      s.upsertTurnAlignment({ session: 's-1', turn: 2, align: 3, exempt: 0, boundary: 'none', quote: null, note: null, origin: 'spot' })
+      assert.equal(s.turnAlignmentSchemaVersion('s-1', 2), 2, '对齐行 → 2（旧形必须被 409 拦）')
+      s.upsertTurnAlignment({ session: 's-1', turn: 3, align: null, exempt: 1, boundary: 'none', quote: null, note: null, origin: 'spot' })
+      assert.equal(s.turnAlignmentSchemaVersion('s-1', 3), 2, '新量表豁免行（align NULL）同样是 ≥2 代际——判据看 schema_version，不看 align 是否为空')
+      // 只读性：探针不改行（全列快照前后 deepEqual）
+      const snap = rawAnnotationRow(file, 's-1', 2)
+      s.turnAlignmentSchemaVersion('s-1', 2); s.turnAlignmentSchemaVersion('s-1', 999)
+      assert.deepEqual(rawAnnotationRow(file, 's-1', 2), snap, '探针必须只读（行逐列未变）')
+    } finally { s.close() }
+  } finally { cleanup(tmp) }
+})
+
+test('AL.4 收口错误码登记：generational-conflict 在 routes.ts 与 dev-05 §3 各登记一处', () => {
+  // 「错误码在文档/注释里登记」的可核查落点：源码字面量 + 面向调用方的文档各一处（不是口口相传）
+  const rt = readFileSync(join(SRC, 'routes.ts'), 'utf8')
+  assert.ok(rt.includes("'generational-conflict'"), 'routes.ts 必须登记错误码字面量')
+  assert.ok(/json\(res, 409, \{[\s\S]{0,200}generational-conflict/.test(rt), '409 与错误码必须同一响应')
+  const doc = readFileSync(join(REPO, 'docs', '2-dev', 'nautilus-dev-05-turn-annotation.md'), 'utf8')
+  assert.ok(doc.includes('generational-conflict'), 'dev-05 必须登记该错误码')
+  assert.ok(doc.includes('409'), '文档须写明状态码 409')
+  assert.ok(doc.includes('turnAlignmentSchemaVersion'), '文档须登记判据单点（store 只读探针）')
 })
 

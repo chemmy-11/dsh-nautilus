@@ -860,6 +860,22 @@ export class NautilusStore {
   // ── AL 系列：对齐程度标注（align 1–5 + boundary；口径 = 决策文档 §2，守谷人 6 签）──
 
   /**
+   * 代际探针（**只读**，写前判据单点）：该 (session,turn) 现存行的 `schema_version`。
+   *   无行 → `null`（首次写入）；`1` = 旧契合行（旧形可覆盖）；`≥2` = 对齐量表行。
+   *
+   * 用途（AL.4 收口）：旧形（fit 0–4）upsert **只回填 fit、不清 align**，压到 align 行上会撞 v8 三态 CHECK
+   * （align 行不得携带 fit）——那是 SQLite 抛错冒到路由、客户端拿不到任何响应（实测：状态码停在 0，
+   * 且 resolveAnnotationOrigin 已先改了 annotation_sample）。路由层拿本方法作 409 判据，先拒后写。
+   * 读方法不落任何写（含 annotation_sample 的队列回填）——调用方必须把它排在 origin 判定**之前**。
+   */
+  turnAlignmentSchemaVersion(session: string, turn: number): number | null {
+    const r = this.db.prepare('SELECT schema_version FROM turn_annotation WHERE session = ? AND turn = ?')
+      .get(session, turn) as { schema_version: number | null } | undefined
+    if (r === undefined) return null
+    return Number(r.schema_version ?? 1)
+  }
+
+  /**
    * upsert 一条**对齐**标注（一行一轮、最新覆盖）。人工与自评同形——两路用同一把尺子。
    * 覆盖时旧 `align` 挪入 `align_prev`（一致性/噪声地板的成对数据）；`annotated_at` 保持首标时刻。
    * `align=4|5` 无引文由 CHECK 拒（签-2）；`exempt=1` 与 `align` 互斥。

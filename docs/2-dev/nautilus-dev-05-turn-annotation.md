@@ -43,8 +43,12 @@ CREATE TABLE IF NOT EXISTS annotation_sample (        -- 抽样队列（一行�
 
 ## 3. 写读通道（宿主半区，工作台同源门，**不走 S1.1 token**——那是外部 harness 专用）
 
-- `POST /api/nautilus/m2/turn-annotation` `{session, turn, fit?, exempt?, quote?, note?}`
-  - 门序：同源标记 → JSON → **语义校验**：fit 0–4 或 exempt 二选一互斥；`fit=4` 必附非空 quote（≤200 字，trim 后存）；被标轮次 `turn_text` 必须在场（无原文拒 `no-turn-text`——不让人对着摘要打五分制）。
+- `POST /api/nautilus/m2/turn-annotations` `{session, turn, fit?, exempt?, quote?, note?}`（AL.4 起同门双形：带 `align`/`boundary` 键走 1–5 对齐量表，见决策 [§2.1](../1-planning/nautilus-alignment.md) 与 §9 边界 3「新旧不混算」）
+  - 门序（AL.4 收口后）：同源标记 → JSON → 会话/轮次 → 无原文 `no-turn-text` → **语义校验**：fit 0–4 或 exempt 二选一互斥；`fit=4` 必附非空 quote（≤200 字，trim 后存）→ **代际冲突门** → origin 判定 → 落库。
+  - **代际冲突门（`generational-conflict` → HTTP 409，AL.4 收口）**：旧形（fit 0–4）落到**已是对齐量表行**（`schema_version≥2`）的轮次即拒，响应 `{ok:false, error:'generational-conflict', message:"<人话>"}`，**零写入**（不改该行、也不回填 `annotation_sample.annotated_at`）。
+    - 为什么拒而不是降级：旧形 upsert 只回填 fit、不清 align → 撞 v8 三态 CHECK（align 行不得携带 fit）→ SQLite 抛错冒到路由，**客户端拿不到响应**（实测状态码停在 0）。若改成「align 挪 `align_prev` 并清空、降级为 v1 行」，等于允许陈旧客户端**静默销毁新量表标注**——与「不静默降级」「代际不混算」两条纪律冲突，故不做。
+    - 触发面：curl / 陈旧缓存的旧 UI 半区；新打分件只发 `align`/`boundary`，不走此路。
+    - 判据单点：`store.turnAlignmentSchemaVersion(session, turn)`（只读；无行 → `null`，旧行 → 1，对齐行 → ≥2）。本门必须排在 origin 判定**之前**——`resolveAnnotationOrigin` 会写队列，排在后面 = 「拒了还改了队列」。
   - **origin 服务端判定**：`(session,turn)` 在任一 `annotated_at IS NULL` 的队列行中 → `'sample'`（并回填全部命中行 `annotated_at`）；否则 `'spot'`。申报制污染口径，杜绝。
   - recheck 语义：覆盖已有标注时旧值挪入 `fit_prev/quote_prev`（复标批次靠它成对）。
   - 200 → `{ok, origin, overwritten, fit_prev_available}`。
