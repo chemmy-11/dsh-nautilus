@@ -464,10 +464,10 @@ async function withWorkbenchClient(fn) {
 test('AL.4b 对齐视图 SSR：双路台账 / 分布 / 边界 / 一致性 / 版本面（fixture 不依赖真路由）', async () => {
   await withWorkbenchClient(async ({ wb, react, h }) => {
     assert.equal(typeof wb.AlignmentsView, 'function', '对齐视图必须导出')
-    const html = h(react.createElement(wb.AlignmentsView, { align: AL_FIXTURE }))
+    const html = h(react.createElement(wb.AlignmentsView, { align: AL_FIXTURE, names: wb.buildNameIndex(SESSIONS_FIXTURE) }))
     // ① 双路台账：同轮并列 + Δ = 自评 − 人工 + 只有一侧也列出（不补齐）
-    // 轮次列 = 会话短 id + turn（B5：不再带 tNN 角标）
-    for (const s of ['双路台账', 'aaaa1111 · 3', 'cccc3333 · 2', 'dddd4444 · 1', '把问题推深的那句']) {
+    // 轮次列 = 「工作区名 · 会话名 · T<轮次>」（AL.5u 统一命名）；索引里没有的会话按契约同款兜底（未知工作区 + 短形）
+    for (const s of ['双路台账', 'L_workspace · 观测插件开发 · 排期对齐 · T3', '未知工作区 · cccc3333 · T2', '未知工作区 · dddd4444 · T1', '把问题推深的那句']) {
       assert.ok(html.includes(s), '台账缺内容: ' + s)
     }
     assert.ok(!/>t\d+</.test(html), 'B5：台账不得出现 tNN 角标')
@@ -513,8 +513,9 @@ test('AL.4b 对齐视图：consistency=null → 样本不足；接口缺席 → 
 
 test('AL.4b 源码守卫：视图不自造接口 / 术语零残留 / 自评覆盖口径已换', () => {
   const wb = readFileSync(join(SRC, 'client', 'workbench.ts'), 'utf8')
+  // 切片右界 = 会话视图（AL.5u）的起点：对齐视图的切片仍只含它自己的取数口
   const start = wb.indexOf('// ── 视图：对齐台账')
-  const end = wb.indexOf('// ── 根组件')
+  const end = wb.indexOf('// ── 视图：会话')
   assert.ok(start > 0 && end > start, '对齐视图切片锚点必须存在（注释被改名？）')
   const view = wb.slice(start, end)
   assert.ok(view.includes('export function AlignmentsView'), '切片必须含视图本体')
@@ -523,9 +524,10 @@ test('AL.4b 源码守卫：视图不自造接口 / 术语零残留 / 自评覆�
   assert.deepEqual(apis, ['/api/nautilus/m2/alignments'], '视图不得自造别的 API（读侧契约冻结）')
   // 接线：ViewKey 登记 / 总览之后 / 唯一取数口 / 视图分派
   assert.ok(wb.includes("alignments: '对齐'"), 'VIEW_LABEL 必须登记对齐')
-  assert.ok(wb.includes("'overview', 'alignments', 'alerts'"), '顶栏 seg 位置：总览之后')
+  assert.ok(wb.includes("'overview', 'alignments', 'sessions', 'alerts'"), '顶栏 seg 位置：对齐之后接会话（AL.5u）')
   assert.ok(wb.includes("useJson<AlignmentsState>('/api/nautilus/m2/alignments'"), '工作台取数口')
-  assert.ok(wb.includes('createElement(AlignmentsView, { align: alignments })'), '视图分派')
+  assert.ok(wb.includes('createElement(AlignmentsView, { align: alignments, names })'), '视图分派（AL.5u 起带名字索引）')
+  assert.ok(wb.includes('createElement(SessionsView, { list: sessions, names, paused, nonce })'), 'AL.5u：会话视图分派')
   // 自评覆盖口径已换（真实回归：turn_read.clarity 自 AL.3 起停写，旧口径会静默停更）
   assert.ok(wb.includes('props.align.coverage.selfAligned'), '自评覆盖必须改读 alignments 的 self 计数')
   assert.ok(!wb.includes('selfcheck.checked'), '不得再读旧口径 selfcheck.checked')
@@ -1268,5 +1270,113 @@ test('AL.4 收口错误码登记：generational-conflict 在 routes.ts 与 dev-0
   assert.ok(doc.includes('generational-conflict'), 'dev-05 必须登记该错误码')
   assert.ok(doc.includes('409'), '文档须写明状态码 409')
   assert.ok(doc.includes('turnAlignmentSchemaVersion'), '文档须登记判据单点（store 只读探针）')
+})
+
+// ── AL.5u 会话视图：列表 / 展开逐轮 / 打分入口 / 命名统一 ─────────────────────
+
+const SESSIONS_FIXTURE = {
+  revision: 1,
+  sessions: [
+    {
+      session: 'session-aaaa1111', label: 'L_workspace · 观测插件开发 · 排期对齐',
+      workspace: 'L:\\L_workspace\\proj', workspaceName: 'L_workspace', sessionName: '观测插件开发 · 排期对齐',
+      turns: 12, firstTs: 1700000000000, lastTs: 1700003600000,
+      totals: { tokenIn: 12000, tokenOut: 4000, cacheRead: 30000, durationMs: 60000, tpsAvg: 42.5 },
+      annotated: { human: 3, self: 5, legacyFit: 2 },
+    },
+    {
+      session: 'session-bbbb2222', label: '未知工作区 · bbbb2222',
+      workspace: null, workspaceName: '未知工作区', sessionName: 'bbbb2222',
+      turns: 2, firstTs: 1700000000000, lastTs: 1700000600000,
+      totals: { tokenIn: 0, tokenOut: 0, cacheRead: 0, durationMs: 0, tpsAvg: null },
+      annotated: { human: 0, self: 0, legacyFit: 0 },
+    },
+  ],
+}
+
+const SESSION_DETAIL_FIXTURE = {
+  revision: 1,
+  session: SESSIONS_FIXTURE.sessions[0],
+  turns: [
+    {
+      turn: 3, ts: 1700000100000, question: 'AL.5u 会话视图怎么写？',
+      tokenIn: 900, tokenOut: 300, cacheRead: 2100, durationMs: 1500, tps: 40.2, hasText: true,
+      self: { align: 4, boundary: 'substitution', declaration: 0, quote: '「把问题推深的那句」', evidence: null, rubricVersion: 'al-v1' },
+      human: { align: 3, boundary: 'none', exempt: 0, quote: '他引用了我那句', note: null, origin: 'spot', schemaVersion: 2, annotatedAt: 1 },
+    },
+    {
+      turn: 4, ts: 1700000200000, question: '原文缺失的那轮',
+      tokenIn: 500, tokenOut: 100, cacheRead: 800, durationMs: null, tps: null, hasText: false,
+      self: null,
+      human: null,
+    },
+  ],
+}
+
+test('AL.5u 会话视图 SSR：列表 label/合计/计数 + 展开逐轮两路 + hasText=false 禁用 + 命名统一', async () => {
+  await withWorkbenchClient(async ({ wb, react, h }) => {
+    const names = wb.buildNameIndex(SESSIONS_FIXTURE)
+    assert.equal(names.size, 2, '名字索引必须按会话建')
+    // ① 列表：label 直接渲染（服务端派生），轮次/时间范围/合计/已标注三路分列
+    const list = h(react.createElement(wb.SessionsView, { list: SESSIONS_FIXTURE, names }))
+    for (const s of [
+      'L_workspace · 观测插件开发 · 排期对齐', '未知工作区 · bbbb2222',
+      '12.0k / 4.0k', '30.0k', '已标注', '人工 3 · 自评 5 · 旧代际 2',
+      '会话列表（只读）', '第 1 页 · 2 条',
+    ]) {
+      assert.ok(list.includes(s), '会话列表缺内容: ' + s)
+    }
+    assert.ok(list.includes('<td>12</td>'), '轮次数必须显示')
+    assert.ok(!list.includes('逐轮：'), 'AL.5u：未展开不得渲染逐轮（也就不会请求详情）')
+    // ② 逐轮详情（纯组件直渲）：两路并列 + 每行命名统一 + 打分入口
+    const detail = h(react.createElement(wb.SessionDetail, { detail: SESSION_DETAIL_FIXTURE, pending: false, onScored: () => {} }))
+    for (const s of [
+      'L_workspace · 观测插件开发 · 排期对齐 · T3', 'L_workspace · 观测插件开发 · 排期对齐 · T4',
+      '自评 align · 边界', '人工 align · 边界', '替代', '他引用了我那句', '未标注', 'AL.5u 会话视图怎么写？',
+    ]) {
+      assert.ok(detail.includes(s), '逐轮详情缺内容: ' + s)
+    }
+    assert.ok(!/>t\d+</.test(detail), 'AL.5u：轮次行不得出现 tNN 形式')
+    assert.ok(!/session-[a-z0-9]+:\d+/.test(detail), 'AL.5u：不得出现裸 session:turn 拼接')
+    // ③ hasText=false → 不打分入口 + 可见原因（服务端会以 no-turn-text 拒）
+    assert.equal((detail.match(/nt-fitact/g) ?? []).length, 1, 'AL.5u：只有 hasText=true 的轮次才有打分入口')
+    assert.ok(detail.includes('不可打分：原文缺失'), 'AL.5u：原文缺失必须给出可见原因')
+    assert.ok(detail.includes('no-turn-text'), 'AL.5u：原因须说明服务端会拒（不假装能打）')
+    assert.ok(detail.includes('>对齐</button>'), 'AL.5u：打分入口复用会话内打分件（文案「对齐」）')
+    // ④ 详情缺席/读取中：显式态，不写 0
+    const none = h(react.createElement(wb.SessionDetail, { detail: null, pending: true, onScored: () => {} }))
+    assert.ok(none.includes('正在读取该会话逐轮'), '读取中要显式')
+    const absent = h(react.createElement(wb.SessionDetail, { detail: null, pending: false, onScored: () => {} }))
+    assert.ok(absent.includes('会话详情不可用') && absent.includes('不写 0 假读数'), '缺席态口径')
+    // ⑤ 列表接口缺席：显式缺席
+    const noList = h(react.createElement(wb.SessionsView, { list: null, names: new Map() }))
+    assert.ok(noList.includes('会话接口不可用'), '列表缺席必须显式')
+  })
+})
+
+test('AL.5u 源码守卫：命名统一 / label 不自拼 / 详情按需取数 / 只用契约端点 / 复用打分件', () => {
+  const wb = readFileSync(join(SRC, 'client', 'workbench.ts'), 'utf8')
+  // 命名统一：工具函数在场；旧的裸形式与 tNN 角标不得复活
+  assert.ok(wb.includes('export function turnLabelOf'), '必须有统一命名助手')
+  assert.ok(wb.includes("' · T' + String(turn)"), '命名形式必须是「… · T<轮次>」')
+  assert.ok(!wb.includes("shortSession(r.session) + ' · ' + String(r.turn)"), '旧的「会话短 id + 轮次」形式不得复活')
+  assert.ok(!wb.includes("' · t' + String("), 'tNN 角标形式不得复活')
+  // label 直接渲染（服务端单点），UI 不自拼
+  assert.ok(wb.includes('String(s.label)'), '会话 label 必须直接用服务端派生值')
+  assert.ok(!wb.includes("workspaceName + ' · ' + sessionName"), 'UI 不得自己拼 label')
+  // 负载纪律：未展开不请求详情
+  assert.ok(wb.includes("expanded === null ? '' : '/api/nautilus/m2/sessions/'"), '详情 URL 必须受展开态约束')
+  assert.ok(/const detailRaw = useJson<SessionDetailState>\(detailUrl, props\.paused === true \|\| expanded === null/.test(wb), '未展开必须 paused（不发详情请求）')
+  // 会话视图切片：只用契约的两个端点 + 复用打分件 + 按 hasText 决定入口
+  const start = wb.indexOf('// ── 视图：会话（AL.5u')
+  const end = wb.indexOf('// ── 根组件')
+  assert.ok(start > 0 && end > start, '会话视图切片锚点必须存在')
+  const view = wb.slice(start, end)
+  const apis = [...new Set([...view.matchAll(/\/api\/[A-Za-z0-9/_-]+/g)].map((m) => m[0]))].sort()
+  assert.deepEqual(apis, ['/api/nautilus/m2/sessions', '/api/nautilus/m2/sessions/'], '会话视图只允许契约里的两个端点（不自造 API）')
+  assert.ok(view.includes('createElement(TurnFitAction'), '打分入口必须复用会话内打分件')
+  assert.ok(view.includes('hasText'), '必须按 hasText 决定是否给打分入口')
+  assert.ok(view.includes('props.list'), 'AL.5u：列表第 0 页复用根组件取数（不自取一遍）')
+  assert.ok(view.includes('offset === 0 ? props.list : remote'), 'AL.5u：第 0 页复用、其余页才自取（负载纪律）')
 })
 

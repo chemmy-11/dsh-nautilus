@@ -236,6 +236,11 @@ export interface TurnFitActionProps {
    * 线上不传 → 默认收起，行为不变。
    */
   defaultOpen?: boolean
+  /**
+   * 打分**成功落库后**回调（供外层只刷新「该会话详情 + 该行计数」；不传 = 无操作）。
+   * 只在服务端 200 后触发——失败不回调，免得刷出「没写进去」的假象。
+   */
+  onScored?: () => void
 }
 
 export function TurnFitAction(props: TurnFitActionProps): ReactNode {
@@ -265,6 +270,7 @@ export function TurnFitAction(props: TurnFitActionProps): ReactNode {
     setText('')
     setScore(null)
     setOpen(false)
+    if (props.onScored !== undefined) props.onScored()
   }
   const submitScore = (): void => {
     if (!canSubmit || score === null) return

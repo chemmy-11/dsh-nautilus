@@ -13,6 +13,8 @@
 import { Component, createElement, useEffect, useRef, useState, type ReactNode } from 'react'
 // OS 层心跳档位控件（1s / 5s / 手动）——独立文件，避免与并行 UI 改动冲突
 import { PulseHeartbeat } from './pulse-controls'
+// AL.5u：会话视图每轮的打分入口——复用会话内打分件（守谷人已验收的形态：对齐 1–5 + 同排同高 + 右端对齐）
+import { TurnFitAction } from './turn-annotate'
 // 图表原语（Grafana/Netdata/Datadog 语法借鉴，零依赖自绘；全部无 hooks，可直调）
 import { BarGauge, MiniChart, Sparkline, StackedBars, StateBand, TopList } from './charts'
 // A 系列：OS 层红线告警视图 + 图标徽标（活跃即闪红）；独立文件，避免与本文件的长历史并写冲突
@@ -1465,7 +1467,7 @@ export const BOUNDARY_ORDER = ['none', 'substitution', 'possession', 'coercion',
 /** 台账最多列出的行数（按时间降序后的截断；超出部分在表下如实标注）。 */
 const ALIGN_LEDGER_MAX = 50
 
-export function AlignmentsView(props: { align: AlignmentsState | null }): ReactNode {
+export function AlignmentsView(props: { align: AlignmentsState | null; names?: Map<string, SessionNames> }): ReactNode {
   const a = props.align
   if (a === null) {
     return createElement('div', null,
@@ -1512,7 +1514,7 @@ export function AlignmentsView(props: { align: AlignmentsState | null }): ReactN
       const bd = r.h !== null ? String(r.h.boundary) : String(r.s?.boundary ?? '')
       const raw = r.h?.quote ?? r.h?.note ?? r.s?.quote ?? r.s?.evidence ?? null
       return createElement('tr', { key: r.key },
-        createElement('td', null, shortSession(r.session) + ' · ' + String(r.turn)),
+        createElement('td', null, turnLabelOf(props.names?.get(r.session), r.session, r.turn)),
         createElement('td', { title: anchorOf(hv) }, hv === null ? '—' : String(hv)),
         createElement('td', { title: anchorOf(sv) }, sv === null ? '—' : String(sv)),
         createElement('td', { title: 'Δ = 自评 − 人工' }, d === null ? '—' : (d > 0 ? '+' + String(d) : String(d))),
@@ -1596,7 +1598,7 @@ export function AlignmentsView(props: { align: AlignmentsState | null }): ReactN
     }),
     Panel({
       title: '双路台账（人工 · 自评）', fig: 'FIG.12',
-      note: '同轮并列：轮次 = 会话短 id + turn；Δ = 自评 − 人工（缺一侧时为 —，不按 0 计）。引文 / 备注取该行原文（悬停看全文）。只有一侧有行的也列出——缺口不补齐、不臆造。',
+      note: '同轮并列：轮次 = 工作区名 · 会话名 · T<轮次>（名字取契约 /m2/sessions，不出现裸会话 id 拼接）；Δ = 自评 − 人工（缺一侧时为 —，不按 0 计）。引文 / 备注取该行原文（悬停看全文）。只有一侧有行的也列出——缺口不补齐、不臆造。',
       children: led.length === 0
         ? Empty({ text: '窗口内暂无对齐行（人工与自评两侧都空）' })
         : createElement('div', null, ledger, led.length > shown.length
@@ -1616,10 +1618,236 @@ export function AlignmentsView(props: { align: AlignmentsState | null }): ReactN
   )
 }
 
+// ── 视图：会话（AL.5u；只读契约 + 逐轮打分入口）────────────────────────────────
+// 契约（主线冻结，UI 不发明）：GET /m2/sessions?limit&offset · GET /m2/sessions/<id>（未知 id → 404）。
+// label 由**服务端单点派生**（workspaceName · sessionName）——本文件直接渲染 label，不再自己拼工作区/会话名。
+
+export type SessionAnnotated = { human: number; self: number; legacyFit: number }
+export type SessionRow = {
+  session: string
+  label: string
+  workspace: string | null
+  workspaceName: string
+  sessionName: string
+  turns: number
+  firstTs: number
+  lastTs: number
+  totals: { tokenIn: number; tokenOut: number; cacheRead: number; durationMs: number; tpsAvg: number | null }
+  annotated: SessionAnnotated
+}
+export type SessionsState = { revision: number; sessions: SessionRow[] }
+export type SessionTurnSelf = {
+  align: number | null; boundary: string | null; declaration: number | null
+  quote: string | null; evidence: string | null; rubricVersion: string | null
+}
+export type SessionTurnHuman = {
+  align: number | null; boundary: string | null; exempt: number
+  quote: string | null; note: string | null; origin: string; schemaVersion: number; annotatedAt: number
+}
+export type SessionTurn = {
+  turn: number; ts: number; question: string | null
+  tokenIn: number; tokenOut: number; cacheRead: number
+  durationMs: number | null; tps: number | null
+  /** 有原文才可打分（服务端「无原文即拒」的门）。 */
+  hasText: boolean
+  self: SessionTurnSelf | null
+  human: SessionTurnHuman | null
+}
+export type SessionDetailState = { revision: number; session: SessionRow; turns: SessionTurn[] }
+/** 会话名两段（轮次命名统一用；取自契约，不由 UI 派生）。 */
+export type SessionNames = { workspaceName: string; sessionName: string }
+/** 每页条数（契约 limit）。 */
+const SESSIONS_PAGE = 50
+
+/** /m2/sessions 列表 → 会话名索引（轮次命名统一用）。 */
+export function buildNameIndex(list: SessionsState | null): Map<string, SessionNames> {
+  const m = new Map<string, SessionNames>()
+  if (list === null) return m
+  for (const s of list.sessions) {
+    m.set(String(s.session), { workspaceName: String(s.workspaceName), sessionName: String(s.sessionName) })
+  }
+  return m
+}
+
+/**
+ * 轮次命名统一形式：**工作区名 · 会话名 · T<轮次>**（两段名取自契约）。
+ * 索引里没有该会话时按契约同款兜底：无工作区记录 → 「未知工作区」；无会话名 → 会话 id 短形。
+ * 不编造真名，也不回落到裸 session-xxxx:12 / t13 这类形式。
+ */
+export function turnLabelOf(names: SessionNames | undefined, session: string, turn: number): string {
+  const ws = names === undefined ? '未知工作区' : names.workspaceName
+  const nm = names === undefined ? shortSession(session) : names.sessionName
+  return ws + ' · ' + nm + ' · T' + String(turn)
+}
+
+const num0 = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) ? v : 0)
+
+/** 会话时间范围（无轮次 → 缺席，不写 0）。 */
+function sessionRange(s: SessionRow): string {
+  if (!Number.isFinite(s.firstTs) || !Number.isFinite(s.lastTs) || s.lastTs <= 0) return '无轮次'
+  return fmtDayTime(s.firstTs) + ' → ' + fmtDayTime(s.lastTs)
+}
+
+/** 已标注计数：人工 / 自评 / 旧代际**分别显示**（代际不混算）。 */
+export function annotatedText(a: SessionAnnotated | null | undefined): string {
+  if (a === null || a === undefined) return '—'
+  return '人工 ' + String(num0(a.human)) + ' · 自评 ' + String(num0(a.self)) + ' · 旧代际 ' + String(num0(a.legacyFit))
+}
+
+/** 边界中文（无/替代/占有/强迫/投射）；none 或不认识 → 空串（不显示噪声）。 */
+function boundaryText(k: string | null | undefined): string {
+  if (k === null || k === undefined || k === '' || k === 'none') return ''
+  return BOUNDARY_LABEL[k] ?? k
+}
+
+/**
+ * 逐轮详情（**纯组件**：只吃 detail，不取数——便于 SSR 断言；取数与负载纪律在 SessionsView 里）。
+ * 每轮一个打分入口：复用会话内打分件（对齐 1–5 · 无边界行 · 同排同高 · 右端对齐）；
+ * hasText === false → **不渲染入口**，改显可见原因（服务端会以 no-turn-text 拒，不假装能打）。
+ */
+export function SessionDetail(props: { detail: SessionDetailState | null; pending: boolean; onScored: (session: string) => void }): ReactNode {
+  const d = props.detail
+  if (d === null) {
+    return Empty({ text: props.pending ? '正在读取该会话逐轮…' : '会话详情不可用（/api/nautilus/m2/sessions/<id>）——路由未落地或读取中，不写 0 假读数' })
+  }
+  const s = d.session
+  const names: SessionNames = { workspaceName: String(s.workspaceName), sessionName: String(s.sessionName) }
+  const cell = (v: string, title?: string): ReactNode => createElement('td', { title }, v)
+  const turnRow = (t: SessionTurn): ReactNode => {
+    const self = t.self
+    const human = t.human
+    const humanExempt = human !== null && Number(human.exempt) === 1
+    const selfTxt = self === null || self.align === null
+      ? '—'
+      : String(self.align) + (boundaryText(self.boundary) === '' ? '' : ' · ' + boundaryText(self.boundary))
+    const humanTxt = human === null
+      ? '未标注'
+      : (humanExempt
+        ? 'N/A 豁免'
+        : String(human.align) + (boundaryText(human.boundary) === '' ? '' : ' · ' + boundaryText(human.boundary)))
+    const q = human?.quote ?? null
+    return createElement('tr', { key: String(t.turn) },
+      createElement('td', null, turnLabelOf(names, String(s.session), t.turn)),
+      cell(fmtDayTime(t.ts)),
+      cell(t.question === null || t.question === '' ? '—' : (t.question.length > 36 ? t.question.slice(0, 36) + '…' : t.question), t.question ?? undefined),
+      cell(fmtK(t.tokenIn) + ' / ' + fmtK(t.tokenOut)),
+      cell(fmtK(t.cacheRead)),
+      cell(t.durationMs === null ? '—' : String(Math.round(t.durationMs)) + ' ms'),
+      cell(t.tps === null ? '—' : fmtNum(t.tps, 1)),
+      cell(selfTxt, self === null || self.rubricVersion === null ? undefined : String(self.rubricVersion)),
+      cell(humanTxt),
+      cell(q === null || q === '' ? '—' : (q.length > 24 ? q.slice(0, 24) + '…' : q), q ?? undefined),
+      createElement('td', null, t.hasText
+        ? createElement(TurnFitAction, {
+          sessionId: String(s.session),
+          messageId: 'sessions-view:' + String(s.session) + ':' + String(t.turn),
+          useChat: () => t.turn,
+          onScored: () => props.onScored(String(s.session)),
+        })
+        : createElement('span', {
+          className: 'nt-tag',
+          title: '该轮原文不在场（早于 B 方案部署）——服务端会以 no-turn-text 拒绝，故此处禁用打分入口',
+        }, '不可打分：原文缺失')),
+    )
+  }
+  return createElement('div', null,
+    createElement('div', { className: 'nt-note', style: { marginTop: 0 } }, '逐轮判读：自评（人自评 1–5）与人工（本面板打分）两路并列；轮次命名统一为「工作区名 · 会话名 · T<轮次>」。'),
+    createElement('div', { className: 'nt-legend' },
+      createElement('span', null, String(s.label)),
+      createElement('span', { className: 'nt-readout', style: { marginLeft: 'auto' } }, '已标注：' + annotatedText(s.annotated))),
+    createElement('table', { className: 'nt-tbl' },
+      createElement('thead', null, createElement('tr', null, ...['轮次', '时间', '问题摘要', 'in / out', 'cache', '时长', 'tps', '自评 align · 边界', '人工 align · 边界', '引文', '打分'].map((h) => createElement('th', { key: h }, h)))),
+      createElement('tbody', null, ...d.turns.map(turnRow))),
+  )
+}
+
+/**
+ * 会话视图（容器）：列表（label 服务端派生 + 轮次数/时间范围/读数合计/已标注计数）+ 点击展开逐轮 + 分页。
+ * 负载纪律：**未展开不发详情请求**（detail 的 useJson 以 expanded === null 为 paused）；翻页只取那一页。
+ */
+export function SessionsView(props: { list: SessionsState | null; names: Map<string, SessionNames>; paused?: boolean; nonce?: number }): ReactNode {
+  const [offset, setOffset] = useState(0)
+  const [expanded, setExpanded] = useState<string | null>(null)
+  const [detailNonce, setDetailNonce] = useState(0)
+  // 打分后只并回该会话的计数（不整页重拉）：详情刷新落地时把 session.annotated 覆盖进本地行
+  const [counts, setCounts] = useState<Record<string, SessionAnnotated>>({})
+  const detailUrl = expanded === null ? '' : '/api/nautilus/m2/sessions/' + encodeURIComponent(expanded)
+  const detailRaw = useJson<SessionDetailState>(detailUrl, props.paused === true || expanded === null, 120000, detailNonce)
+  const pageUrl = '/api/nautilus/m2/sessions?limit=' + String(SESSIONS_PAGE) + '&offset=' + String(offset)
+  // 第 0 页复用根组件的取数（同一 URL），其余页由本视图自取
+  const remote = useJson<SessionsState>(pageUrl, props.paused === true || offset === 0, 120000, props.nonce ?? 0)
+  const data = offset === 0 ? props.list : remote
+  useEffect(() => {
+    if (detailRaw === null) return
+    const s = detailRaw.session
+    if (s === null || s === undefined) return
+    const key = String(s.session)
+    setCounts((m) => {
+      const prev = m[key]
+      const next = s.annotated
+      if (prev !== undefined && prev.human === next.human && prev.self === next.self && prev.legacyFit === next.legacyFit) return m
+      return { ...m, [key]: next }
+    })
+  }, [detailRaw])
+  const detail = detailRaw === null || expanded === null || String(detailRaw.session?.session ?? '') !== expanded ? null : detailRaw
+  const pending = expanded !== null && detail === null
+  const rows = data === null ? [] : data.sessions
+  const cur = rows.find((x) => String(x.session) === expanded) ?? null
+  const cell0 = (v: string): ReactNode => createElement('td', null, v)
+  const rowNode = (s: SessionRow): ReactNode => {
+    const isOpen = expanded === String(s.session)
+    const a = counts[String(s.session)] ?? s.annotated
+    return createElement('tr', { key: String(s.session), className: isOpen ? 'on' : undefined },
+      createElement('td', null, createElement('button', {
+        className: 'nt-btn' + (isOpen ? ' on' : ''), title: isOpen ? '收起逐轮' : '展开逐轮（只在此刻才请求详情）',
+        onClick: () => setExpanded(isOpen ? null : String(s.session)),
+      }, (isOpen ? '▾ ' : '▸ ') + String(s.label))),
+      cell0(String(s.turns)),
+      cell0(sessionRange(s)),
+      cell0(fmtK(s.totals.tokenIn) + ' / ' + fmtK(s.totals.tokenOut)),
+      cell0(fmtK(s.totals.cacheRead)),
+      cell0(s.totals.durationMs > 0 ? fmtNum(s.totals.durationMs / 1000, 1) + ' s' : '—'),
+      cell0(s.totals.tpsAvg === null || s.totals.tpsAvg === undefined ? '—' : fmtNum(s.totals.tpsAvg, 1)),
+      cell0(annotatedText(a)),
+    )
+  }
+  const onScored = (): void => { setDetailNonce((v) => v + 1) }
+  const pager = createElement('div', { className: 'nt-legend' },
+    createElement('span', null, offset === 0 ? '第 1 页 · ' + String(rows.length) + ' 条' : '第 ' + String(offset + 1) + '–' + String(offset + rows.length) + ' 条'),
+    createElement('span', { style: { marginLeft: 'auto', display: 'flex', gap: 6 } },
+      createElement('button', { className: 'nt-btn', disabled: offset === 0, onClick: () => { setOffset(Math.max(0, offset - SESSIONS_PAGE)); setExpanded(null) } }, '← 上一页'),
+      createElement('button', {
+        className: 'nt-btn', disabled: rows.length < SESSIONS_PAGE,
+        title: rows.length < SESSIONS_PAGE ? '本页未满 ' + String(SESSIONS_PAGE) + ' 条，已到末页' : '下一页',
+        onClick: () => { setOffset(offset + SESSIONS_PAGE); setExpanded(null) },
+      }, '下一页 →')),
+  )
+  return createElement('div', null,
+    createElement('div', { className: 'nt-note', style: { marginTop: 0 } }, '会话列表（只读）：label 由**服务端单点派生**（工作区名 · 会话名）——此处直接渲染，不再自己拼；点 label 展开逐轮并可直接打分；**未展开不请求详情接口**。'),
+    Panel({
+      title: '会话', fig: 'FIG.15',
+      note: '轮次命名统一为「工作区名 · 会话名 · T<轮次>」（两段名取契约，不出现裸会话 id 拼接）。读数合计取服务端口径；已标注计数人工 / 自评 / 旧代际**分别显示**（代际不混算）。分页 50 条一页；契约未给总数，故「下一页」以「本页满 50 条」为可用判据——不编造总数。',
+      children: data === null
+        ? Empty({ text: '会话接口不可用（/api/nautilus/m2/sessions）——路由未落地或读取中，不写 0 假读数' })
+        : createElement('div', null, pager,
+          createElement('table', { className: 'nt-tbl' },
+            createElement('thead', null, createElement('tr', null, ...['会话（工作区 · 会话名）', '轮次', '时间范围', 'in / out', 'cache', '时长', '平均 tps', '已标注'].map((h) => createElement('th', { key: h }, h)))),
+            createElement('tbody', null, ...rows.map(rowNode)))),
+    }),
+    expanded !== null
+      ? Panel({
+        title: '逐轮：' + (cur === null ? '（该会话）' : String(cur.label)), fig: 'FIG.16',
+        note: '每轮一个打分入口（复用会话内打分件）；原文缺失的轮次入口禁用并给出原因——服务端「无原文即拒」，不假装能打。打完分只刷新该会话详情与该行计数。',
+        children: createElement(SessionDetail, { detail, pending, onScored }),
+      })
+      : null,
+  )
+}
+
 // ── 根组件 ────────────────────────────────────────────────────────────────────
 
-export type ViewKey = 'overview' | 'alignments' | 'alerts' | 'curve' | 'report'
-export const VIEW_LABEL: Record<ViewKey, string> = { overview: '总览', alignments: '对齐', alerts: '告警', curve: '曲线', report: '报告' }
+export type ViewKey = 'overview' | 'alignments' | 'sessions' | 'alerts' | 'curve' | 'report'
+export const VIEW_LABEL: Record<ViewKey, string> = { overview: '总览', alignments: '对齐', sessions: '会话', alerts: '告警', curve: '曲线', report: '报告' }
 export const WORKBENCH_LABEL = 'Nautilus 工作台'
 
 /** 工作台根组件。onExitToConversation 由宿主半区注入（ctx.layout.selectPanel(null)），用于回到会话。 */
@@ -1638,6 +1866,9 @@ export function Workbench(props: { onExitToConversation?: () => void; sessionNam
   const m2 = useJson<M2State>('/api/nautilus/m2/state', paused, 120000, nonce)
   // AL.4b：对齐台账（人工 1–5 vs 人自评 1–5；只读，契约由主线冻结——本视图不发明 API）
   const alignments = useJson<AlignmentsState>('/api/nautilus/m2/alignments', paused, 120000, nonce)
+  // AL.5u：会话列表（label 由服务端单点派生）；两处用它做轮次命名（对齐台账 + 会话视图）
+  const sessions = useJson<SessionsState>('/api/nautilus/m2/sessions?limit=50&offset=0', paused, 120000, nonce)
+  const names = buildNameIndex(sessions)
   // 实时读数：OS 层每 1s 重取最新值（/pulse/state 只查 15 行 latest，代价可忽略）；
   // 手动档下值不会变，但重取同样廉价，故不额外分支。
   const pulse = useJson<PulseState>('/api/nautilus/pulse/state', paused, 1000, nonce)
@@ -1658,7 +1889,8 @@ export function Workbench(props: { onExitToConversation?: () => void; sessionNam
   // 用 createElement 渲染视图组件（**不可**写成 OverviewView({...}) 直接调用）：
   // 直接调用会把子组件的 hooks 算进父组件，切换视图时 hooks 数量变化 → React 抛错、整页渲染失败。
   const body = view === 'overview' ? createElement(OverviewView, { m2, pulse, align: alignments, onOpenTurn: (s: string, t: number) => setDrawer({ session: s, turn: t }), paused, sessionNameOf: props.sessionNameOf, nonce })
-    : view === 'alignments' ? createElement(AlignmentsView, { align: alignments })
+    : view === 'alignments' ? createElement(AlignmentsView, { align: alignments, names })
+    : view === 'sessions' ? createElement(SessionsView, { list: sessions, names, paused, nonce })
     : view === 'curve' ? createElement(CurveView, { m2, era, pulse, align: alignments, paused, analysis, sessionNameOf: props.sessionNameOf, onOpenTurn: (s: string, t: number) => setDrawer({ session: s, turn: t }), nonce })
     : view === 'alerts' ? createElement(AlertsView, { state: alerts, toast: setToast, reload: () => setNonce((v) => v + 1), collectorMode: pulse === null ? 'auto' : pulse.collector.mode })
     : createElement(ReportView, { m2, pulse, era, analysis })
@@ -1668,7 +1900,7 @@ export function Workbench(props: { onExitToConversation?: () => void; sessionNam
         ? createElement('button', { className: 'nt-btn', style: { marginRight: 2 }, onClick: () => { if (props.onExitToConversation !== undefined) props.onExitToConversation() } }, '← 返回会话')
         : null,
       createElement('div', { className: 'nt-wb-brand' }, 'NAUTILUS', createElement('small', null, 'Observation Workbench')),
-      createElement('div', { className: 'nt-wb-seg' }, ...(['overview', 'alignments', 'alerts', 'curve', 'report'] as ViewKey[]).map((k) => createElement('button', { key: k, className: k === view ? 'on' : '', onClick: () => setView(k) }, VIEW_LABEL[k]))),
+      createElement('div', { className: 'nt-wb-seg' }, ...(['overview', 'alignments', 'sessions', 'alerts', 'curve', 'report'] as ViewKey[]).map((k) => createElement('button', { key: k, className: k === view ? 'on' : '', onClick: () => setView(k) }, VIEW_LABEL[k]))),
       createElement('div', { className: 'nt-wb-right' },
         createElement('span', null, 'NEXUS ' + ok(m2) + ' · PULSE ' + ok(pulse)),
         createElement('button', {
