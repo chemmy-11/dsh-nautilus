@@ -53,6 +53,10 @@ This repository does not commit `lib/`, so a **git-form install builds in place 
 
 Config example (in the profile's `cordis.patch.yml`; every field has a default, so configuration is usually unnecessary):
 
+> **Breaking config change (AL.4g)**: the readings collector key was renamed from `lField` to `readings`.
+> The old key `lField` is **no longer read** — rename it in your `cordis.patch.yml`, otherwise that field
+> **silently falls back to its default**.
+
 ```yaml
 - id: nautilus
   config:
@@ -62,7 +66,7 @@ Config example (in the profile's `cordis.patch.yml`; every field has a default, 
                       # only the data directory is shared; each home stays isolated. The db file is
                       # always nautilus.db inside that directory (the pulse sub-plugin uses the
                       # same file, different tables, and follows the same directory).
-    lField:
+    readings:
       enabled: true
       historyDays: 30
     pulse:            # OS/GPU collection sub-plugin
