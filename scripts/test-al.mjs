@@ -856,12 +856,14 @@ test('AL.4c/4d 打分件：SSR 可见结果（对齐文案 / 无契合 / 无 tNN
     assert.equal((open.match(/<input/g) ?? []).length, 0, 'AL.4d：单行 input 已撤（高度翻倍靠 textarea+min-height）')
     assert.ok(open.includes('>提交<'), 'B4：提交按钮文案 = 「提交」')
     assert.ok(!open.includes('提交 4'), 'B4：旧文案「提交 4」不得残留')
-    // AL.4d：提交键移出分值排、固定浮层右上角；分值排只剩 5 档 + N/A（故一排更不会被挤压）
+    // AL.4e（守谷人裁决，覆盖 AL.4d 的右上角方案）：提交键回到**分值排内右端**，与 1–5 / N/A 同排同高。
+    // 断**结构关系**（同容器 + 同排 + 非绝对定位 + 行内居中），不钉像素——下次微调间距不会假红。
     const rowStart = open.indexOf('row nowrap')
     const rowEnd = open.indexOf('class="row"', rowStart + 1)
     const rowSeg = open.slice(rowStart, rowEnd > rowStart ? rowEnd : open.length)
     assert.ok(rowSeg.includes('N/A'), '分值排必须含 N/A')
-    assert.ok(!rowSeg.includes('提交'), 'AL.4d：提交键已移出分值排（改挂浮层右上角）')
+    assert.ok(rowSeg.includes('class="opt sub"') && rowSeg.includes('>提交<'), 'AL.4e：提交键必须在分值排**内**（与 1–5/N/A 同容器）')
+    assert.ok(rowSeg.indexOf('N/A') < rowSeg.indexOf('>提交<'), 'AL.4e：提交键在 N/A 右侧（排的右端）')
     assert.ok(open.includes('class="opt sub"'), '提交键仍在（.opt.sub）')
     assert.ok(open.includes('title="N/A = 无判断对象'), 'N/A 豁免提示保留')
     // AL.4d：浮层**不再有边界行**（渲染 + 文案一并撤）——人工侧不再采集 boundary
@@ -875,11 +877,15 @@ test('AL.4c/4d 打分件：SSR 可见结果（对齐文案 / 无契合 / 无 tNN
     assert.ok(src.includes('max-height:min(70vh,420px)'), 'B2：贴顶兜底 = 限高可滚')
     assert.ok(src.includes('min-width:272px'), 'B7：最小宽度按加总定值（分值排 200 + 内边距边框 20 = 220 → 272 留余量）')
     assert.ok(src.includes('box-sizing:border-box'), 'B7：控件统一 border-box，宽度才可加总')
-    // AL.4d-②：提交键绝对定位右上角（top/right 各 8px）；浮层 padding-top 30px 即它的净空
-    assert.ok(/\.nt-fitpop \.opt\.sub\{position:absolute;top:8px;right:8px/.test(src), 'AL.4d：提交键必须固定右上角')
-    // 断「≥36px」而不是钉死 36：下次调 padding 只要不放小就不会假红（净空 = 键高 22 + 上 8 + 键底到分值排 ≥6）
-    const padTop = Number((src.match(/\.nt-fitpop\{[^}]*?padding:(\d+)px/) ?? [])[1] ?? '0')
-    assert.ok(padTop >= 36, 'AL.4d：浮层顶部净空须 ≥36px（实测键底到分值排 6px），当前 ' + String(padTop) + 'px')
+    // AL.4e：提交键与分值**同高**靠三条结构事实保证（均不钉像素）——
+    //   ① 不再绝对定位（回到文档流，与 .opt 同排）；② 与 .opt 同规格（只收窄 min-width，padding/border 同值）；
+    //   ③ 分值排 flex 居中（align-items:center）→ 同行高度对齐。
+    assert.ok(!/\.nt-fitpop \.opt\.sub\{[^}]*position:absolute/.test(src), 'AL.4e：提交键不得再绝对定位（AL.4d 右上角方案已废）')
+    assert.ok(/\.nt-fitpop \.row\{[^}]*align-items:center/.test(src), 'AL.4e：分值排必须 flex 居中（提交与档位同高）')
+    assert.ok(/\.nt-fitpop \.opt\.sub\{min-width:0/.test(src), 'AL.4e：提交键与 .opt 同规格（仅收窄最小宽度）')
+    // 作废的 36px 顶部净空：padding 回到常规 8px 起（不再为提交键预留顶部净空）
+    const padTop = Number((src.match(/\.nt-fitpop\{[^}]*?padding:(\d+)px/) ?? [])[1] ?? '-1')
+    assert.ok(padTop === 8, 'AL.4e：顶部净空已撤销（padding 应为 8px 起），当前 ' + String(padTop) + 'px')
     // AL.4d-③：输入框高度翻倍（改前单行 ≈27px → min-height 56px）
     assert.ok(src.includes('min-height:56px'), 'AL.4d：输入框 min-height = 56px（改前 ≈27px 的 2 倍）')
     assert.ok(!src.includes("type: 'text'"), 'AL.4d：单行 input 已换成多行 textarea')
