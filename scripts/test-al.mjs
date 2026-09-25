@@ -883,6 +883,10 @@ test('AL.4c/4d 打分件：SSR 可见结果（对齐文案 / 无契合 / 无 tNN
     assert.ok(!/\.nt-fitpop \.opt\.sub\{[^}]*position:absolute/.test(src), 'AL.4e：提交键不得再绝对定位（AL.4d 右上角方案已废）')
     assert.ok(/\.nt-fitpop \.row\{[^}]*align-items:center/.test(src), 'AL.4e：分值排必须 flex 居中（提交与档位同高）')
     assert.ok(/\.nt-fitpop \.opt\.sub\{min-width:0/.test(src), 'AL.4e：提交键与 .opt 同规格（仅收窄最小宽度）')
+    // AL.4f：提交键右端贴齐输入框右端——靠「排满宽 + margin-left:auto」这一对结构事实（同样不钉像素）
+    assert.ok(/\.nt-fitpop \.opt\.sub\{[^}]*margin-left:auto/.test(src), 'AL.4f：提交键必须 margin-left:auto（右推到该排右端）')
+    assert.ok(/\.nt-fitpop \.row\{[^}]*width:100%/.test(src), 'AL.4f：分值排必须满宽（右端对齐的前提，别只加 auto margin）')
+    assert.ok(/\.nt-fitpop \.inp\{[^}]*width:100%/.test(src), 'AL.4f：输入框满宽（右端即该排右端，故与提交键右边线重合）')
     // 作废的 36px 顶部净空：padding 回到常规 8px 起（不再为提交键预留顶部净空）
     const padTop = Number((src.match(/\.nt-fitpop\{[^}]*?padding:(\d+)px/) ?? [])[1] ?? '-1')
     assert.ok(padTop === 8, 'AL.4e：顶部净空已撤销（padding 应为 8px 起），当前 ' + String(padTop) + 'px')

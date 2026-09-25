@@ -200,7 +200,7 @@ const CSS_LINES = [
   //     浮层内容宽 272（min-width 落内容盒）→ 余 24px，一排不拥挤，故无需加宽（实测见交付说明）。
   //     不再有顶部净空：padding 回到常规 8px 9px。
   '.nt-fitpop{position:absolute;bottom:calc(100% + 6px);right:0;z-index:30;display:flex;flex-direction:column;gap:6px;padding:8px 9px;border:1px solid var(--nt-border2,#c8c8c3);border-radius:8px;background:var(--dsw-alias-button-floating-fill,var(--nt-panel,#fff));box-shadow:0 6px 22px var(--nt-shadow-color,rgba(0,0,0,.16));min-width:272px;max-height:min(70vh,420px);overflow-y:auto;font-size:var(--dsh-content-font-size-secondary,13px);color:var(--nt-text,#101010)}',
-  '.nt-fitpop .row{display:flex;gap:4px;flex-wrap:wrap;align-items:center}',
+  '.nt-fitpop .row{display:flex;gap:4px;flex-wrap:wrap;align-items:center;width:100%}',
   // AL.4e：档位 + N/A + 提交同排；同高靠本行的 align-items:center（提交不再是独立元素）
   '.nt-fitpop .row.nowrap{flex-wrap:nowrap}',
   '.nt-fitpop .opt{box-sizing:border-box;min-width:28px;padding:4px 6px;border:1px solid var(--nt-border2,#c8c8c3);border-radius:6px;background:transparent;color:inherit;font-size:12px;line-height:1;cursor:pointer;font-variant-numeric:tabular-nums}',
@@ -208,7 +208,9 @@ const CSS_LINES = [
   '.nt-fitpop .opt.on{border-color:var(--nt-accent,#e6321e);color:var(--nt-accent,#e6321e);font-weight:700}',
   '.nt-fitpop .opt.na{min-width:40px}',
   // AL.4e：提交键与 .opt 同规格、同排同高（不绝对定位）——只收窄最小宽度，避免右端多余留白
-  '.nt-fitpop .opt.sub{min-width:0;padding:4px 9px}',
+  // AL.4f：右端贴齐输入框右端——margin-left:auto 把它推到该排右端；前提是该排满宽（见 .row 的 width:100%），
+  //        而 .inp 是 width:100% 且浮层 padding 左右对称（8px 9px），故两者内容盒右边线重合。
+  '.nt-fitpop .opt.sub{min-width:0;margin-left:auto;padding:4px 9px}',
   // AL.4d：输入框高度翻倍（改前单行 input ≈27px → 改后 56px）——多行以便引文可读，仍只此一个输入控件
   '.nt-fitpop .inp{width:100%;box-sizing:border-box;min-height:56px;line-height:1.45;resize:vertical;border:1px solid var(--nt-border2,#c8c8c3);border-radius:6px;background:transparent;color:inherit;font:inherit;font-size:12px;padding:5px 6px}',
   '.nt-fitpop .err{color:var(--nt-accent,#e6321e);font-size:11px}',
