@@ -335,17 +335,16 @@ test('AL.3 覆盖语义：同 (source_kind, ext_ref, turn_ordinal) 重投 → du
 
 // ── AL.4a 收敛守卫：假设 / 预言 / 工作区指向零残留 ────────────────────────────
 
-test('AL.4a 源码守卫：假设/预言/工作区指向在 src/client/** 与 src/routes.ts 零残留', () => {
+test('AL.4a 源码守卫：假设/预言/工作区指向在 src/client/**、src/routes.ts 与 src/index.ts 零残留', () => {
   // 作用域（守谷人 2026-09-28 裁决，逐条写明理由）：
   //  · src/client/** + src/routes.ts：断「零残留」，无例外；
   //  · src/store.ts：只断方法已删——表名与迁移体字符串**必须保留**（红线 3：表一律不 drop），故不 grep 字符串；
-  //  · src/index.ts：**显式豁免**。那里的 `lField` 是 Config 公开字段名（lField.enabled / lField.historyDays），
-  //    删或改名等于改破坏性配置面（需同步 schema / README 双语 / 部署侧 cordis.yml），
-  //    且该文件当时由主线 AL.3 执行者并行编辑——列为独立改动，由主线收敛时统一改名。
+  //  · src/index.ts：**AL.4g 起纳入**——原名 `lField` 的 Config 字段已改名 `readings`，该文件现已零残留。
+  //    原先的豁免正是为那条待改项而设，改完即撤销：守卫覆盖面只增不减，防止术语回流。
   const FORBIDDEN = ['PROPHECY_SEED', 'lfield', 'Lfield', '/m2/annotations', 'L 场', 'HypothesesView', 'ProphecyView', 'AnnotationsState', 'prophecy']
   const walk = (dir) => readdirSync(dir, { withFileTypes: true }).flatMap((d) =>
     d.isDirectory() ? walk(join(dir, d.name)) : (d.name.endsWith('.ts') ? [join(dir, d.name)] : []))
-  const files = [...walk(join(SRC, 'client')), join(SRC, 'routes.ts')]
+  const files = [...walk(join(SRC, 'client')), join(SRC, 'routes.ts'), join(SRC, 'index.ts')]
   assert.ok(files.length >= 3, '守卫样本太少，路径可能写错：' + String(files.length))
   const hits = []
   for (const f of files) {

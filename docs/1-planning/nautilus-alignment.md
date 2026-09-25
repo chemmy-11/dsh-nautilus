@@ -192,8 +192,12 @@ receive     INTEGER CHECK (receive IN (0,1,2))            -- 预留未启用（O
 - ✅ **AL.5**：一致性闭环机制就位——`scripts/alignment-consistency.mjs`（只读；完全一致率 / 相邻档一致率 / 二次加权 κ；
   确定性留出集 `hash(session:turn) % N`；样本 <50 只报数不给结论；配对键不符时**大声提示**而非静默给 0）+ `docs/2-dev/alignment-correction.md`（Correction 记录，只添不改）。
   **待真实样本**（≥50 对）才能出第一个数字与第一轮「rubric v2 候选 → 留出集回归 → 采纳/回滚」。
-- ⬜ **待改项（我认领）**：`src/index.ts` 的 Config 字段 `lField`（7 处）→ 改名（倾向 `readings`）属**破坏性配置变更**，
-  须同步 Config schema / README 双语 / 部署侧 cordis.yml；另 `docs/2-dev/nautilus-dev-04-selfcheck-ingest.md` §3.2 的旧形口径待更新。
+- ✅ **已改项（AL.4g）**：`src/index.ts` 的 Config 字段 `lField` → **`readings`**（守谷人 2026-09-28 同意）。
+  破坏性配置变更，已同步：Config interface + Schemastery schema + 注释/日志 + README 配置示例（附迁移提示）。
+  **实测活 profile（`~/.dsh/profiles/web`）未设置该键** → 本次改名不影响在跑宿主；
+  `lfield_config` **表名保留**（红线 3：表不 drop；AL.4a 后已无写路径）。
+  顺带**撤销术语守卫对 `src/index.ts` 的豁免**（该文件现已零残留，守卫覆盖面只增不减）。
+- ⬜ **残余待办**：`docs/2-dev/nautilus-dev-04-selfcheck-ingest.md` §3.2 的旧形口径待更新。
 
 **工作区纪律（新增，2026-09-28 踩坑记）**：`feat/ui` 与 `feat/nautilus` 是**两条并行线**，
 但本轮出现过「共享检出被切到 `feat/ui`、主线文件在工作区消失」的情形。**两条线各用一个 git worktree**：

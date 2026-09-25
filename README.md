@@ -53,10 +53,13 @@ dsh plugin --profile <name> add github:chemmy-11/dsh-nautilus
 
 配置示例（profile 的 `cordis.patch.yml`；全部字段都有默认值，通常无需配置）：
 
+> **破坏性配置变更（AL.4g）**：读数采集项由 `lField` 改名为 `readings`（L 场抽象已撤）。旧键 `lField` **不再被读取**——
+> 若你的 `cordis.patch.yml` 里写过它，请改名，否则该项会**静默回落到默认值**。
+
 ```yaml
 - id: nautilus
   config:
-    lField:
+    readings:
       enabled: true
       historyDays: 30
     pulse:            # OS/GPU 采集子插件

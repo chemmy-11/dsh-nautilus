@@ -1,11 +1,11 @@
 /**
- * @dsh-external/dsh-nautilus — plugin entry（L 场读数 + 自评工具 + pulse 子插件）。
+ * @dsh-external/dsh-nautilus — plugin entry（会话读数 + 自评工具 + pulse 子插件）。
  *
  * **vault 观测腿已于 2026-09-27 下线**：不再扫描/监听 vault、不再持有 vault 指向；vault 侧操作
  * 交给会话侧 /obsidian 技能（AGENTS §9 裁决）。本文件只做三件事：
  *   1) 打开库（`~/.dsh/nautilus/nautilus.db`，含 xuegulin → nexus → nautilus 的改名迁移）；
  *   2) 采官方 `session/event` → 逐轮读数（TurnsCollector）；
- *   3) 挂 REST（m2 / lfield）+ 自评工具 + pulse 子插件。
+ *   3) 挂 REST（m2 / selfcheck）+ 自评工具 + pulse 子插件。
  * 零写入 vault；观测数据只在 `~/.dsh/nautilus/`。
  */
 import type { Context } from '@deepseek-ai/cordis'
@@ -33,9 +33,12 @@ export const name = 'nautilus'
 export const inject = ['webServer', 'tools']
 
 export interface Config {
-  lField: {
+  /**
+   * 会话读数采集（**AL.4g 由旧键名 `lField` 改名**——「工作区指向」抽象已撤；破坏性配置变更，旧键不再读取）。
+   */
+  readings: {
     enabled: boolean
-    /** L 场读数曲线窗口（天）。 */
+    /** 读数曲线窗口（天）。 */
     historyDays: number
   }
   /** S1.1：外部 harness 自评 ingest 通道（决策 D-SC1；默认关——开启动作本身是部署决策）。 */
@@ -51,7 +54,7 @@ export interface Config {
 }
 
 export const Config = z.object({
-  lField: z.object({
+  readings: z.object({
     enabled: z.boolean().default(true),
     historyDays: z.number().min(1).default(30),
   }).default({ enabled: true, historyDays: 30 }),
@@ -77,17 +80,17 @@ export function apply(ctx: Context, config: Config): void {
   const store = openStore(data.dbFile)
   ctx.effect(() => () => store.close())
 
-  // REST：L 场读数（m2/*）+ L 场指向（lfield）+ 自评 ingest（selfcheck）。vault 三条路由已随观测腿下线。
+  // REST：会话读数（m2/*）+ 自评 ingest（selfcheck）。工作区指向路由随 AL.4a 撤除、vault 三条路由随观测腿下线。
   ctx.effect(() => registerNautilusRoutes(ctx, {
     store,
-    m2HistoryDays: config.lField.historyDays,
+    m2HistoryDays: config.readings.historyDays,
     selfcheckIngest: config.selfcheck.ingest,
   }), 'nautilus: routes')
 
-  // M2：官方会话事件采集（L 场读数数据层；官方 session/event 直采，与团队底座零耦合）
+  // M2：官方会话事件采集（会话读数数据层；官方 session/event 直采，与团队底座零耦合）
   // type-only 豁免：避免为类型引入 dsh-session 依赖；事件结构按官方契约 duck-type（turns.ts）。
   ctx.effect(() => {
-    if (!config.lField.enabled) return () => undefined
+    if (!config.readings.enabled) return () => undefined
     const collector = new TurnsCollector(store)
     const onSessionEvent = (ctx.on as unknown as SessionEventOn).bind(ctx)
     return onSessionEvent(SESSION_EVENT, (session, event) => {
@@ -95,7 +98,7 @@ export function apply(ctx: Context, config: Config): void {
         const s = session as { id?: unknown; header?: { cwd?: unknown } }
         const sid = String(s?.id ?? '')
         if (sid !== '') {
-          // M4-L：会话发起时的 workspace（cwd）——L 场归属判定依据（与 vault 无关）
+          // M4-L：会话发起时的 workspace（cwd）——读数归属判定依据（与 vault 无关）
           const cwd = typeof s?.header?.cwd === 'string' ? s.header.cwd : undefined
           collector.handle(sid, event as TurnEventLike, cwd)
         }
@@ -122,6 +125,6 @@ export function apply(ctx: Context, config: Config): void {
   }, 'nautilus: pulse sub-plugin (Phase 1)')
   console.log('[nautilus] Pulse OS/GPU 层' + (config.pulse.enabled ? '已挂载（子插件）' : '已禁用（config.pulse.enabled=false）'))
 
-  console.log('[nautilus] L 场读数采集启动（官方 session/event 直采' + (config.lField.enabled ? '' : ' · lField 已禁用') + '）')
+  console.log('[nautilus] 会话读数采集启动（官方 session/event 直采' + (config.readings.enabled ? '' : ' · readings 已禁用') + '）')
   console.log('[nautilus] M3-F 就绪（自评工具 / B 方案原文 / 白盒分析）')
 }
