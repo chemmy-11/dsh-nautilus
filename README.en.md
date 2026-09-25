@@ -56,6 +56,12 @@ Config example (in the profile's `cordis.patch.yml`; every field has a default, 
 ```yaml
 - id: nautilus
   config:
+    dataDir: ''       # empty = $DSH_HOME/nautilus (default, unchanged)
+                      # when several frontends on one machine (dsh-web and desktop) must share
+                      # one dataset, point both at the same directory (e.g. D:\\nautilus-data)
+                      # only the data directory is shared; each home stays isolated. The db file is
+                      # always nautilus.db inside that directory (the pulse sub-plugin uses the
+                      # same file, different tables, and follows the same directory).
     lField:
       enabled: true
       historyDays: 30

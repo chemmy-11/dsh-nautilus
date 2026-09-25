@@ -6,7 +6,7 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, utimesSync, readFileSync, readdirSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, utimesSync, readFileSync, readdirSync, existsSync } from 'node:fs'
 import vm from 'node:vm'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -17,6 +17,10 @@ import { processSelfCheck, buildSelfCheckTool } from '../lib/nexus/selfcheck.js'
 import { validateIngest, ingestSelfCheck, QUOTE_MAX } from '../lib/nexus/selfcheck-ingest.js'
 import { openStore } from '../lib/store.js'
 import { DatabaseSync } from 'node:sqlite'
+// PS.0fix：多端共享前置（显式数据目录 / 连接级 PRAGMA / 采集丢写可见化）
+import { resolveDataDir } from '../lib/home.js'
+import { SQLITE_BUSY_TIMEOUT_MS } from '../lib/sqlite.js'
+import { TurnsCollector } from '../lib/nexus/turns.js'
 import { cpuTimes, cpuUtilization, parseCounters, parseNvidiaSmi, collectLocal } from '../lib/pulse/collect.js'
 import { openPulseStore } from '../lib/pulse/store.js'
 
@@ -1015,3 +1019,252 @@ test('客户端取色纪律：theme.ts 是唯一硬编码色处 + 令牌表无�
     assert.ok(bundle.includes(s), 'lib/client.js 缺令牌层标记: ' + s)
   }
 })
+
+// ── PS.0fix：多端共享数据目录的三项前置修复 ────────────────────────────────────
+// 背景：同机的 dsh-web 与 desktop 各有各的 home（~/.dsh / ~/.dsh-desktop），面板「有面板没数据」
+// = 数据没共享。方案：只共享**数据目录**（config.dataDir），home 隔离保留。
+//   A) dataDir 显式数据目录（取代「文件系统联接」）· B) 多写者就绪（busy_timeout + WAL）
+//   C) 丢写可见化（采集写失败计数 + 诊断面暴露）
+
+/** 读一条 PRAGMA 的标量值（列名随语句而变——如 PRAGMA busy_timeout 的列叫 timeout——故按位置取）。 */
+function pragmaScalar(db, name) {
+  const row = db.prepare('PRAGMA ' + name).get()
+  return row === undefined ? undefined : Object.values(row)[0]
+}
+
+test('PS.0fix-A：resolveDataDir(override) 用显式目录、无回落、不跑历史改名迁移', () => {
+  const home = mkdtempSync(join(tmpdir(), 'nautilus-datadir-'))
+  try {
+    // 旧世代痕迹：默认分支会把它们「改名迁移」走——显式分支必须一个都不碰（不探测、不 rename）
+    mkdirSync(join(home, 'xuegulin'), { recursive: true })
+    writeFileSync(join(home, 'xuegulin', 'xuegu.db'), 'legacy')
+    mkdirSync(join(home, 'nexus'), { recursive: true })
+    writeFileSync(join(home, 'nexus', 'nexus.db'), 'legacy2')
+
+    const warns = []
+    const custom = join(home, 'shared', 'nested', 'data') // 多级不存在 → 证明 recursive 建目录
+    const r = resolveDataDir(home, (m) => warns.push(m), custom)
+    assert.equal(r.dir, custom, 'dataDir 就是数据目录本身')
+    assert.equal(r.dbFile, join(custom, 'nautilus.db'), '库文件名固定 nautilus.db')
+    assert.equal(r.fellBack, false, '显式目录没有「回落」语义')
+    assert.deepEqual(warns, [], '显式目录不该产生迁移告警')
+    assert.ok(existsSync(custom), '显式目录必须被建出（含多级父目录）')
+    assert.ok(existsSync(join(home, 'xuegulin', 'xuegu.db')), '旧世代 xuegulin 原样保留（显式分支不探测）')
+    assert.ok(existsSync(join(home, 'nexus', 'nexus.db')), '旧世代 nexus 原样保留（显式分支不探测）')
+    assert.ok(!existsSync(join(home, 'nautilus')), '不该顺手建出默认目录')
+
+    // 默认路径行为未变：同一 home 不传 override → 仍执行 nexus → nautilus 改名迁移
+    const d = resolveDataDir(home, (m) => warns.push(m))
+    assert.equal(d.dir, join(home, 'nautilus'))
+    assert.equal(d.dbFile, join(home, 'nautilus', 'nautilus.db'))
+    assert.ok(existsSync(join(home, 'nautilus', 'nautilus.db')), '默认分支仍把 nexus.db 改名为 nautilus.db')
+    assert.ok(!existsSync(join(home, 'nexus')), '默认分支仍执行目录改名')
+  } finally { rmSync(home, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }) }
+})
+
+test('PS.0fix-A：dataDir 指向自定义目录 → 库真的落在那（pulse 同库），home 下不产生数据文件', async () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'nautilus-datadir-mount-'))
+  const prevHome = process.env.DSH_HOME
+  const home = join(tmp, 'home')
+  const custom = join(tmp, 'shared-data') // 刻意不存在：连「自动建目录」一起验
+  mkdirSync(home, { recursive: true })
+  process.env.DSH_HOME = home
+  try {
+    const { Context } = await import('@deepseek-ai/cordis')
+    const mod = await import(new URL('../lib/index.js', import.meta.url).href)
+    const handlers = new Map()
+    const ctx = new Context()
+    ctx.provide('webServer', { register(route) { handlers.set(route.path, route.handler); return () => {} } })
+    ctx.provide('tools', { register() {} })
+    // 真实装配路径：config 过 Config schema（dataDir 是新增字段，默认值与显式值都要走一遍）
+    const fiber = ctx.plugin(mod, { dataDir: custom, pulse: { enabled: false } })
+    try {
+      const deadline = Date.now() + 5000
+      while (Date.now() < deadline && !handlers.has('/api/nautilus/m2/state')) await new Promise((r) => setTimeout(r, 25))
+      assert.ok(handlers.has('/api/nautilus/m2/state'), '插件必须挂载（读侧路由在场）')
+
+      const dbFile = join(custom, 'nautilus.db')
+      assert.ok(existsSync(dbFile), '主库必须落在 dataDir 指定目录：' + dbFile)
+      const db = new DatabaseSync(dbFile, { readOnly: true })
+      try {
+        assert.equal(Number(pragmaScalar(db, 'user_version')), 9, '落在那的确实是本插件的库（schema 版本在场）')
+        assert.ok(
+          db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'metric_sample'").get() !== undefined,
+          'pulse 的表必须同库（子插件跟随同一数据目录，否则面板半空）',
+        )
+      } finally { db.close() }
+      assert.ok(!existsSync(join(home, 'nautilus')), 'home 下不该再出现默认数据目录（否则就是数据分叉）')
+    } finally { await fiber.dispose() }
+  } finally {
+    if (prevHome === undefined) delete process.env.DSH_HOME
+    else process.env.DSH_HOME = prevHome
+    rmSync(tmp, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+  }
+})
+
+test('PS.0fix-B：两个库的连接级 PRAGMA 生效（busy_timeout=5000 + journal_mode=wal）', () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'nautilus-pragma-'))
+  try {
+    // 同库不同表：两个 store 打开**同一个文件**——正是「多宿主进程同写一个库」的最小复现
+    const dbFile = join(tmp, 'nautilus.db')
+    const store = openStore(dbFile)
+    let pulseStore
+    try {
+      // nautilus store 那条连接：连接级 busy_timeout + 持久 WAL 都要在
+      assert.equal(Number(pragmaScalar(store.db, 'busy_timeout')), SQLITE_BUSY_TIMEOUT_MS, 'nautilus: busy_timeout 必须等于集中常量')
+      assert.equal(String(pragmaScalar(store.db, 'journal_mode')).toLowerCase(), 'wal', 'nautilus: journal_mode 必须是 wal')
+
+      pulseStore = openPulseStore(dbFile)
+      assert.equal(Number(pragmaScalar(pulseStore.db, 'busy_timeout')), SQLITE_BUSY_TIMEOUT_MS, 'pulse: busy_timeout 必须等于集中常量')
+      assert.equal(String(pragmaScalar(pulseStore.db, 'journal_mode')).toLowerCase(), 'wal', 'pulse: journal_mode 必须是 wal')
+
+      // 第三方连接（等于「另一个宿主进程」）也必须看到同一份 WAL 模式（journal_mode 是库的持久属性）
+      const side = new DatabaseSync(dbFile, { readOnly: true })
+      try {
+        assert.equal(String(pragmaScalar(side, 'journal_mode')).toLowerCase(), 'wal', '共享库文件本身必须是 WAL')
+      } finally { side.close() }
+    } finally { store.close(); pulseStore?.close() }
+  } finally { rmSync(tmp, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }) }
+})
+
+test('PS.0fix-C：TurnsCollector 写失败计数 / 摘要截断 / 限流日志（首 5 全打，其后每 100 次）', () => {
+  // 替身 store：只让 upsertTurnRead 抛（其余照常返回），复现「并发写不进去」的单点失败
+  const boom = () => { throw new Error('database is locked') }
+  const store = {
+    classifySessionRoot() {},
+    upsertUserText() {},
+    marksStepSeen() { return true },
+    appendAssistantText() {},
+    upsertTurnRead: boom,
+  }
+  const collector = new TurnsCollector(store)
+  assert.deepEqual(collector.diagnostics(), { writeFailures: 0, lastError: null, lastErrorAt: null }, '未失败时是诚实的全零/空')
+
+  const logged = []
+  const origError = console.error
+  console.error = (...args) => { logged.push(args.join(' ')) }
+  try {
+    // 首 5 次全打，第 6/7 次静默（等第 100 次）
+    for (let i = 1; i <= 7; i += 1) collector.handle('s-1', { type: 'assistant/message', time: 1000 + i, data: { turn: i, step: 1, usage: { inputTokens: 1 } } })
+    assert.equal(collector.diagnostics().writeFailures, 7, '每次写失败都要计数')
+    assert.equal(logged.length, 5, '首 5 次全打，第 6/7 次不重复刷屏')
+    assert.match(logged[0], /turn collect write failed #1/)
+    assert.match(collector.diagnostics().lastError, /upsertTurnRead: database is locked/)
+
+    // 第 100 次记一条，其余静默
+    logged.length = 0
+    for (let i = 8; i <= 100; i += 1) collector.handle('s-1', { type: 'assistant/message', time: 1000 + i, data: { turn: i, step: 1, usage: { inputTokens: 1 } } })
+    assert.equal(collector.diagnostics().writeFailures, 100, '计数到 100')
+    assert.equal(logged.length, 1, '第 100 次记一条（其余静默）')
+    assert.match(logged[0], /write failed #100/)
+  } finally { console.error = origError }
+
+  assert.ok(collector.diagnostics().lastErrorAt > 0, '失败时刻要留痕（诊断面据此判断「还在失败吗」）')
+
+  // 摘要截断：超长错误不得整段搬上诊断面
+  const long = new TurnsCollector({
+    classifySessionRoot() {},
+    upsertUserText() {},
+    marksStepSeen() { return true },
+    appendAssistantText() {},
+    upsertTurnRead() { throw new Error('x'.repeat(500)) },
+  })
+  const origError2 = console.error
+  console.error = () => {}
+  try {
+    long.handle('s-2', { type: 'assistant/message', time: 1, data: { turn: 1, step: 1, usage: {} } })
+  } finally { console.error = origError2 }
+  assert.ok(long.diagnostics().lastError.length <= 200, 'lastError 必须截断（实测 ' + long.diagnostics().lastError.length + '）')
+
+  // 全部写路径都抛时也不得把异常抛回事件循环（否则一条坏库会连坐所有监听器）
+  const dead = new TurnsCollector(new Proxy({}, { get: () => () => { throw new Error('readonly database') } }))
+  const origError3 = console.error
+  console.error = () => {}
+  try {
+    assert.doesNotThrow(() => {
+      dead.handle('s-3', { type: 'turn/start', time: 1, data: { turn: 1 } }, 'C:\\work')
+      dead.handle('s-3', { type: 'user/message', time: 2, data: { content: [{ type: 'text', text: 'q' }] } })
+      dead.handle('s-3', { type: 'assistant/message', time: 3, data: { turn: 1, step: 1, usage: { inputTokens: 1 }, message: { content: [{ type: 'text', text: 'a' }] } } })
+    }, '写失败必须被护栏吃掉（计数可见），不得抛回采集热路径')
+  } finally { console.error = origError3 }
+  assert.ok(dead.diagnostics().writeFailures >= 3, '全抛场景每次写都计数：' + dead.diagnostics().writeFailures)
+})
+
+test('PS.0fix-C：真实装配下丢写计数增长，且 /m2/state 的 diagnostics 可见（此前是无声的）', async () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'nautilus-wfail-'))
+  const prevHome = process.env.DSH_HOME
+  process.env.DSH_HOME = tmp
+  try {
+    const { Context } = await import('@deepseek-ai/cordis')
+    const mod = await import(new URL('../lib/index.js', import.meta.url).href)
+    const handlers = new Map()
+    const ctx = new Context()
+    ctx.provide('webServer', { register(route) { handlers.set(route.path, route.handler); return () => {} } })
+    ctx.provide('tools', { register() {} })
+    const fiber = ctx.plugin(mod, { pulse: { enabled: false } })
+    const req = (method) => ({ method, headers: { 'sec-fetch-site': 'same-origin' } })
+    const res = () => ({ statusCode: 0, payload: null, writeHead(s) { this.statusCode = s }, end(text) { this.payload = JSON.parse(String(text ?? '{}')) } })
+    const getState = () => { const r = res(); handlers.get('/api/nautilus/m2/state')(req('GET'), r); return r }
+    try {
+      const deadline = Date.now() + 5000
+      while (Date.now() < deadline && !handlers.has('/api/nautilus/m2/state')) await new Promise((r) => setTimeout(r, 25))
+      assert.equal(getState().payload.diagnostics.collector.writeFailures, 0, '未失败时计数为 0（不是 null——采集器已挂载）')
+
+      // 制造真实写失败：从**另一条连接**拆掉 turn_text（原文表）——采集的原文写路径随即抛 no such table
+      const side = new DatabaseSync(join(tmp, 'nautilus', 'nautilus.db'))
+      side.exec('DROP TABLE turn_text')
+      side.close()
+
+      // 走官方事件通道（真实 ctx.on 监听器 → 真实 collector → 真实 store）
+      const session = { id: 's-wfail', header: { cwd: 'C:\\work' } }
+      ctx.emit('session/event', session, { type: 'turn/start', time: 1000, data: { turn: 1 } })
+      ctx.emit('session/event', session, { type: 'user/message', time: 1010, data: { content: [{ type: 'text', text: '第一轮的问题' }] } })
+      ctx.emit('session/event', session, {
+        type: 'assistant/message', time: 1100,
+        data: { turn: 1, step: 1, usage: { inputTokens: 5, outputTokens: 6, cacheReadTokens: 7 }, message: { content: [{ type: 'text', text: '回答' }] } },
+      })
+
+      const state = getState()
+      assert.equal(state.statusCode, 200, '诊断面必须仍可读（写失败不该打挂读侧）')
+      const diag = state.payload.diagnostics.collector
+      assert.equal(diag.writeFailures, 2, 'user/message 与 assistant 原文两次写失败都要计数：' + JSON.stringify(diag))
+      assert.match(diag.lastError, /appendAssistantText/)
+      assert.match(diag.lastError, /turn_text/)
+      assert.ok(diag.lastErrorAt > 0)
+      // 诚实边界：丢的是**原文**，逐轮读数本身仍在（turn_read 未受影响）——计数不该被读成「整轮没了」
+      assert.equal(state.payload.totals.turns, 1, 'turn_read 仍写入（丢的是 turn_text，不是读数）')
+    } finally { await fiber.dispose() }
+  } finally {
+    if (prevHome === undefined) delete process.env.DSH_HOME
+    else process.env.DSH_HOME = prevHome
+    rmSync(tmp, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+  }
+})
+
+test('PS.0fix-C：readings 关（无采集器）时 diagnostics.collector=null（不编造 0）', async () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'nautilus-nocol-'))
+  const prevHome = process.env.DSH_HOME
+  process.env.DSH_HOME = tmp
+  try {
+    const { Context } = await import('@deepseek-ai/cordis')
+    const mod = await import(new URL('../lib/index.js', import.meta.url).href)
+    const handlers = new Map()
+    const ctx = new Context()
+    ctx.provide('webServer', { register(route) { handlers.set(route.path, route.handler); return () => {} } })
+    ctx.provide('tools', { register() {} })
+    const fiber = ctx.plugin(mod, { readings: { enabled: false }, pulse: { enabled: false } })
+    try {
+      const deadline = Date.now() + 5000
+      while (Date.now() < deadline && !handlers.has('/api/nautilus/m2/state')) await new Promise((r) => setTimeout(r, 25))
+      const r = { statusCode: 0, payload: null, writeHead(s) { this.statusCode = s }, end(text) { this.payload = JSON.parse(String(text ?? '{}')) } }
+      handlers.get('/api/nautilus/m2/state')({ method: 'GET', headers: { 'sec-fetch-site': 'same-origin' } }, r)
+      assert.equal(r.statusCode, 200)
+      assert.equal(r.payload.diagnostics.collector, null, '无采集器 = null（与「零失败」区分开）')
+    } finally { await fiber.dispose() }
+  } finally {
+    if (prevHome === undefined) delete process.env.DSH_HOME
+    else process.env.DSH_HOME = prevHome
+    rmSync(tmp, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+  }
+})
+

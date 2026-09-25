@@ -15,6 +15,8 @@ import { dirname } from 'node:path'
 import { ALERT_EVENT_DDL } from './pulse/store.js'
 // AL.2：迁移账本（注册 + 顺序执行 + 回读校验），拆包甲的技术前提
 import { runMigrations, type Migration, type MigrationRunResult } from './migrations.js'
+// PS.0fix：连接级 PRAGMA（busy_timeout + WAL）的单一定义处——与 pulse 存储层共用同一份
+import { applySqlitePragmas } from './sqlite.js'
 /** M2/M3 turn 读数行（官方会话事件聚合；与团队底座零耦合）。 */
 export interface TurnReadRow {
   session: string
@@ -136,6 +138,9 @@ export class NautilusStore {
 
   constructor(dbFile: string) {
     this.db = new DatabaseSync(dbFile)
+    // 连接级 PRAGMA：数据目录可与 desktop 端共享 → 多个宿主进程同写一个库文件。
+    // 不设 busy_timeout 时第二个写者立刻抛 SQLITE_BUSY，采集热路径吞掉即**静默丢轮次**（PS.0fix B/C）。
+    applySqlitePragmas(this.db)
     this.db.exec(`
       -- M2：L 场读数（官方 session/event 直采；幂等键 step_seen）
       CREATE TABLE IF NOT EXISTS turn_read (

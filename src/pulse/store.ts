@@ -8,12 +8,15 @@
  * 迁移被永久跳过。等 nautilus 迁到 v3 后的下一次启动，pulse 再补上版本推进。
  * （M5 设计文档原预留 v4 给 `call_p`——现由本层占用 v4，M5 顺延为 v5，已记在开发文档里。）
  *
- * 两个连接同库并发：开 WAL + busy_timeout，读写不互相阻塞。
+ * 并发：本层与 nautilus store 是**同一库文件的两条连接**，且多端共享数据目录后是**多个宿主进程**
+ * （dsh-web / desktop）同写一个文件——WAL + busy_timeout 统一走 ../sqlite.js 的单一定义处，
+ * 不在这里另写一份数值（PRAGMA 漂移没有编译期保护）。
  */
 import { DatabaseSync } from 'node:sqlite'
 import { mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
 import type { Sample } from './collect.js'
+import { applySqlitePragmas } from '../sqlite.js'
 
 /** 本层的 schema 版本（metric_sample 引入于 v4）。 */
 export const SCHEMA_VERSION = 4
@@ -95,8 +98,8 @@ export class PulseStore {
   private readonly db: DatabaseSync
   constructor(dbFile: string) {
     this.db = new DatabaseSync(dbFile)
-    this.db.exec('PRAGMA journal_mode = WAL;')
-    this.db.exec('PRAGMA busy_timeout = 3000;')
+    // 多写者就绪（PS.0fix 任务 B）：busy_timeout 从写死的 3000 收进集中常量（5000），并显式开 WAL。
+    applySqlitePragmas(this.db)
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS metric_sample (
         ts      INTEGER NOT NULL,

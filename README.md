@@ -59,6 +59,9 @@ dsh plugin --profile <name> add github:chemmy-11/dsh-nautilus
 ```yaml
 - id: nautilus
   config:
+    dataDir: ''       # 空 = $DSH_HOME/nautilus（默认，行为不变）
+                      # 多端（同机 dsh-web 与 desktop）共享同一份数据时，两端指向同一个目录（如 D:\\nautilus-data）
+                      # 只共享数据目录，各自 home 仍隔离；库文件名固定为该目录下的 nautilus.db（pulse 子插件同库不同表，跟随同一目录）
     readings:
       enabled: true
       historyDays: 30

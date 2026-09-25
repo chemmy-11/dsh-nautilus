@@ -5,8 +5,12 @@
  * 纪律（AGENTS.md 红线 3）：改名类迁移**只在新目录缺失时**执行，绝不覆盖既有数据；
  * 搬迁失败（旧实例仍持有句柄 → Windows EBUSY/EPERM）时**回落到旧路径继续用**，下次重启再迁——
  * 宁可暂时用旧目录，也不能让库打不开或数据分叉。
+ *
+ * **显式数据目录（`config.dataDir`；PS.0fix）**：多端（同机 dsh-web 与 desktop）各有各的 home，
+ * 共享数据只共享**数据目录**、保留 home 隔离——两端把 `dataDir` 指向同一个目录即可（正式修复，
+ * 取代「文件系统联接」那种旁路做法）。该分支**不跑**下面的历史改名迁移，理由写在 resolveDataDir 内。
  */
-import { existsSync, renameSync } from 'node:fs'
+import { existsSync, mkdirSync, renameSync } from 'node:fs'
 import { join } from 'node:path'
 
 export interface ResolvedDataDir {
@@ -27,8 +31,19 @@ function tryMove(from: string, to: string): boolean {
  * 解析数据目录并尝试一次性改名迁移。**有副作用**（可能 rename 目录），但幂等且不覆盖。
  * @param dshHome - DSH 主目录（`$DSH_HOME` 或 `~/.dsh`）。
  * @param warn - 迁移回落时的告警出口（测试可注入）。
+ * @param override - 显式数据目录（`config.dataDir`；`''` = 默认 `$DSH_HOME/nautilus`，行为不变）。
  */
-export function resolveDataDir(dshHome: string, warn: (msg: string) => void = console.warn): ResolvedDataDir {
+export function resolveDataDir(dshHome: string, warn: (msg: string) => void = console.warn, override = ''): ResolvedDataDir {
+  // 显式目录优先（PS.0fix 任务 A）：**不跑** xuegulin/nexus → nautilus 的历史迁移探测。
+  // 为什么：那两步是**默认路径专属**的自动补救（回答「我原来的数据去哪了」），只在 home 下的默认位置
+  // 才有意义。显式给的目录是它自己的真源——它不是从旧世代目录名搬来的，去那里探测旧名既没有语义，
+  // 又可能在两端共享的目录里 rename 掉别人的东西（默认分支那套 rename 是破坏性的，绝不能外溢）。
+  // 目录不存在就地建出（recursive）：配置里写了路径就不该再要求用户先手动 mkdir。
+  if (override !== '') {
+    mkdirSync(override, { recursive: true })
+    return { dir: override, dbFile: join(override, 'nautilus.db'), fellBack: false }
+  }
+
   const fresh = join(dshHome, 'nautilus')
   const freshDb = join(fresh, 'nautilus.db')
   if (existsSync(fresh)) return { dir: fresh, dbFile: freshDb, fellBack: false }

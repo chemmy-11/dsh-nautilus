@@ -5,6 +5,8 @@
  *    三条路由已删除——vault 侧操作改由会话侧 /obsidian 技能承担，本插件不再读写 vault。
  *
  * GET  /api/nautilus/m2/state       → 逐轮读数（latest / totals / curve points / recent；全局口径）
+ *                                      + diagnostics.collector（PS.0fix C：采集写失败计数 / 最近错误摘要；
+ *                                        null = 采集未挂载，readings.enabled=false）
  * GET  /api/nautilus/m2/turn-text   → 单轮完整问答原文（?session=&turn=）
  * GET  /api/nautilus/m2/analysis    → 白盒分析（形态 / 爆发段 / τ_e）
  * POST /api/nautilus/selfcheck      → 外部 harness 自评 ingest（token 门，默认关；S1.1 通道 + AL.3 双形：
@@ -31,6 +33,8 @@ import { ALIGN_ANCHORS } from './nexus/selfcheck.js'
 import { ingestSelfCheck, ALIGN_MAX, ALIGN_MIN, BOUNDARIES, QUOTE_MAX, RUBRIC_VERSION, SCHEMA_VERSION_ALIGN } from './nexus/selfcheck-ingest.js'
 import type { Boundary } from './nexus/selfcheck-ingest.js'
 import { pairAlignments, consistencyOf, MIN_PAIRS } from './nexus/consistency.js'
+// PS.0fix C：采集写失败读数（丢写可见化）——诊断面只读快照，由 index.ts 注入取值器
+import type { CollectorDiagnostics } from './nexus/turns.js'
 // AL.5s：label / 会话名派生（服务端单点；UI 不自己拼——契约冻结「工作区 · 会话名」）
 import { acceptsAsNameQuestion, composeLabel, truncateChars, QUESTION_PREVIEW_MAX } from './nexus/sessions.js'
 
@@ -46,6 +50,11 @@ export interface RouteDeps {
   m2HistoryDays?: number
   /** S1.1 自评 ingest 通道配置（缺省 = 关闭：路由注册但恒 403，禁用状态可判别）。 */
   selfcheckIngest?: { enabled: boolean; token: string; maxBodyBytes?: number }
+  /**
+   * PS.0fix C：采集写失败读数取值器（`null` = 采集未挂载，例如 readings.enabled=false）。
+   * 取值器而非实例：collector 在 apply() 的事件 effect 里创建，路由注册更早——注册期还拿不到实例。
+   */
+  collectorDiagnostics?: () => CollectorDiagnostics | null
 }
 
 function json(res: ServerResponse, status: number, body: unknown): void {
@@ -102,6 +111,10 @@ export function registerNautilusRoutes(ctx: { webServer: { register(route: WebRo
         },
         curve: points,
         recent: points.slice(-20).reverse(),
+        // PS.0fix C：丢写不再无声——采集写失败累计次数与最近错误摘要（无采集器时显式 null，不编造 0）
+        diagnostics: {
+          collector: deps.collectorDiagnostics?.() ?? null,
+        },
       })
     },
   }
