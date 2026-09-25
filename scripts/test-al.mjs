@@ -12,6 +12,10 @@
  *  · AL.4 写路径：POST /m2/turn-annotations 双形（body 有 align/boundary 键 → 对齐 1–5 与豁免；否则旧 fit 0–4
  *    逐字不变）· 硬门零写入（align≥4 无引文）· 新量表豁免判据（不再掉进 legacyFitRows 的代际错判）·
  *    契约 v3 的 human[] 收豁免行（humanAligned/exempted 语义不变）。
+ *  · AL.5s 往期会话读侧：GET /m2/sessions 列表（label 服务端单点派生 · 尖括号块跳过 · 首行 24 字 · 无 question
+ *    回落 id 短形 · 工作区 basename）与详情（轮次升序 + hasText 真伪两类 + 原文不返回 + question 截断 200）·
+ *    分页严格（不夹取）· 未知/畸形 id 404 且不 500 · 代际分层不混算（旧尺行只进 legacyFit）·
+ *    往期打分闭环（有原文 200 落 schema_version=2 / 无原文 400 no-turn-text **零写入** / 越界 400 零写入）。
  *  · AL.4 收口：旧形压到已是 align 行（schema_version≥2）的轮次 → **409 generational-conflict** + 人话，
  *    整行逐列未变且队列 annotated_at 不回填（零写入；门序 = 409 先于 origin 判定）· 旧形空轮次 / 覆盖 v1 行
  *    仍 200 逐字回归 · store 只读探针 turnAlignmentSchemaVersion（null / 1 / ≥2）· 错误码登记守卫。
@@ -35,7 +39,7 @@ import { MIN_PAIRS } from '../lib/nexus/consistency.js'
 
 const REPO = fileURLToPath(new URL('..', import.meta.url))
 const SRC = join(REPO, 'src')
-const NEXUS_MODULES = ['analysis.ts', 'consistency.ts', 'selfcheck-ingest.ts', 'selfcheck.ts', 'turns.ts']
+const NEXUS_MODULES = ['analysis.ts', 'consistency.ts', 'selfcheck-ingest.ts', 'selfcheck.ts', 'sessions.ts', 'turns.ts']
 const tmpDir = (p) => mkdtempSync(join(tmpdir(), p))
 const cleanup = (d) => { try { rmSync(d, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }) } catch { /* Windows 句柄 GC 滞后 */ } }
 
@@ -567,13 +571,22 @@ async function mountApi(seed) {
   const mod = await import(new URL('../lib/index.js', import.meta.url).href)
   const routes = new Map()
   const ctx = new Context()
-  ctx.provide('webServer', { register(route) { routes.set(route.path, route); return () => {} } })
+  // 路由表按 path 存（既有用例的读法不变）；同时按 `kind path` 再存一份——
+  // AL.5s 的列表是 exact、详情是同路径的 prefix（宿主 webserver 里本就是两张表：
+  // exact 表优先、其后最长前缀），只按 path 存会让其中一条被覆盖掉。
+  ctx.provide('webServer', {
+    register(route) {
+      routes.set(route.path, route)
+      routes.set(route.kind + ' ' + route.path, route)
+      return () => {}
+    },
+  })
   ctx.provide('tools', { register() {} })
   const fiber = ctx.plugin(mod, { pulse: { enabled: false } })
   const deadline = Date.now() + 5000
   while (Date.now() < deadline && !routes.has(ALIGN_PATH)) await new Promise((r) => setTimeout(r, 25))
-  const call = async (method, { path = ALIGN_PATH, sameOrigin = true, url = path, body } = {}) => {
-    const h = routes.get(path)?.handler
+  const call = async (method, { path = ALIGN_PATH, kind, sameOrigin = true, url = path, body } = {}) => {
+    const h = (kind === undefined ? routes.get(path) : routes.get(kind + ' ' + path))?.handler
     assert.equal(typeof h, 'function', '路由必须注册：' + path)
     const r = new Readable({ read() {} })
     r.method = method
@@ -1380,3 +1393,354 @@ test('AL.5u 源码守卫：命名统一 / label 不自拼 / 详情按需取数 /
   assert.ok(view.includes('offset === 0 ? props.list : remote'), 'AL.5u：第 0 页复用、其余页才自取（负载纪律）')
 })
 
+
+
+// ── AL.5s 往期会话读侧（GET /m2/sessions 列表 + 详情；工作台往期打分的数据面）─────────────
+// 契约（守谷人冻结）：列表 = { revision, sessions:[{ session,label,workspace,workspaceName,sessionName,
+// turns,firstTs,lastTs, totals:{tokenIn,tokenOut,cacheRead,durationMs,tpsAvg}, annotated:{human,self,legacyFit} }] }；
+// 详情 = { revision, session:{...单条...}, turns:[{ turn,ts,question,tokenIn,tokenOut,cacheRead,durationMs,tps,
+// hasText, self|human }] }。本组用例守的正是这些字段名/类型（UI 线按同一份写视图）。
+
+const SESSIONS_PATH = '/api/nautilus/m2/sessions'
+const SESSION_KEYS = ['annotated', 'firstTs', 'label', 'lastTs', 'session', 'sessionName', 'totals', 'turns', 'workspace', 'workspaceName']
+const SESSION_TOTALS_KEYS = ['cacheRead', 'durationMs', 'tokenIn', 'tokenOut', 'tpsAvg']
+const SESSION_ANNOTATED_KEYS = ['human', 'legacyFit', 'self']
+const SESSION_TURN_KEYS = ['cacheRead', 'durationMs', 'hasText', 'human', 'question', 'self', 'tokenIn', 'tokenOut', 'tps', 'ts', 'turn']
+const TURN_SELF_KEYS = ['align', 'boundary', 'declaration', 'evidence', 'quote', 'rubricVersion']
+const TURN_HUMAN_KEYS = ['align', 'annotatedAt', 'boundary', 'exempt', 'note', 'origin', 'quote', 'schemaVersion']
+
+// fixture 会话 id：末 8 位各不相同（回落短形要能区分是哪个会话）
+const SESS_A = 'session-aaaa1111-2222-3333-4444-555566667777'   // 真会话名 + 工作区记录 + 各类标注
+const SESS_B = 'session-bbbb1111-2222-3333-4444-55556666bbbb'   // 候选全被拒（尖括号）+ 无工作区记录
+const SESS_C = 'session-cccc1111-2222-3333-4444-55556666cccc'   // 首条候选「前导表意空格 + <」被拒 → 取第二条
+const SESS_D = 'session-dddd1111-2222-3333-4444-55556666dddd'   // POSIX 路径 + 尾斜杠 → basename
+const SESS_NOQ = 'session-eeee1111-2222-3333-4444-55556666eeee' // 全程无 question → 回落短形
+const SESS_TEXT_ONLY = 'session-ffff1111-2222-3333-4444-55556666ffff' // 只有原文、没有读数
+
+const USER_SENTINEL = 'USER-TEXT-SENTINEL-原文全文不该出现在响应里'
+const ASSISTANT_SENTINEL = 'ASSISTANT-TEXT-SENTINEL-原文全文不该出现在响应里'
+const LONG_QUESTION = 'Q'.repeat(300)
+
+/** AL.5s 装配：列表 exact + 详情 prefix（宿主 webserver 里本就是两张表，exact 优先、其后最长前缀）。 */
+async function mountSessionRoutes(seed) {
+  const m = await mountApi(seed)
+  const list = m.routes.get('exact ' + SESSIONS_PATH)
+  const detail = m.routes.get('prefix ' + SESSIONS_PATH)
+  assert.equal(list?.kind, 'exact', '列表路由必须 exact（不做前缀匹配）')
+  assert.equal(detail?.kind, 'prefix', '详情路由必须 prefix（匹配 p 与 p/<id>）')
+  return {
+    ...m,
+    list: (opts = {}) => m.call('GET', { ...opts, path: SESSIONS_PATH, kind: 'exact' }),
+    detail: (id, opts = {}) => m.call('GET', { ...opts, path: SESSIONS_PATH, kind: 'prefix', url: SESSIONS_PATH + '/' + id }),
+    annotate: (body, opts = {}) => m.call('POST', { ...opts, path: TURN_ANNOTATIONS_PATH, body }),
+  }
+}
+
+/** 标注行计数与指定行的原始列（零写入断言用；另开一条连接直读库文件）。 */
+function annotationRows(file) {
+  const db = new DatabaseSync(file)
+  try {
+    const rows = db.prepare('SELECT session, turn, align, fit, exempt, quote, schema_version FROM turn_annotation').all()
+    const map = new Map(rows.map((r) => [String(r.session) + ':' + String(r.turn), { align: r.align, fit: r.fit, exempt: r.exempt, quote: r.quote, schema_version: r.schema_version }]))
+    return { n: rows.length, row: (session, turn) => map.get(session + ':' + String(turn)) ?? null, rows }
+  } finally { db.close() }
+}
+
+/**
+ * AL.5s fixture（覆盖：尖括号开头跳过 / 前导空白+尖括号 / 多行取首行 / 24 字截断 /
+ * 无 question 回落 / 工作区 basename（Windows / POSIX）/ 有原文与无原文 / 新旧两代标注）。
+ */
+function seedSessions(s, file) {
+  const raw = new DatabaseSync(file)
+  try {
+    raw.prepare('INSERT OR REPLACE INTO session_root (session, root, first_ts) VALUES (?, ?, ?)').run(SESS_A, 'L:\\proj\\nautilus-al', 900)
+    raw.prepare('INSERT OR REPLACE INTO session_root (session, root, first_ts) VALUES (?, ?, ?)').run(SESS_D, '/home/me/work/proj-x/', 900)
+    // 旧代际（fit 0–4，schema_version=1）人工行：只许进 annotated.legacyFit，不进 human、不在详情出场
+    raw.prepare('INSERT INTO turn_annotation (session, turn, fit, exempt, quote, note, origin, boundary, schema_version, annotated_at, updated_at) VALUES (?, ?, ?, 0, NULL, ?, ?, ?, 1, 1, 1)')
+      .run(SESS_A, 1, 3, '旧尺子', 'spot', 'none')
+  } finally { raw.close() }
+
+  // sess-a：1 尖括号开头（旧尺行）· 2 真会话名来源（多行 + 24 字截断）· 3 **无原文** · 4 有原文（豁免行）· 5 有原文（未标注）
+  s.upsertTurnRead({ session: SESS_A, turn: 1, ts: 1000, question: '<system-reminder>\nUpdated instructions from: AGENTS.md', tokenIn: 10, tokenOut: 5, cacheRead: 100, durationMs: 1000 })
+  s.upsertTurnRead({ session: SESS_A, turn: 2, ts: 2000, question: '我准备对nexus层进行大改，你先和我对齐目标：去掉l场相关抽象的概念\n第二行不该出现', tokenIn: 20, tokenOut: 10, cacheRead: 200, durationMs: 2000 })
+  s.upsertTurnRead({ session: SESS_A, turn: 3, ts: 3000, question: '第三轮（无原文）', tokenIn: 30, tokenOut: 15, cacheRead: 300, durationMs: 3000 })
+  s.upsertTurnRead({ session: SESS_A, turn: 4, ts: 4000, question: '第四轮（有原文）', tokenIn: 40, tokenOut: 20, cacheRead: 400, durationMs: 4000 })
+  s.upsertTurnRead({ session: SESS_A, turn: 5, ts: 4500, question: LONG_QUESTION, tokenIn: 5, tokenOut: 5, cacheRead: 5, durationMs: 0 })
+  s.upsertUserText(SESS_A, 1, USER_SENTINEL + '（第一轮）')
+  s.appendAssistantText(SESS_A, 1, ASSISTANT_SENTINEL + '（第一轮）')
+  s.upsertUserText(SESS_A, 2, USER_SENTINEL + '（第二轮）')
+  s.upsertUserText(SESS_A, 4, USER_SENTINEL + '（第四轮）')
+  s.appendAssistantText(SESS_A, 4, ASSISTANT_SENTINEL + '（第四轮）')
+  s.upsertUserText(SESS_A, 5, USER_SENTINEL + '（第五轮）')
+
+  // sess-b：两条候选都被权威判据拒（尖括号块 / 前导空白 + 尖括号块）→ 名称回落 id 短形
+  s.upsertTurnRead({ session: SESS_B, turn: 1, ts: 5000, question: '<system-reminder>\nA skill is a reusable set of task-specific instructions.', tokenIn: 1, tokenOut: 1, cacheRead: 0, durationMs: 100 })
+  s.upsertTurnRead({ session: SESS_B, turn: 2, ts: 5001, question: '  <system-reminder>\n仍以尖括号块开头', tokenIn: 1, tokenOut: 1, cacheRead: 0, durationMs: 100 })
+  // sess-c：第一条候选带**前导表意空格**（U+3000，SQLite 的 trim 不认）→ 宽筛放进候选、权威判据拒掉 → 取第二条
+  s.upsertTurnRead({ session: SESS_C, turn: 1, ts: 6000, question: '\u3000<system-reminder>\n伪会话名', tokenIn: 1, tokenOut: 1, cacheRead: 0, durationMs: 100 })
+  s.upsertTurnRead({ session: SESS_C, turn: 2, ts: 7000, question: '第二条才是真问题\n第二行不该出现', tokenIn: 1, tokenOut: 1, cacheRead: 0, durationMs: 100 })
+  // sess-d / sess-noq
+  s.upsertTurnRead({ session: SESS_D, turn: 1, ts: 8000, question: 'D 会话', tokenIn: 1, tokenOut: 1, cacheRead: 0, durationMs: 100 })
+  s.upsertTurnRead({ session: SESS_NOQ, turn: 1, ts: 9000, question: null, tokenIn: 1, tokenOut: 1, cacheRead: 0, durationMs: 100 })
+  // sess-text-only：只有原文、没有读数 → 不该出现在清单里（turn_read 是主干）
+  s.upsertUserText(SESS_TEXT_ONLY, 1, USER_SENTINEL + '（无读数的轮次）')
+
+  // 人工标注（新量表）：turn 2 有分（4 必附引文）· turn 4 豁免（N/A）· turn 1 旧尺行已在上面直插
+  s.upsertTurnAlignment({ session: SESS_A, turn: 2, align: 4, exempt: 0, boundary: 'none', quote: '「引文」', note: null, origin: 'spot' })
+  s.upsertTurnAlignment({ session: SESS_A, turn: 4, align: null, exempt: 1, boundary: 'none', quote: null, note: '纯操作性指令轮', origin: 'spot' })
+
+  // 自评（对齐）：只有 dsh_tool × align 非空 × al-v1 × **附着到真实轮次** 的两条该进读数
+  ingestSelfCheck(s, { sourceKind: 'dsh_tool', agent: SESS_A, extRef: SESS_A, turnOrdinal: 2, align: 3, declaration: 0 })
+  ingestSelfCheck(s, { sourceKind: 'dsh_tool', agent: SESS_A, extRef: SESS_A, turnOrdinal: 3, align: 3, declaration: 0 })
+  // 干扰四条（**键各不相同**——同 (source_kind, ext_ref, turn_ordinal) 会被 upsert 覆盖，就测不出过滤了）：
+  // http 通道（turn 2 异通道，与 dsh_tool 行并存）/ rubric 早于 al-v1（turn 4）/ 旧三行 align NULL（turn 1）/
+  // 轮次无读数（turn 99）——四条都不许进 self 计数，也不许覆盖 turn 2 的当期行
+  ingestSelfCheck(s, { sourceKind: 'http', agent: 'harness', extRef: SESS_A, turnOrdinal: 2, align: 1, declaration: 0 })
+  s.insertSelfCheckRecord({
+    tsMs: 1, tsClient: null, schemaVersion: 2, sourceKind: 'dsh_tool', agent: SESS_A, model: null, workspace: null,
+    extRef: SESS_A, turnOrdinal: 4, clarity: null, defense: null, declaration: 0, quote: '「旧版 rubric 的引文」',
+    align: 4, boundary: 'none', evidence: null, rubricVersion: 'al-v0',
+  })
+  ingestSelfCheck(s, { sourceKind: 'dsh_tool', agent: SESS_A, extRef: SESS_A, turnOrdinal: 1, clarity: 0.5, defense: 'none', declaration: 0 })
+  ingestSelfCheck(s, { sourceKind: 'dsh_tool', agent: SESS_A, extRef: SESS_A, turnOrdinal: 99, align: 5, quote: '「无读数轮的自评」', declaration: 0 })
+}
+
+test('AL.5s 路由门与空库：同源 403 / 非 GET 405 / 空库 sessions=[] / 未知 id 404 / 路径安全不 500', async () => {
+  const m = await mountSessionRoutes()
+  try {
+    const noOrigin = await m.list({ sameOrigin: false })
+    assert.equal(noOrigin.statusCode, 403, '非同源必须 403')
+    assert.equal(noOrigin.body.error, 'forbidden')
+    const noOriginDetail = await m.detail('any', { sameOrigin: false })
+    assert.equal(noOriginDetail.statusCode, 403, '详情同源门同列表')
+    for (const method of ['POST', 'PUT', 'DELETE', 'HEAD']) {
+      const l = await m.call(method, { path: SESSIONS_PATH, kind: 'exact' })
+      assert.equal(l.statusCode, 405, method + ' 列表必须 405（只 GET）')
+      assert.equal(l.body.error, 'method-not-allowed')
+      const d = await m.call(method, { path: SESSIONS_PATH, kind: 'prefix', url: SESSIONS_PATH + '/x' })
+      assert.equal(d.statusCode, 405, method + ' 详情必须 405（只 GET）')
+    }
+    // 空库结构：sessions 空数组（不是 null/缺字段），顶层只有 revision + sessions
+    const g = await m.list()
+    assert.equal(g.statusCode, 200)
+    assert.deepEqual(Object.keys(g.body).sort(), ['revision', 'sessions'])
+    assert.equal(typeof g.body.revision, 'number')
+    assert.deepEqual(g.body.sessions, [])
+    // 未知 / 畸形 id：一律 404 not-found，**绝不 500**（路径穿越只是「查不到的键」）
+    for (const id of ['no-such-session', '', 'a/b/c', '%', '..%2F..%2Fetc%2Fpasswd', '%E4%B8%AD', 'x'.repeat(300)]) {
+      const r = await m.detail(id)
+      assert.equal(r.statusCode, 404, 'id=' + JSON.stringify(id) + ' 必须 404')
+      assert.equal(r.body.error, 'not-found')
+    }
+    // 畸形 url（相对路径解析失败 / 空串）：列表 400 invalid:url 或 200；详情 404——都不许抛异常
+    const emptyUrlList = await m.call('GET', { path: SESSIONS_PATH, kind: 'exact', url: '' })
+    assert.equal(emptyUrlList.statusCode, 200, '空 url 不得 500')
+    const emptyUrlDetail = await m.call('GET', { path: SESSIONS_PATH, kind: 'prefix', url: '' })
+    assert.equal(emptyUrlDetail.statusCode, 404, '空 url 详情 → 404（不是 500）')
+    const badUrl = await m.call('GET', { path: SESSIONS_PATH, kind: 'exact', url: 'http://[::1' })
+    assert.equal(badUrl.statusCode, 400, '解析不了的 url → 400 invalid:url（不 500）')
+    assert.equal(badUrl.body.error, 'invalid:url')
+    // 分页严格（不夹取）：缺省 50 / 边界 200 放行 / 0·201·非数 → 400
+    for (const q of ['limit=0', 'limit=201', 'limit=abc', 'limit=1.5', 'offset=-1', 'offset=abc', 'offset=1.5']) {
+      const r = await m.call('GET', { path: SESSIONS_PATH, kind: 'exact', url: SESSIONS_PATH + '?' + q })
+      assert.equal(r.statusCode, 400, q + ' 必须 400')
+      assert.equal(r.body.error, q.startsWith('limit') ? 'invalid:limit' : 'invalid:offset')
+    }
+    const boundary = await m.call('GET', { path: SESSIONS_PATH, kind: 'exact', url: SESSIONS_PATH + '?limit=200&offset=0' })
+    assert.equal(boundary.statusCode, 200, 'limit=200 是契约上界，必须放行')
+    assert.deepEqual(boundary.body.sessions, [])
+  } finally { await m.close() }
+})
+
+test('AL.5s label 派生（服务端单点）：跳过尖括号块 / 首行 24 字 / 无 question 回落 id 短形 / 工作区 basename', async () => {
+  const m = await mountSessionRoutes(seedSessions)
+  try {
+    const g = await m.list()
+    assert.equal(g.statusCode, 200)
+    const rows = g.body.sessions
+    assert.deepEqual(rows.map((r) => r.session), [SESS_NOQ, SESS_D, SESS_C, SESS_B, SESS_A], '按 lastTs 倒序（最近的往期会话在前）')
+    for (const row of rows) {
+      assert.deepEqual(Object.keys(row).sort(), SESSION_KEYS, '单条会话契约形状（冻结）')
+      assert.deepEqual(Object.keys(row.totals).sort(), SESSION_TOTALS_KEYS, 'totals 形状')
+      assert.deepEqual(Object.keys(row.annotated).sort(), SESSION_ANNOTATED_KEYS, 'annotated 形状')
+      assert.equal(row.label, row.workspaceName + ' · ' + row.sessionName, 'label = workspaceName + " · " + sessionName')
+    }
+    const byId = new Map(rows.map((r) => [r.session, r]))
+    // ① 真会话名：首条 question 是 <system-reminder> 块 → 跳过；第二条多行 → 取首行、截 24 字
+    const a = byId.get(SESS_A)
+    assert.equal(a.workspace, 'L:\\proj\\nautilus-al', 'workspace = session_root 冻结原值')
+    assert.equal(a.workspaceName, 'nautilus-al', 'Windows 路径 basename')
+    assert.equal(a.sessionName, '我准备对nexus层进行大改，你先和我对齐目标：')
+    assert.equal([...a.sessionName].length, 24, '首行前 24 字（码点口径）')
+    assert.ok(!a.sessionName.includes('第二行'), '多行只取首行')
+    assert.ok(!a.sessionName.startsWith('<'), '尖括号块不得成为会话名')
+    assert.equal(a.label, 'nautilus-al · 我准备对nexus层进行大改，你先和我对齐目标：')
+    assert.deepEqual({ ...a.totals }, { tokenIn: 105, tokenOut: 55, cacheRead: 1005, durationMs: 10000, tpsAvg: 5.5 }, '总量与 tpsAvg（总输出/总时长的同式口径）')
+    assert.deepEqual({ ...a.annotated }, { human: 2, self: 2, legacyFit: 1 }, '本次会话的标注计数（分层见下一条用例）')
+    assert.deepEqual([a.turns, a.firstTs, a.lastTs], [5, 1000, 4500])
+    // ② 候选全被权威判据拒（含「前导空白 + 尖括号」）→ **不编名字**，回落 id 短形；无工作区记录 → 未知工作区
+    const b = byId.get(SESS_B)
+    assert.equal(b.workspace, '')
+    assert.equal(b.workspaceName, '未知工作区')
+    assert.equal(b.sessionName, '6666bbbb', '无合规 question → session id 短形（末 8 位）')
+    assert.equal(b.label, '未知工作区 · 6666bbbb')
+    // ③ 第一条候选是「前导表意空格 + <」（SQL 宽筛会放进来）→ 权威判据拒掉，取第二条真问题
+    assert.equal(byId.get(SESS_C).sessionName, '第二条才是真问题')
+    // ④ POSIX 路径 + 尾斜杠 → basename
+    assert.equal(byId.get(SESS_D).workspaceName, 'proj-x')
+    // ⑤ 全程无 question（question 全 NULL）→ 回落短形
+    assert.equal(byId.get(SESS_NOQ).sessionName, '6666eeee')
+    assert.equal(byId.get(SESS_NOQ).label, '未知工作区 · 6666eeee')
+    // ⑥ 只有原文、没有读数的会话不出现在清单（turn_read 是主干）
+    assert.equal(byId.has(SESS_TEXT_ONLY), false, '没有读数的会话不假装存在')
+    // 分页：页边界不重不漏（定序 last_ts DESC + session ASC 是确定序）
+    const p1 = await m.list({ url: SESSIONS_PATH + '?limit=2&offset=0' })
+    const p2 = await m.list({ url: SESSIONS_PATH + '?limit=2&offset=2' })
+    const p3 = await m.list({ url: SESSIONS_PATH + '?limit=2&offset=4' })
+    const paged = [...p1.body.sessions, ...p2.body.sessions, ...p3.body.sessions].map((r) => r.session)
+    assert.deepEqual(paged, rows.map((r) => r.session), '分页拼接 = 全量且顺序一致')
+    // 口径单点守卫：label 拼接不许在路由里手写（UI 与读侧共用服务端那一份派生）
+    // 判据只看**代码**（注释里写契约示例是允许的）：注释剥离后不许再出现分隔符字面量
+    const rt = readFileSync(join(SRC, 'routes.ts'), 'utf8')
+    const rtCode = rt.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
+    assert.ok(!rtCode.includes("' · '"), 'label 分隔符不许在 routes.ts 里手写——走 nexus/sessions.ts 的 composeLabel')
+    assert.ok(rtCode.includes('composeLabel('), 'routes.ts 必须调 nexus 的 composeLabel 装配 label')
+    const nexusSessions = readFileSync(join(SRC, 'nexus', 'sessions.ts'), 'utf8')
+    assert.ok(nexusSessions.includes("LABEL_SEPARATOR = ' · '"), 'label 分隔符单点在 nexus/sessions.ts')
+    assert.ok(nexusSessions.includes('未知工作区'), '无工作区文案单点在 nexus/sessions.ts')
+  } finally { await m.close() }
+})
+
+test('AL.5s 详情：轮次升序齐备 + hasText 真伪两类 + question 截断 200 且**不返回原文**', async () => {
+  const m = await mountSessionRoutes(seedSessions)
+  try {
+    const listed = await m.list()
+    const listRow = listed.body.sessions.find((r) => r.session === SESS_A)
+    const d = await m.detail(SESS_A)
+    assert.equal(d.statusCode, 200)
+    assert.deepEqual(Object.keys(d.body).sort(), ['revision', 'session', 'turns'])
+    assert.deepEqual(d.body.session, listRow, '详情里的 session 与列表单条**同形同值**（同一份装配）')
+    assert.deepEqual(d.body.turns.map((t) => t.turn), [1, 2, 3, 4, 5], '轮次升序、一个不少')
+    for (const t of d.body.turns) assert.deepEqual(Object.keys(t).sort(), SESSION_TURN_KEYS, '轮次契约形状（冻结）')
+    const byTurn = new Map(d.body.turns.map((t) => [t.turn, t]))
+    // hasText 真伪两类：有 turn_text 行 → true（可打分）；无 → false（服务端会拒）
+    assert.deepEqual(d.body.turns.map((t) => t.hasText), [true, true, false, true, true])
+    assert.deepEqual([...byTurn.keys()].map((k) => byTurn.get(k).hasText), [true, true, false, true, true])
+    // 负载控制：原文全文（user_text/assistant_text）一律不出现在响应里
+    const wire = JSON.stringify(d.body)
+    assert.ok(!wire.includes(USER_SENTINEL), '响应不得带 user 原文全文')
+    assert.ok(!wire.includes(ASSISTANT_SENTINEL), '响应不得带 assistant 原文全文')
+    // question 截断 200 字（码点）；未超限的原样返回（多行保留，UI 自己处理）
+    assert.equal([...byTurn.get(5).question].length, 200, 'question 截断到 200 字')
+    assert.equal(byTurn.get(5).question, 'Q'.repeat(200))
+    assert.equal(byTurn.get(2).question, '我准备对nexus层进行大改，你先和我对齐目标：去掉l场相关抽象的概念\n第二行不该出现')
+    assert.equal(byTurn.get(3).question, '第三轮（无原文）')
+    // 无读数的轮次（只有原文）不出场：轮次表以 turn_read 为主干
+    assert.equal(d.body.turns.some((t) => t.turn === 99), false)
+    // 未知 id → 404（详情读侧）
+    assert.equal((await m.detail('nope')).statusCode, 404)
+  } finally { await m.close() }
+})
+
+test('AL.5s 代际分层不混算：旧尺行只进 legacyFit / 自评只认 dsh_tool × al-v1 × 附着轮次', async () => {
+  const m = await mountSessionRoutes(seedSessions)
+  try {
+    const g = await m.list()
+    const a = g.body.sessions.find((r) => r.session === SESS_A)
+    const d = await m.detail(SESS_A)
+    const byTurn = new Map(d.body.turns.map((t) => [t.turn, t]))
+    // 人工：新量表 2 行（有分 + 豁免）+ 旧尺 1 行 —— 三者各自成层，human 不含旧行
+    assert.deepEqual({ ...a.annotated }, { human: 2, self: 2, legacyFit: 1 })
+    assert.equal(a.annotated.human + a.annotated.legacyFit, 3, 'human + legacyFit = 该会话全部人工行（分层且不丢）')
+    // 旧尺行（schema_version=1）**不在详情出场**：不给 align 位、也不伪装成豁免（exempt=0 会被误读成「无分」）
+    assert.equal(byTurn.get(1).human, null, '旧代际行不出场（分层不混算）')
+    assert.deepEqual({ ...byTurn.get(2).human }, {
+      align: 4, boundary: 'none', exempt: 0, quote: '「引文」', note: null, origin: 'spot', schemaVersion: 2, annotatedAt: byTurn.get(2).human.annotatedAt,
+    })
+    assert.equal(typeof byTurn.get(2).human.annotatedAt, 'number')
+    assert.deepEqual(Object.keys(byTurn.get(2).human).sort(), TURN_HUMAN_KEYS, 'human 行契约形状')
+    // 豁免行（N/A）照样出场——只给有分行会让已标 N/A 的轮次在 UI 上退回「未标注」（静默丢状态）
+    assert.equal(byTurn.get(4).human.align, null)
+    assert.equal(byTurn.get(4).human.exempt, 1)
+    assert.equal(byTurn.get(4).human.note, '纯操作性指令轮')
+    // 自评：dsh_tool × align 非空 × al-v1（http 通道 / al-v0 / 旧三行 / 无读数轮都不许进）
+    assert.deepEqual(Object.keys(byTurn.get(2).self).sort(), TURN_SELF_KEYS, 'self 行契约形状')
+    assert.equal(byTurn.get(2).self.align, 3, '干扰行（http align 1 / al-v0 align 4）不得覆盖当期行')
+    assert.equal(byTurn.get(2).self.rubricVersion, 'al-v1')
+    assert.equal(byTurn.get(3).self.align, 3, '自评不受原文门限制（自评由产出该轮的 agent 打，原文缺不影响已落行的读数）')
+    assert.equal(byTurn.get(5).self, null)
+    // 计数 = 详情里非空的轮数（summary 与详情不许各说一套）
+    assert.equal(a.annotated.human, d.body.turns.filter((t) => t.human !== null).length)
+    assert.equal(a.annotated.self, d.body.turns.filter((t) => t.self !== null).length)
+    assert.equal(a.annotated.legacyFit, 1)
+  } finally { await m.close() }
+})
+
+test('AL.5s 往期打分闭环：有原文 200 落 schema_version=2 / 无原文如实拒且零写入 / 越界拒且零写入', async () => {
+  const m = await mountSessionRoutes(seedSessions)
+  try {
+    const before = annotationRows(m.file)
+    assert.equal(before.n, 3, 'fixture 初始：旧尺 1 + 新量表 2')
+    // ① 有原文的往期轮次（turn 5）：带 align 写 → 200 + 落 schema_version=2 行
+    const ok = await m.annotate({ session: SESS_A, turn: 5, align: 3, boundary: 'none' })
+    assert.equal(ok.statusCode, 200, '有原文的往期轮次必须可打分')
+    assert.deepEqual({ ...ok.body }, { ok: true, origin: 'spot', result: 'inserted', overwritten: false })
+    const rowAfterOk = { ...annotationRows(m.file).row(SESS_A, 5) }
+    assert.deepEqual(rowAfterOk, { align: 3, fit: null, exempt: 0, quote: null, schema_version: 2 }, '落的是新量表行（fit 为 NULL、schema_version=2）')
+    // 回读：详情与 summary 同步反映（打分 → 列表/详情同一次口径）
+    const back = await m.detail(SESS_A)
+    assert.equal(back.body.turns.find((t) => t.turn === 5).human.align, 3)
+    assert.equal(back.body.session.annotated.human, 3, 'summary 的 human 计数随写上升')
+    // ② 无原文的轮次：如实拒（400 no-turn-text）且**零写入**
+    const nAfterOk = annotationRows(m.file).n
+    const noText = await m.annotate({ session: SESS_A, turn: 3, align: 3 })
+    assert.equal(noText.statusCode, 400, '无原文必须拒')
+    assert.equal(noText.body.error, 'no-turn-text')
+    assert.equal(annotationRows(m.file).n, nAfterOk, '拒绝即零写入（行数不变）')
+    assert.equal(annotationRows(m.file).row(SESS_A, 3), null, '不得留下任何该轮的行')
+    // 门序：无原文门**先于**量表越界门 → 无原文轮次报的是 no-turn-text（UI 据此禁用打分并说明原因）
+    const noTextBadAlign = await m.annotate({ session: SESS_A, turn: 3, align: 6 })
+    assert.equal(noTextBadAlign.statusCode, 400)
+    assert.equal(noTextBadAlign.body.error, 'no-turn-text', '无原文优先于越界报出（如实：这轮根本没原文）')
+    // 从未存在的会话/轮次：同样零写入
+    const ghost = await m.annotate({ session: 'no-such-session', turn: 1, align: 3 })
+    assert.equal(ghost.statusCode, 400)
+    assert.equal(ghost.body.error, 'no-turn-text')
+    assert.equal(annotationRows(m.file).n, nAfterOk, '幽灵轮次零写入')
+    // ③ 越界（有原文的轮次）：0 / 6 一律拒且零写入；4 无引文走签-2 硬门
+    for (const align of [0, 6]) {
+      const r = await m.annotate({ session: SESS_A, turn: 5, align })
+      assert.equal(r.statusCode, 400, 'align=' + String(align) + ' 必须 400')
+      assert.equal(r.body.error, 'invalid:align', '越界不夹取、不猜默认')
+    }
+    const noQuote = await m.annotate({ session: SESS_A, turn: 5, align: 4 })
+    assert.equal(noQuote.statusCode, 400)
+    assert.equal(noQuote.body.error, 'align-quote-required')
+    assert.equal(annotationRows(m.file).n, nAfterOk, '全部失败路径零写入')
+    assert.deepEqual({ ...annotationRows(m.file).row(SESS_A, 5) }, rowAfterOk, '拒绝不得改动已落行（逐列未变）')
+    // ④ 合法覆盖：5 + 引文 → 200 overwritten，仍是新量表行
+    const ok5 = await m.annotate({ session: SESS_A, turn: 5, align: 5, quote: '「推到改道的引文」' })
+    assert.equal(ok5.statusCode, 200)
+    assert.equal(ok5.body.overwritten, true)
+    assert.deepEqual({ ...annotationRows(m.file).row(SESS_A, 5) }, { align: 5, fit: null, exempt: 0, quote: '「推到改道的引文」', schema_version: 2 })
+  } finally { await m.close() }
+})
+
+
+test('AL.5s 契约与错误码登记：sessions 读侧在 routes.ts 与 dev-05 §7 各登记一处', () => {
+  // 同 AL.4 收口的登记纪律：错误码与契约不能口口相传——源码字面量一处 + 面向调用方的文档一处
+  const rt = readFileSync(join(SRC, 'routes.ts'), 'utf8')
+  for (const code of ["'invalid:limit'", "'invalid:offset'", "'invalid:url'", "'not-found'"]) {
+    assert.ok(rt.includes(code), 'routes.ts 必须登记错误码字面量：' + code)
+  }
+  assert.ok(/json\(res, 404, \{ ok: false, error: 'not-found' \}\)/.test(rt), '404 与 not-found 必须同一响应')
+  const doc = readFileSync(join(REPO, 'docs', '2-dev', 'nautilus-dev-05-turn-annotation.md'), 'utf8')
+  for (const s of ['/api/nautilus/m2/sessions', 'invalid:limit', 'not-found', 'no-turn-text', 'hasText', '未知工作区', 'legacyFit']) {
+    assert.ok(doc.includes(s), 'dev-05 必须登记：' + s)
+  }
+  // 冻结契约的字段名必须在文档里对得上（UI 线照它写视图）
+  for (const k of ['workspaceName', 'sessionName', 'tpsAvg', 'annotated', 'hasTurnText']) {
+    assert.ok(doc.includes(k), 'dev-05 必须登记契约字段/判据：' + k)
+  }
+  assert.ok(doc.includes('门不放宽'), 'dev-05 必须写明「无原文门不放宽」这条裁决边界')
+})

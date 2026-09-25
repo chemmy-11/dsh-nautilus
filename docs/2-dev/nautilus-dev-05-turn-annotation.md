@@ -74,3 +74,38 @@ CREATE TABLE IF NOT EXISTS annotation_sample (        -- 抽样队列（一行�
 - 六件套全绿 + E22 归档（宿主半区离线证据；端上四元组仍等守谷人重启窗口——S1.1 同批生效）。
 - UI 半区（T.2）：**已交付（E23）**——流内契合条（turnTail 链槽）+ 构成柱徽标 + 曲线描边环；dev-02 §5.4 已登记呈现位。端上核对（`TurnLocation.turn` 序号 vs 库键、实际视觉）待宿主重启窗口。
 - 诚实边界照抄决策文档 §7（人标也是自报，噪声地板等 D-T4 复标量化；spot 不进分布结论；era=api 只作对照）。
+
+
+## 7. AL.5s 往期会话读侧（`GET /api/nautilus/m2/sessions`；工作台「往期打分」的数据面）
+
+需求（守谷人）：工作台要能对**往期会话**的轮次打分、轮次名称用「工作区 + 会话名」、点开可看详细会话信息——
+三件事共用这一条「列出往期会话与其轮次」的读接口（本仓库此前不存在）。
+
+- `GET /api/nautilus/m2/sessions?limit=50&offset=0`（kind=**exact**；只 GET；同源门）→
+  `{ revision, sessions: [{ session, label, workspace, workspaceName, sessionName, turns, firstTs, lastTs,
+  totals: { tokenIn, tokenOut, cacheRead, durationMs, tpsAvg }, annotated: { human, self, legacyFit } }] }`
+  ——**默认不带轮次**（列表页要的是会话 + 数字 + 计数，负载控制）。
+- `GET /api/nautilus/m2/sessions/<sessionId>`（kind=**prefix**，同路径；只 GET；同源门；未知 id → 404）→
+  `{ revision, session: {...同上单条...}, turns: [{ turn, ts, question, tokenIn, tokenOut, cacheRead, durationMs, tps,
+  hasText, self: { align, boundary, declaration, quote, evidence, rubricVersion } | null,
+  human: { align, boundary, exempt, quote, note, origin, schemaVersion, annotatedAt } | null }] }`
+- 契约**冻结**（UI 线按同一份写视图；只加字段，不改既有字段名/类型）。
+- `label` 派生是**服务端单点**（`src/nexus/sessions.ts`，UI 不再自己拼）：
+  `label = workspaceName + " · " + sessionName`；
+  `workspaceName` = `session_root` 里该会话工作区路径的 basename（**无记录/未归属 → 「未知工作区」**）；
+  `sessionName` = 该会话**第一条不以 `<` 开头且去空白非空**的 question 的**首行前 24 字**，
+  无 → **session id 短形（末 8 位）**。真库实测（2026-09-27 字节快照副本）：65 条 `turn_read` 里 8 条 question
+  以 `<system-reminder>` 块开头——不跳过就会得到「<system-reminder>」这种伪会话名；**不存在的真会话名不编**。
+- 口径：主干 `turn_read`（轮次读数）；`turn_text` 只用于 `hasText` 在场判定，**原文一律不返回**
+  （question 截断 200 字）；`totals.tpsAvg` = 总输出 / 总时长（与 `turn_read` 行内同式，不是逐轮 tps 的算术平均）；
+  标注计数只数**已附着到该会话轮次**的行（= 详情逐轮渲染的同一集合），`human` 只出 `schema_version≥2`
+  （有分 + 豁免），旧尺行（=1）只进 `annotated.legacyFit`，`self` 只认 `dsh_tool × align 非空 × rubric_version=al-v1`。
+- **往期打分**复用既有 `POST /api/nautilus/m2/turn-annotations`（双形与门序见 §3 不变）：`hasText=false` 的轮次
+  **如实拒** `no-turn-text`（HTTP 400，**零写入**），且该门**先于**量表越界门；判据单点 = `store.hasTurnText`
+  （与详情 `hasText` 同一谓词）。UI 据 `hasText` 禁用打分入口并说明「该轮原文未采集」——
+  **门不放宽**（是否允许无原文打分是守谷人的裁决面，实现只如实反映现状）。
+- 错误码（本组路由）：`forbidden`(403) / `method-not-allowed`(405) / `invalid:limit`·`invalid:offset`·`invalid:url`(400) /
+  **`not-found`(404)**——未知 / 空 / 多段 / 解码失败的 sessionId 一律 404，**绝不 500**（id 只当 SQL 绑定参数，
+  不拼路径、不拼 SQL，路径穿越类输入只是「查不到的键」）。
+- 分页严格（不夹取、不猜默认）：`limit ∈ [1,200]` 缺省 50、`offset ≥ 0` 缺省 0；在场但非法 → 400
+  （静默夹取会让 UI 以为「已经拿到全部会话」）。

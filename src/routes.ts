@@ -19,16 +19,20 @@
  *                                            quote-required·align-quote-required·quote-too-long(400) /
  *                                            **generational-conflict(409)**。
  * GET  /api/nautilus/m2/alignments   → AL.4b 对齐读侧：双路台账（人工 align + 自评 align）+ 覆盖 + 一致性（v3：留出集 + human[] 收豁免行；只 GET）
+ * GET  /api/nautilus/m2/sessions[?limit=50&offset=0] → AL.5s 往期会话清单（label/总量/标注计数；**不带轮次**）
+ * GET  /api/nautilus/m2/sessions/<sessionId>        → AL.5s 单会话详情（全部轮次 + hasText + 双路标注；未知 id → 404）
  * Same-origin marker guard; registered as effect.（/selfcheck 例外：调用方非浏览器，以 token 为门。）
  */
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { WebRoute } from '@deepseek-ai/dsh-host-webserver'
-import type { NautilusStore } from './store.js'
+import type { NautilusStore, SessionAggregateRow } from './store.js'
 import { analyze } from './nexus/analysis.js'
 import { ALIGN_ANCHORS } from './nexus/selfcheck.js'
 import { ingestSelfCheck, ALIGN_MAX, ALIGN_MIN, BOUNDARIES, QUOTE_MAX, RUBRIC_VERSION, SCHEMA_VERSION_ALIGN } from './nexus/selfcheck-ingest.js'
 import type { Boundary } from './nexus/selfcheck-ingest.js'
 import { pairAlignments, consistencyOf, MIN_PAIRS } from './nexus/consistency.js'
+// AL.5s：label / 会话名派生（服务端单点；UI 不自己拼——契约冻结「工作区 · 会话名」）
+import { acceptsAsNameQuestion, composeLabel, truncateChars, QUESTION_PREVIEW_MAX } from './nexus/sessions.js'
 
 /** 集中常量：路由前缀（AGENTS.md §1-4）。 */
 const API_PREFIX = '/api/nautilus'
@@ -204,8 +208,11 @@ export function registerNautilusRoutes(ctx: { webServer: { register(route: WebRo
       const session = typeof body.session === 'string' ? body.session.trim() : ''
       const turn = typeof body.turn === 'number' && Number.isInteger(body.turn) && body.turn >= 1 ? body.turn : null
       if (session === '' || session.length > 160 || turn === null) return json(res, 400, { ok: false, error: 'invalid:session_or_turn' })
-      // 被标轮次的原文必须在场（锁版口径 §3：不让人对着摘要打五分制）
-      if (deps.store.getTurnText(session, turn) === null) return json(res, 400, { ok: false, error: 'no-turn-text' })
+      // 被标轮次的原文必须在场（锁版口径 §3：不让人对着摘要打五分制）。
+      // AL.5s：判据改走 store.hasTurnText——与 /m2/sessions 详情的 `hasText` 是**同一个谓词**。
+      // 往期会话能不能打分，答案只能有一处：UI 拿到的 hasText=true ⟺ 这里不拒（反之 400 no-turn-text，
+      // 零写入）。UI 据此禁用打分入口并说明「该轮原文未采集」。
+      if (!deps.store.hasTurnText(session, turn)) return json(res, 400, { ok: false, error: 'no-turn-text' })
 
       // ── 新形（AL.4：对齐量表 1–5 + 四边界 = 自评侧同一把尺子）──────────────────────
       // 判据 = body 里**存在** `align` 键（含显式 null）**或** `boundary` 键——不是「align 非空」：
@@ -373,6 +380,182 @@ export function registerNautilusRoutes(ctx: { webServer: { register(route: WebRo
     },
   }
 
-  for (const route of [m2State, turnText, analysis, selfcheck, turnAnnotations, alignments]) disposers.push(ctx.webServer.register(route))
+  // ── AL.5s 往期会话读侧（列表 + 详情；工作台「往期打分」的数据面）──────────────────────
+  //
+  // 契约（守谷人冻结；UI 线按它写视图，**只加不改**）：
+  //   GET /api/nautilus/m2/sessions?limit=50&offset=0 →
+  //     { revision,
+  //       sessions: [{ session, label, workspace, workspaceName, sessionName,
+  //                    turns, firstTs, lastTs,
+  //                    totals: { tokenIn, tokenOut, cacheRead, durationMs, tpsAvg },
+  //                    annotated: { human, self, legacyFit } }] }
+  //   GET /api/nautilus/m2/sessions/<sessionId> →
+  //     { revision, session: { ...同上单条... },
+  //       turns: [{ turn, ts, question, tokenIn, tokenOut, cacheRead, durationMs, tps,
+  //                 hasText,                                   // 有原文才可打分（服务端「无原文即拒」的门）
+  //                 self:  { align, boundary, declaration, quote, evidence, rubricVersion } | null,
+  //                 human: { align, boundary, exempt, quote, note, origin, schemaVersion, annotatedAt } | null }] }
+  //
+  // 口径（写在这里 = 唯一口径，UI 不再自己算）：
+  //  · 主干是 **turn_read**（轮次读数）；turn_text 只用于 `hasText` 在场判定，**不返回原文**
+  //    （question 截断 200 字；user_text/assistant_text 一律不出现在响应里——负载控制）。
+  //  · label = workspaceName + ' · ' + sessionName，派生规则在 **src/nexus/sessions.ts 单点**：
+  //    workspaceName = session_root 里工作区路径的 basename（无记录/未归属 → 「未知工作区」）；
+  //    sessionName = 该会话第一条「不以 '<' 开头且去空白非空」的 question 的首行前 24 字，
+  //    无 → session id 短形（末 8 位）。真会话名不编（真库大量 question 以 <system-reminder> 块开头）。
+  //  · 代际分层照旧（决策 §9.3）：human 只出 schema_version≥2 的行（有分 + 豁免，v8 CHECK 恰好二分）；
+  //    旧尺行（schema_version=1，0–4 旧契合）**不出场**、只进 annotated.legacyFit 计数——不混算、不降级；
+  //    self 只认 source_kind=dsh_tool ∧ align 非空 ∧ rubric_version=al-v1（与 /m2/alignments 同一把尺子）。
+  //    计数只数**已附着到该会话轮次**的标注行（= 详情逐轮渲染的同一集合，summary 与详情不许各说一套）。
+  //  · 分页严格（不夹取、不猜默认）：limit ∈ [1,200] 缺省 50；offset ≥ 0 缺省 0；
+  //    在场但非法 → 400 `invalid:limit` / `invalid:offset`（静默夹取会让 UI 以为拿到了全部会话）。
+  //  · 错误码（本组路由）：forbidden(403) / method-not-allowed(405) / invalid:limit·invalid:offset(400) /
+  //    **not-found(404)**——未知/空/多段/解码失败的 sessionId 一律 404，**不 500**（路径安全：id 只当键查，
+  //    不参与任何文件系统或拼接操作）。
+  //  · `hasText` 与 POST /m2/turn-annotations 的拒写门同谓词（store.hasTurnText）：无原文的轮次
+  //    **如实拒（400 no-turn-text，零写入）**——门不放宽（那是守谷人的裁决面），UI 据 hasText 禁用打分。
+  const SESSIONS_PATH = `${API_PREFIX}/m2/sessions`
+  const SESSION_LIMIT_DEFAULT = 50
+  /** 页大小上限（写进契约：超限**拒**而不是静默截断——静默截断 = UI 以为自己拿到了全部会话）。 */
+  const SESSION_LIMIT_MAX = 200
+
+  /** 解析请求 URL（畸形 → null；本组路由绝不因畸形 url 抛异常 = 不 500）。 */
+  function requestUrl(req: IncomingMessage): URL | null {
+    try { return new URL(String(req.url ?? ''), 'http://localhost') } catch { return null }
+  }
+
+  /** 分页参数（严格：在场但非法即 400，不夹取、不猜默认）。 */
+  function readPage(url: URL): { limit: number; offset: number } | { error: string } {
+    let limit = SESSION_LIMIT_DEFAULT
+    const rawLimit = url.searchParams.get('limit')
+    if (rawLimit !== null) {
+      const n = Number(rawLimit)
+      if (!Number.isInteger(n) || n < 1 || n > SESSION_LIMIT_MAX) return { error: 'invalid:limit' }
+      limit = n
+    }
+    let offset = 0
+    const rawOffset = url.searchParams.get('offset')
+    if (rawOffset !== null) {
+      const n = Number(rawOffset)
+      if (!Number.isInteger(n) || n < 0) return { error: 'invalid:offset' }
+      offset = n
+    }
+    return { limit, offset }
+  }
+
+  /**
+   * 详情路径 → 会话 id：只接受**恰好一段**（`<prefix>/<id>`）。空段 / 多段 / 解码失败 → null
+   * （调用方 404）。id 只当 SQL 绑定参数用——不拼路径、不拼 SQL，故路径穿越类输入只是「查不到的键」。
+   */
+  function sessionIdFromPath(pathname: string): string | null {
+    if (!pathname.startsWith(SESSIONS_PATH + '/')) return null
+    const raw = pathname.slice(SESSIONS_PATH.length + 1)
+    if (raw === '' || raw.includes('/')) return null
+    try {
+      const id = decodeURIComponent(raw)
+      return id === '' ? null : id
+    } catch { return null }
+  }
+
+  /** 会话行 → 冻结契约的单条形状（label 三件套走 nexus 单点派生，这里只做装配）。 */
+  function sessionJson(agg: SessionAggregateRow): Record<string, unknown> {
+    // 会话名候选可能不止一条（见 store.decorateSessions）：取**第一条**够格当会话名的（权威判据在 nexus）
+    const nameQuestion = agg.nameQuestions.find((q) => acceptsAsNameQuestion(q)) ?? null
+    const { workspaceName, sessionName, label } = composeLabel(agg.workspace, nameQuestion, agg.session)
+    return {
+      session: agg.session,
+      label,
+      // workspace 给 session_root 的**原始冻结值**（'' = 未归属/无记录）；显示名走 workspaceName
+      workspace: agg.workspace,
+      workspaceName,
+      sessionName,
+      turns: agg.turns,
+      firstTs: agg.firstTs,
+      lastTs: agg.lastTs,
+      totals: {
+        tokenIn: agg.tokenIn,
+        tokenOut: agg.tokenOut,
+        cacheRead: agg.cacheRead,
+        durationMs: agg.durationMs,
+        // 与 turn_read 的行内 tps 同式（总输出 / 总时长）——不是逐轮 tps 的算术平均
+        // （后者被极短轮放大）；全库无已知时长 → null（0 是假读数）
+        tpsAvg: agg.durationMs > 0 ? (agg.tokenOut * 1000) / agg.durationMs : null,
+      },
+      annotated: {
+        human: agg.humanAnnotationCount,
+        self: agg.selfAlignmentCount,
+        legacyFit: agg.legacyFitCount,
+      },
+    }
+  }
+
+  // 列表：默认不带 turns（列表页要的是「往期会话 + 数字 + 计数」，轮次走详情——负载控制）。
+  const sessionsList: WebRoute = {
+    kind: 'exact',
+    path: SESSIONS_PATH,
+    handler: (req, res): void => {
+      if (req.method !== 'GET') return json(res, 405, { ok: false, error: 'method-not-allowed' })
+      if (!browserSameOriginMarker(req)) return json(res, 403, { ok: false, error: 'forbidden' })
+      const url = requestUrl(req)
+      if (url === null) return json(res, 400, { ok: false, error: 'invalid:url' })
+      const page = readPage(url)
+      if ('error' in page) return json(res, 400, { ok: false, error: page.error })
+      const sessions = deps.store.listSessionAggregates(page.limit, page.offset, RUBRIC_VERSION).map(sessionJson)
+      json(res, 200, { revision: Date.now(), sessions })
+    },
+  }
+
+  // 详情：该会话**全部轮次**（question 截断 200 字；原文不返回）+ 双路标注 + hasText 门读数。
+  const sessionDetail: WebRoute = {
+    kind: 'prefix',
+    path: SESSIONS_PATH,
+    handler: (req, res): void => {
+      if (req.method !== 'GET') return json(res, 405, { ok: false, error: 'method-not-allowed' })
+      if (!browserSameOriginMarker(req)) return json(res, 403, { ok: false, error: 'forbidden' })
+      const url = requestUrl(req)
+      const session = url === null ? null : sessionIdFromPath(url.pathname)
+      if (session === null) return json(res, 404, { ok: false, error: 'not-found' })
+      const agg = deps.store.sessionAggregate(session, RUBRIC_VERSION)
+      // 没有读数的 id 不假装存在（「往期会话」的判据就是有 turn_read 行）
+      if (agg === null) return json(res, 404, { ok: false, error: 'not-found' })
+
+      // 人工：新量表行（有分 + 豁免）逐轮出场；旧代际行不出场（只进 summary 的 legacyFit 计数，分层不混算）
+      const humanByTurn = new Map<number, Record<string, unknown>>()
+      for (const a of deps.store.sessionTurnAlignments(session)) {
+        if (a.schemaVersion >= 2 && (a.align !== null || a.exempt === 1)) {
+          humanByTurn.set(a.turn, {
+            align: a.align, boundary: a.boundary, exempt: a.exempt, quote: a.quote, note: a.note,
+            origin: a.origin, schemaVersion: a.schemaVersion, annotatedAt: a.annotatedAt,
+          })
+        }
+      }
+      // 自评：与 /m2/alignments 同一过滤（dsh_tool × align 非空 × al-v1），按 ext_ref 收窄到本会话
+      const selfByTurn = new Map<number, Record<string, unknown>>()
+      for (const s of deps.store.listSelfAlignments('dsh_tool', RUBRIC_VERSION, session)) {
+        selfByTurn.set(s.turnOrdinal, {
+          align: s.align, boundary: s.boundary, declaration: s.declaration, quote: s.quote,
+          evidence: s.evidence, rubricVersion: s.rubricVersion,
+        })
+      }
+
+      const turns = deps.store.sessionTurns(session).map((t) => ({
+        turn: t.turn,
+        ts: t.ts,
+        question: t.question === null ? null : truncateChars(t.question, QUESTION_PREVIEW_MAX),
+        tokenIn: t.tokenIn,
+        tokenOut: t.tokenOut,
+        cacheRead: t.cacheRead,
+        durationMs: t.durationMs,
+        tps: t.tps,
+        // 可打分判据：与 POST 的 no-turn-text 门同谓词（false → UI 禁用打分并说明原文未采集）
+        hasText: t.hasText,
+        self: selfByTurn.get(t.turn) ?? null,
+        human: humanByTurn.get(t.turn) ?? null,
+      }))
+      json(res, 200, { revision: Date.now(), session: sessionJson(agg), turns })
+    },
+  }
+
+  for (const route of [m2State, turnText, analysis, selfcheck, turnAnnotations, alignments, sessionsList, sessionDetail]) disposers.push(ctx.webServer.register(route))
   return () => { for (const d of disposers.reverse()) { try { d() } catch { /* 幂等清理 */ } } }
 }

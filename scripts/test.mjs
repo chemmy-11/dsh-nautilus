@@ -581,7 +581,9 @@ test('host bundle 单入口：pulse 作为子插件挂载并注册自身路由',
     const tools = []
     const ctx = new Context()
     const handlers = new Map()
-    ctx.provide('webServer', { register(route) { routes.push(route.path); handlers.set(route.path, route.handler); return () => {} } })
+    // 造册键 = kind + path：AL.5s 起 `/m2/sessions` 有**两条**（exact 列表 + prefix 详情）——
+    // 宿主 webserver 里本就是两张表（exact 表优先、其后最长前缀），只记 path 会看不出这件事。
+    ctx.provide('webServer', { register(route) { routes.push(route.kind + ' ' + route.path); handlers.set(route.path, route.handler); return () => {} } })
     ctx.provide('tools', { register(def) { tools.push(def.name) } })
     const fiber = ctx.plugin(mod, {
       pulse: { enabled: true, enableCounters: false, enableGpu: false, intervalMs: 60000, dbFile: ':memory:' },
@@ -590,21 +592,24 @@ test('host bundle 单入口：pulse 作为子插件挂载并注册自身路由',
     // 子进程不退出、npm test 整体挂死且**没有任何报错输出**（2026-09-28 实测：路由清单漏一项即复现）。
     try {
       const deadline = Date.now() + 5000
-      while (Date.now() < deadline && !routes.includes('/api/nautilus/pulse/state')) await new Promise((r) => setTimeout(r, 25))
-      // vault 观测腿下线（2026-09-27）后：无 /state · /vault · /action 三条；S1.1 新增 /selfcheck；AL.4b 新增 /m2/alignments
+      while (Date.now() < deadline && !routes.includes('exact /api/nautilus/pulse/state')) await new Promise((r) => setTimeout(r, 25))
+      // vault 观测腿下线（2026-09-27）后：无 /state · /vault · /action 三条；S1.1 新增 /selfcheck；
+      // AL.4b 新增 /m2/alignments；AL.5s 新增 /m2/sessions（exact 列表 + prefix 详情，同路径两种 kind）
       assert.deepEqual([...routes].sort(), [
-        '/api/nautilus/m2/alignments',
-        '/api/nautilus/m2/analysis',
-        '/api/nautilus/m2/state',
-        '/api/nautilus/m2/turn-annotations',
-        '/api/nautilus/m2/turn-text',
-        '/api/nautilus/pulse/alerts',
-        '/api/nautilus/pulse/alerts/report',
-        '/api/nautilus/pulse/alerts/verdict',
-        '/api/nautilus/pulse/control',
-        '/api/nautilus/pulse/series',
-        '/api/nautilus/pulse/state',
-        '/api/nautilus/selfcheck',
+        'exact /api/nautilus/m2/alignments',
+        'exact /api/nautilus/m2/analysis',
+        'exact /api/nautilus/m2/sessions',
+        'exact /api/nautilus/m2/state',
+        'exact /api/nautilus/m2/turn-annotations',
+        'exact /api/nautilus/m2/turn-text',
+        'exact /api/nautilus/pulse/alerts',
+        'exact /api/nautilus/pulse/alerts/report',
+        'exact /api/nautilus/pulse/alerts/verdict',
+        'exact /api/nautilus/pulse/control',
+        'exact /api/nautilus/pulse/series',
+        'exact /api/nautilus/pulse/state',
+        'exact /api/nautilus/selfcheck',
+        'prefix /api/nautilus/m2/sessions',
       ])
       assert.deepEqual([...tools], ['record_turn_selfcheck'])
     } finally { await fiber.dispose() }

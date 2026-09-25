@@ -71,6 +71,61 @@ export interface SelfCheckRecordRow {
   rubricVersion: string | null
 }
 
+/**
+ * AL.5s 会话聚合行（`GET /api/nautilus/m2/sessions` 的原料）。
+ *
+ * 全是**原始事实**：label / sessionName 的派生规则不在这里（store 不持有呈现口径）——
+ * `nameQuestions` 只给候选原料，由 `src/nexus/sessions.ts` 单点判「够不够格当会话名」。
+ */
+export interface SessionAggregateRow {
+  session: string
+  /** session_root 冻结归属值（'' = 未归属/无记录——AL.4a 撤除指向后不再新增归属，历史值照旧）。 */
+  workspace: string
+  turns: number
+  firstTs: number
+  lastTs: number
+  tokenIn: number
+  tokenOut: number
+  cacheRead: number
+  /** 该会话已知时长合计（逐轮 duration_ms 求和；无读数的轮不计）。 */
+  durationMs: number
+  /** 按轮次升序的**候选** question（最多前几条；无 → 空数组）——会话名派生的原料。 */
+  nameQuestions: string[]
+  /** 已附着于本会话轮次的**新量表**人工行数（有分 + 豁免，schema_version≥2）。 */
+  humanAnnotationCount: number
+  /** 已附着于本会话轮次的自评对齐行数（dsh_tool × align 非空 × 当期 rubric）。 */
+  selfAlignmentCount: number
+  /** 已附着于本会话轮次的**旧代际**人工行数（schema_version=1，0–4 旧尺）——分层单列，不混算。 */
+  legacyFitCount: number
+}
+
+/** AL.5s 某会话的一轮读数（原文只出「在场与否」，不出全文）。 */
+export interface SessionTurnRow {
+  turn: number
+  ts: number
+  question: string | null
+  tokenIn: number
+  tokenOut: number
+  cacheRead: number
+  durationMs: number | null
+  tps: number | null
+  /** 原文在场 = 可打分（与 POST `no-turn-text` 拒写门**同一谓词**：turn_text 里有行）。 */
+  hasText: boolean
+}
+
+/** AL.5s 某会话的人工标注行（含旧代际行；分层过滤在调用方，判据与 /m2/alignments 同一份）。 */
+export interface SessionAnnotationRow {
+  turn: number
+  align: number | null
+  boundary: string
+  exempt: 0 | 1
+  quote: string | null
+  note: string | null
+  origin: 'spot' | 'sample'
+  schemaVersion: number
+  annotatedAt: number
+}
+
 export function openStore(dbFile: string): NautilusStore {
   mkdirSync(dirname(dbFile), { recursive: true })
   return new NautilusStore(dbFile)
@@ -687,21 +742,25 @@ export class NautilusStore {
    * 与旧三行一样只进 `selfcheckLegacyRows` 计数（代际不混算，路由 self[] 即此过滤）。
    * @param sourceKind 通道过滤（默认 dsh_tool；http/backfill/mcp 属历史对照，不进当期读数）。
    * @param rubricVersion 准则版本过滤（默认 undefined = 不过滤；调用方传 nexus 的 `RUBRIC_VERSION`）。
+   * @param extRef 会话过滤（AL.5s 详情用；`dsh_tool` 通道下 ext_ref = 会话 id）。过滤条件与默认路径
+   *   共用同一段 SQL 判据——**不为会话详情另写一套代际/通道口径**。
    */
   listSelfAlignments(
     sourceKind: 'dsh_tool' | 'http' | 'backfill' | 'mcp' = 'dsh_tool',
     rubricVersion?: string,
+    extRef?: string,
   ): Array<{
     extRef: string; turnOrdinal: number; align: number; boundary: string
     declaration: 0 | 1; quote: string | null; evidence: string | null
     rubricVersion: string | null; tsMs: number; agent: string
   }> {
     const f = rubricVersion === undefined ? { sql: '', params: [] as string[] } : { sql: ' AND rubric_version = ?', params: [rubricVersion] }
+    const e = extRef === undefined ? { sql: '', params: [] as string[] } : { sql: ' AND ext_ref = ?', params: [extRef] }
     const rows = this.db.prepare(`
       SELECT ext_ref, turn_ordinal, align, boundary, declaration, quote, evidence, rubric_version, ts_ms, agent
-      FROM selfcheck_record WHERE align IS NOT NULL AND source_kind = ?${f.sql}
+      FROM selfcheck_record WHERE align IS NOT NULL AND source_kind = ?${f.sql}${e.sql}
       ORDER BY ts_ms DESC, ext_ref ASC, turn_ordinal ASC
-    `).all(sourceKind, ...f.params) as Array<Record<string, unknown>>
+    `).all(sourceKind, ...f.params, ...e.params) as Array<Record<string, unknown>>
     return rows.map((r) => ({
       extRef: String(r.ext_ref), turnOrdinal: Number(r.turn_ordinal), align: Number(r.align),
       boundary: String(r.boundary ?? 'none'),
@@ -993,7 +1052,190 @@ export class NautilusStore {
     return { userText: r.user_text, assistantText: r.assistant_text }
   }
 
+  // ── AL.5s 往期会话读侧（列表 + 详情；工作台打分入口的数据面）────────────────────────
+  // 主干是 turn_read（轮次读数）；turn_text 只用于「原文在场」判定；标注计数按代际分层。
+  // 列表按最后轮次倒序（最近的往期会话在前），并以 session 作二级键——分页不许出现
+  // 「同一行既在 offset=0 又在 offset=50」的不确定序（UI 翻页会看到重复行）。
+
+  /** 会话清单聚合（分页；按 last_ts 倒序 + session 升序定序）。 */
+  listSessionAggregates(limit: number, offset: number, rubricVersion: string): SessionAggregateRow[] {
+    const page = this.db.prepare(`
+      SELECT ${SESSION_AGG_COLUMNS}
+      FROM turn_read GROUP BY session
+      ORDER BY last_ts DESC, session ASC
+      LIMIT ? OFFSET ?
+    `).all(limit, offset) as Array<Record<string, unknown>>
+    return this.decorateSessions(page, rubricVersion)
+  }
+
+  /**
+   * 单会话聚合（详情）。会话在 turn_read 里没有任何轮次 → `null`（路由据此 404——
+   * 「往期会话」的判据就是「有读数」，没有读数的 id 不假装存在）。
+   * @param rubricVersion 自评计数的当期准则版本（store 不持有该知识，由调用方从 nexus 常量传入）。
+   */
+  sessionAggregate(session: string, rubricVersion: string): SessionAggregateRow | null {
+    const page = this.db.prepare(`
+      SELECT ${SESSION_AGG_COLUMNS}
+      FROM turn_read WHERE session = ? GROUP BY session
+    `).all(session) as Array<Record<string, unknown>>
+    return this.decorateSessions(page, rubricVersion)[0] ?? null
+  }
+
+  /** 某会话的全部轮次（按轮次升序；原文只出在场与否——**不返回全文**，负载控制）。 */
+  sessionTurns(session: string): SessionTurnRow[] {
+    const rows = this.db.prepare(`
+      SELECT tr.turn, tr.ts, tr.question, tr.token_in, tr.token_out, tr.cache_read, tr.duration_ms, tr.tps,
+             CASE WHEN tt.session IS NULL THEN 0 ELSE 1 END AS has_text
+      FROM turn_read tr
+      LEFT JOIN turn_text tt ON tt.session = tr.session AND tt.turn = tr.turn
+      WHERE tr.session = ?
+      ORDER BY tr.turn ASC
+    `).all(session) as Array<Record<string, unknown>>
+    return rows.map((r) => ({
+      turn: Number(r.turn), ts: Number(r.ts),
+      question: r.question === null || r.question === undefined ? null : String(r.question),
+      tokenIn: Number(r.token_in ?? 0), tokenOut: Number(r.token_out ?? 0), cacheRead: Number(r.cache_read ?? 0),
+      durationMs: r.duration_ms === null || r.duration_ms === undefined ? null : Number(r.duration_ms),
+      tps: r.tps === null || r.tps === undefined ? null : Number(r.tps),
+      hasText: Number(r.has_text ?? 0) === 1,
+    }))
+  }
+
+  /** 某会话的人工标注行（**含旧代际行**；分层过滤在调用方——判据与 /m2/alignments 同一份）。 */
+  sessionTurnAlignments(session: string): SessionAnnotationRow[] {
+    const rows = this.db.prepare(`
+      SELECT turn, align, boundary, exempt, quote, note, origin, schema_version, annotated_at
+      FROM turn_annotation WHERE session = ? ORDER BY turn ASC
+    `).all(session) as Array<Record<string, unknown>>
+    return rows.map((r) => ({
+      turn: Number(r.turn),
+      align: r.align === null || r.align === undefined ? null : Number(r.align),
+      boundary: String(r.boundary ?? 'none'),
+      exempt: Number(r.exempt ?? 0) === 1 ? 1 : 0,
+      quote: r.quote == null ? null : String(r.quote),
+      note: r.note == null ? null : String(r.note),
+      origin: String(r.origin) as 'spot' | 'sample',
+      schemaVersion: Number(r.schema_version ?? 1),
+      annotatedAt: Number(r.annotated_at),
+    }))
+  }
+
+  /**
+   * 原文在场判定（**唯一谓词**）：POST /m2/turn-annotations 的 `no-turn-text` 拒写门与
+   * /m2/sessions 详情的 `hasText` 都走它——UI 看到的 hasText 就是服务端会不会拒，两处不许各判一次
+   * （往期会话能不能打分，答案只能有一个）。
+   */
+  hasTurnText(session: string, turn: number): boolean {
+    return this.db.prepare('SELECT 1 AS x FROM turn_text WHERE session = ? AND turn = ? LIMIT 1').get(session, turn) !== undefined
+  }
+
+  /** 为一页会话补齐：归属路径 + 会话名候选 + 三类标注计数（查询都以 page 内 session 为界，负载有界）。 */
+  private decorateSessions(page: Array<Record<string, unknown>>, rubricVersion: string): SessionAggregateRow[] {
+    if (page.length === 0) return []
+    const keys = page.map((r) => String(r.session))
+    const ph = keys.map(() => '?').join(', ')
+
+    const roots = new Map<string, string>()
+    for (const r of this.db.prepare(`SELECT session, root FROM session_root WHERE session IN (${ph})`).all(...keys) as Array<Record<string, unknown>>) {
+      roots.set(String(r.session), String(r.root ?? ''))
+    }
+
+    // 会话名候选：每会话取前几条候选（SQL 侧已按「去空白非空 ∧ 不以 < 开头」预筛，但 SQLite 的 trim
+    // 只认 ASCII 空白，故多取几条交给 nexus 的权威判据逐条判——「前导 Unicode 空白 + 尖括号块」这类
+    // 边角行会被权威判据拒掉，后面那条真问题仍补得上；真会话名不编，见 nexus/sessions.ts）。
+    const nameQuestions = new Map<string, string[]>()
+    const nameRows = this.db.prepare(`
+      SELECT session, question FROM (
+        SELECT session, question, ROW_NUMBER() OVER (PARTITION BY session ORDER BY turn ASC) AS rn
+        FROM turn_read
+        WHERE session IN (${ph})
+          AND question IS NOT NULL
+          AND trim(question, ${SESSION_NAME_TRIM_WS}) <> ''
+          AND ltrim(question, ${SESSION_NAME_TRIM_WS}) NOT LIKE '<%'
+      ) WHERE rn <= ${String(SESSION_NAME_SCAN)}
+      ORDER BY session ASC, rn ASC
+    `).all(...keys) as Array<Record<string, unknown>>
+    for (const r of nameRows) {
+      const s = String(r.session)
+      const list = nameQuestions.get(s)
+      if (list === undefined) nameQuestions.set(s, [String(r.question)])
+      else list.push(String(r.question))
+    }
+
+    // 计数只数**已附着到该会话轮次**的行（= 详情逐轮渲染的同一集合；summary 与详情不许各说一套）。
+    const human = this.countBySession(`
+      SELECT ta.session AS session, COUNT(*) AS n FROM turn_annotation ta
+        JOIN turn_read tr ON tr.session = ta.session AND tr.turn = ta.turn
+      WHERE ta.session IN (${ph}) AND ta.schema_version >= 2 AND (ta.align IS NOT NULL OR ta.exempt = 1)
+      GROUP BY ta.session`, keys)
+    const legacy = this.countBySession(`
+      SELECT ta.session AS session, COUNT(*) AS n FROM turn_annotation ta
+        JOIN turn_read tr ON tr.session = ta.session AND tr.turn = ta.turn
+      WHERE ta.session IN (${ph}) AND ta.schema_version = 1
+      GROUP BY ta.session`, keys)
+    // 自评：通道(dsh_tool) + align 非空 + 当期 rubric 三件套与 /m2/alignments 同一判据（dsh_tool 下 ext_ref = 会话 id）
+    const self = this.countBySession(`
+      SELECT sc.ext_ref AS session, COUNT(*) AS n FROM selfcheck_record sc
+        JOIN turn_read tr ON tr.session = sc.ext_ref AND tr.turn = sc.turn_ordinal
+      WHERE sc.ext_ref IN (${ph}) AND sc.source_kind = 'dsh_tool' AND sc.align IS NOT NULL AND sc.rubric_version = ?
+      GROUP BY sc.ext_ref`, keys, [rubricVersion])
+
+    return page.map((r) => {
+      const session = String(r.session)
+      return {
+        session,
+        workspace: roots.get(session) ?? '',
+        turns: Number(r.turns ?? 0),
+        firstTs: Number(r.first_ts ?? 0),
+        lastTs: Number(r.last_ts ?? 0),
+        tokenIn: Number(r.tin ?? 0),
+        tokenOut: Number(r.tout ?? 0),
+        cacheRead: Number(r.cr ?? 0),
+        durationMs: Number(r.dur ?? 0),
+        nameQuestions: nameQuestions.get(session) ?? [],
+        humanAnnotationCount: human.get(session) ?? 0,
+        selfAlignmentCount: self.get(session) ?? 0,
+        legacyFitCount: legacy.get(session) ?? 0,
+      }
+    })
+  }
+
+  /** 计数查询统一执行口（session IN 列表在前，尾参在后）→ session → 计数。 */
+  private countBySession(sql: string, keys: string[], tail: string[] = []): Map<string, number> {
+    const out = new Map<string, number>()
+    for (const r of this.db.prepare(sql).all(...keys, ...tail) as Array<Record<string, unknown>>) {
+      out.set(String(r.session), Number(r.n ?? 0))
+    }
+    return out
+  }
+
 }
+
+
+/**
+ * AL.5s 会话聚合列（列表与详情**共用同一段 SQL**——两处数字不许各算一套）。
+ * 分页排序键 `last_ts` 与二级键 `session` 在调用方（见 listSessionAggregates）。
+ */
+const SESSION_AGG_COLUMNS = `
+  session,
+  COUNT(*) AS turns,
+  MIN(ts) AS first_ts,
+  MAX(ts) AS last_ts,
+  COALESCE(SUM(token_in), 0) AS tin,
+  COALESCE(SUM(token_out), 0) AS tout,
+  COALESCE(SUM(cache_read), 0) AS cr,
+  COALESCE(SUM(duration_ms), 0) AS dur
+`
+
+/**
+ * 会话名候选预筛用的**空白字符集**（SQLite 的 trim 默认只去空格，须显式列出 tab/LF/CR）：
+ * SQL 只做宽筛，权威判据始终是 nexus/sessions.ts 的 `acceptsAsNameQuestion`（JS trim 语义）。
+ * 宽筛略宽于权威判据是**故意**的：宁可多取几条候选，也不能漏掉真问题。
+ */
+const SESSION_NAME_TRIM_WS = "' ' || char(9) || char(10) || char(13)"
+
+/** 每会话预取的候选 question 条数（覆盖「前导空白 + 尖括号块」这类会被权威判据拒掉的边角行）。 */
+const SESSION_NAME_SCAN = 3
 
 /** 行 → TurnReadRow（含 M3-F.1 预留/自评三列）。 */
 function mapTurnRow(r: Record<string, unknown>): TurnReadRow {
