@@ -36,7 +36,7 @@ import { pairAlignments, consistencyOf, MIN_PAIRS } from './nexus/consistency.js
 // PS.0fix C：采集写失败读数（丢写可见化）——诊断面只读快照，由 index.ts 注入取值器
 import type { CollectorDiagnostics } from './nexus/turns.js'
 // AL.5s：label / 会话名派生（服务端单点；UI 不自己拼——契约冻结「工作区 · 会话名」）
-import { acceptsAsNameQuestion, composeLabel, truncateChars, QUESTION_PREVIEW_MAX } from './nexus/sessions.js'
+import { acceptsAsNameQuestion, composeLabel, resolveWorkspace, truncateChars, QUESTION_PREVIEW_MAX } from './nexus/sessions.js'
 
 /** 集中常量：路由前缀（AGENTS.md §1-4）。 */
 const API_PREFIX = '/api/nautilus'
@@ -434,17 +434,30 @@ export function registerNautilusRoutes(ctx: { webServer: { register(route: WebRo
   //                 self:  { align, boundary, declaration, quote, evidence, rubricVersion } | null,
   //                 human: { align, boundary, exempt, quote, note, origin, schemaVersion, annotatedAt } | null }] }
   //
+  // 契约 v2（AL.6e，**只加不改**——字段名/单位一字不动）：
+  //   · 轮次集合（列表的 `turns` 计数与详情的 `turns[]`）= **turn_read ∪ turn_text**：
+  //     有读数 或 有原文即出场（同一 turn 去重、按 turn 升序）——「原文在、读数缺」的轮次此前看不到，
+  //     而它本来就能打分（原文门满足），并入是补齐而非放宽任何门。
+  //   · 这些轮次的读数**一律 null**（字段仍在、名与单位不变）：`ts` 取 `turn_text.updated_at`（无则 null），
+  //     `tokenIn/tokenOut/cacheRead/durationMs/tps` 全为 null——**不写 0**（0 是真实读数，拿它冒充缺失即造假）；
+  //     `hasText` 恒 true（正是「有原文」才进的集合）。UI 侧按「null → —」渲染，无需改动。
+  //   · `turns` 是**并集轮数**；`totals` 只累加有读数的轮次（无读数轮贡献 0，它们本就没有读数）；
+  //     `annotated` 三个计数按**并集轮次**附着判定（详情里渲染得出来的轮次，计数就必须认）。
+  //
   // 口径（写在这里 = 唯一口径，UI 不再自己算）：
-  //  · 主干是 **turn_read**（轮次读数）；turn_text 只用于 `hasText` 在场判定，**不返回原文**
+  //  · 读数列来自 **turn_read**；turn_text 另用于 `hasText` 在场判定与并集轮次，**不返回原文**
   //    （question 截断 200 字；user_text/assistant_text 一律不出现在响应里——负载控制）。
   //  · label = workspaceName + ' · ' + sessionName，派生规则在 **src/nexus/sessions.ts 单点**：
-  //    workspaceName = session_root 里工作区路径的 basename（无记录/未归属 → 「未知工作区」）；
+  //    会话工作区 = turn_read 最后一个非空 workspace（AL.6e 落库）→ 回落 session_root.root → 再缺空串
+  //    （`resolveWorkspace`）；workspaceName = 该路径的 basename（三级都缺 → 「未知工作区」）。
+  //    **诚实边界**：历史会话的 workspace 恒 NULL 且不回填 → 历史行仍显「未知工作区」，这是设计而非缺陷。
   //    sessionName = 该会话第一条「不以 '<' 开头且去空白非空」的 question 的首行前 24 字，
   //    无 → session id 短形（末 8 位）。真会话名不编（真库大量 question 以 <system-reminder> 块开头）。
   //  · 代际分层照旧（决策 §9.3）：human 只出 schema_version≥2 的行（有分 + 豁免，v8 CHECK 恰好二分）；
   //    旧尺行（schema_version=1，0–4 旧契合）**不出场**、只进 annotated.legacyFit 计数——不混算、不降级；
   //    self 只认 source_kind=dsh_tool ∧ align 非空 ∧ rubric_version=al-v1（与 /m2/alignments 同一把尺子）。
-  //    计数只数**已附着到该会话轮次**的标注行（= 详情逐轮渲染的同一集合，summary 与详情不许各说一套）。
+  //    计数只数**已附着到该会话轮次**的标注行，轮次集合 = AL.6e 并集（= 详情逐轮渲染的同一集合，
+  //    summary 与详情不许各说一套）。
   //  · 分页严格（不夹取、不猜默认）：limit ∈ [1,200] 缺省 50；offset ≥ 0 缺省 0；
   //    在场但非法 → 400 `invalid:limit` / `invalid:offset`（静默夹取会让 UI 以为拿到了全部会话）。
   //  · 错误码（本组路由）：forbidden(403) / method-not-allowed(405) / invalid:limit·invalid:offset(400) /
@@ -499,12 +512,15 @@ export function registerNautilusRoutes(ctx: { webServer: { register(route: WebRo
   function sessionJson(agg: SessionAggregateRow): Record<string, unknown> {
     // 会话名候选可能不止一条（见 store.decorateSessions）：取**第一条**够格当会话名的（权威判据在 nexus）
     const nameQuestion = agg.nameQuestions.find((q) => acceptsAsNameQuestion(q)) ?? null
-    const { workspaceName, sessionName, label } = composeLabel(agg.workspace, nameQuestion, agg.session)
+    // AL.6e 工作区三级回落（turn_read 最后一个非空 workspace → session_root.root → 空串）走 nexus 单点；
+    // 与显示名派生共用同一份实现，路由不自己判空、不自己拼路径。
+    const workspace = resolveWorkspace(agg.workspace, agg.sessionRoot)
+    const { workspaceName, sessionName, label } = composeLabel(workspace, nameQuestion, agg.session)
     return {
       session: agg.session,
       label,
-      // workspace 给 session_root 的**原始冻结值**（'' = 未归属/无记录）；显示名走 workspaceName
-      workspace: agg.workspace,
+      // workspace = 已解析的会话工作区原始路径（空串 = 三级都缺，显示名走 workspaceName）
+      workspace,
       workspaceName,
       sessionName,
       turns: agg.turns,
@@ -543,7 +559,7 @@ export function registerNautilusRoutes(ctx: { webServer: { register(route: WebRo
     },
   }
 
-  // 详情：该会话**全部轮次**（question 截断 200 字；原文不返回）+ 双路标注 + hasText 门读数。
+  // 详情：该会话**全部轮次**（AL.6e 并集；question 截断 200 字；原文不返回）+ 双路标注 + hasText 门读数。
   const sessionDetail: WebRoute = {
     kind: 'prefix',
     path: SESSIONS_PATH,
@@ -554,7 +570,7 @@ export function registerNautilusRoutes(ctx: { webServer: { register(route: WebRo
       const session = url === null ? null : sessionIdFromPath(url.pathname)
       if (session === null) return json(res, 404, { ok: false, error: 'not-found' })
       const agg = deps.store.sessionAggregate(session, RUBRIC_VERSION)
-      // 没有读数的 id 不假装存在（「往期会话」的判据就是有 turn_read 行）
+      // 并集里一轮都没有的 id 不假装存在（「往期会话」的判据 = 有读数 或 有原文）
       if (agg === null) return json(res, 404, { ok: false, error: 'not-found' })
 
       // 人工：新量表行（有分 + 豁免）逐轮出场；旧代际行不出场（只进 summary 的 legacyFit 计数，分层不混算）

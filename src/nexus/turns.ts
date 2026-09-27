@@ -172,6 +172,8 @@ export class TurnsCollector {
         const assistantFull = textOf((d.message as { content?: unknown } | undefined)?.content, Infinity)
         if (assistantFull !== '') this.write('appendAssistantText', () => this.store.appendAssistantText(sessionId, turn, assistantFull))
 
+        // AL.6e：官方 session/header.cwd 随读数落库（turn_read.workspace，仅非空才写）——
+        // 这是「往期会话 label 前段全是未知工作区」的**数据源补回**，不是新采集面（cwd 本来就在手上）。
         this.write('upsertTurnRead', () => this.store.upsertTurnRead({
           session: sessionId,
           turn,
@@ -181,6 +183,7 @@ export class TurnsCollector {
           tokenOut: num(usage.outputTokens) ?? 0,
           cacheRead: num(usage.cacheReadTokens) ?? 0,
           durationMs,
+          workspace: cwd,
         }))
         break
       }

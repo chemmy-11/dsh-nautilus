@@ -81,8 +81,13 @@ export interface SelfCheckRecordRow {
  */
 export interface SessionAggregateRow {
   session: string
-  /** session_root 冻结归属值（'' = 未归属/无记录——AL.4a 撤除指向后不再新增归属，历史值照旧）。 */
+  /**
+   * AL.6e：该会话**最后一个非空** `turn_read.workspace`（官方 `session/header.cwd`；v10 起逐轮落库）。
+   * '' = 该会话全部轮次都没有工作区读数（含全部历史行——v10 前落库的轮次 workspace 恒 NULL，**不回填**）。
+   */
   workspace: string
+  /** 历史归属兜底（session_root 冻结值；'' = 未归属/无记录——AL.4a 后不再新增，历史值照旧）。 */
+  sessionRoot: string
   turns: number
   firstTs: number
   lastTs: number
@@ -101,14 +106,24 @@ export interface SessionAggregateRow {
   legacyFitCount: number
 }
 
-/** AL.5s 某会话的一轮读数（原文只出「在场与否」，不出全文）。 */
+/**
+ * AL.5s 某会话的一轮（原文只出「在场与否」，不出全文）。
+ *
+ * AL.6e 起轮次集合是 **turn_read ∪ turn_text 的并集**（有读数 或 有原文即出场）——
+ * 「只有原文、没有读数」的轮次（原文门满足、可打分）此前**看不到**，是本次改动的目的。
+ * 该类轮次的读数**一律 null**：`tokenIn`/`tokenOut`/`cacheRead`/`durationMs`/`tps` 全部缺席、
+ * **绝不写 0**（0 是真实读数，拿它冒充缺失就是造假数据）；`ts` 取 `turn_text.updated_at`（无则 null）。
+ * 契约只加不改：字段名与单位不变，只是这些数值字段现在**可能为 null**（UI 按「null → —」渲染）。
+ */
 export interface SessionTurnRow {
   turn: number
-  ts: number
+  /** 读数行的 ts；仅无读数的轮次回落 turn_text.updated_at（两处都没有 → null，不写 0）。 */
+  ts: number | null
   question: string | null
-  tokenIn: number
-  tokenOut: number
-  cacheRead: number
+  /** 仅无读数的轮次为 null（**不是 0**）。 */
+  tokenIn: number | null
+  tokenOut: number | null
+  cacheRead: number | null
   durationMs: number | null
   tps: number | null
   /** 原文在场 = 可打分（与 POST `no-turn-text` 拒写门**同一谓词**：turn_text 里有行）。 */
@@ -220,6 +235,7 @@ export class NautilusStore {
       { version: 7, owner: 'nautilus', name: 'A 系列 alert_event', apply: () => this.migrateV7() },
       { version: 8, owner: 'nautilus', name: 'AL 对齐量表 1–5（turn_annotation 重建 + selfcheck_record 追加）', apply: () => this.migrateV8() },
       { version: 9, owner: 'nautilus', name: 'AL.3 selfcheck_record 重建（clarity/defense 转可空）', apply: () => this.migrateV9() },
+      { version: 10, owner: 'nautilus', name: 'AL.6e turn_read 工作区归属列（workspace，可空不动既有列）', apply: () => this.migrateV10() },
     ]
   }
 
@@ -522,6 +538,37 @@ export class NautilusStore {
     }
   }
 
+  /**
+   * AL.6e 迁移（user_version 9→10）：`turn_read` 追加**可空**列 `workspace`——逐轮工作区归属。
+   *
+   * 为什么：AL.4a 撤除「工作区指向」后 `session_root.root` 全为空串，`/m2/sessions` 的 label 前段全是
+   * 「未知工作区」；而采集侧其实**早就拿到**官方 `session/header.cwd`（`TurnsCollector.handle` 的第三参），
+   * 只是没落库。本迁移**只加列**——绝不回填、绝不改既有列、绝不改既有行（红线 3）。
+   * 故历史行 workspace 恒 NULL → 历史会话仍显「未知工作区」，这是**设计而非缺陷**（dev-05 §7 诚实边界）。
+   *
+   * 幂等：列已在 → 零变更；`turn_read` 缺席（手工置版 / 半迁移的库）→ 跳过并如实告警，
+   * 绝不硬崩（同 v8/v9 的防御写法：库本身可用优先于结构完美）。
+   */
+  private migrateV10(): void {
+    this.db.exec('BEGIN')
+    try {
+      const hasTr = this.db.prepare("SELECT 1 AS x FROM sqlite_master WHERE type='table' AND name='turn_read'").get() !== undefined
+      if (!hasTr) {
+        console.warn('[nautilus] migrateV10：turn_read 缺席——跳过追加 workspace 列（该表由本模块构造期创建；版本号与表结构不一致，请人工核对）')
+      } else {
+        const cols = this.db.prepare('PRAGMA table_info(turn_read)').all() as Array<{ name: string }>
+        if (!cols.some((c) => c.name === 'workspace')) {
+          this.db.exec('ALTER TABLE turn_read ADD COLUMN workspace TEXT')
+        }
+      }
+      this.db.exec('PRAGMA user_version = 10')
+      this.db.exec('COMMIT')
+    } catch (e) {
+      this.db.exec('ROLLBACK')
+      throw e
+    }
+  }
+
   close(): void {
     this.db.close()
   }
@@ -619,12 +666,19 @@ export class NautilusStore {
     tokenOut: number
     cacheRead: number
     durationMs: number | null
+    /**
+     * AL.6e：本轮工作区（官方 `session/header.cwd`，由 `TurnsCollector.handle` 透传）。
+     * **仅非空才写**——空串/缺席归一为 NULL，且冲突时**不覆盖**已有值（前向积累；历史行不回填）。
+     */
+    workspace?: string | null
   }): void {
     const dur = row.durationMs !== null && row.durationMs > 0 ? row.durationMs : null
     const tps = dur !== null ? (row.tokenOut * 1000.0) / dur : null
+    // 空串不是工作区（'' 语义 = 「没有」）：归一为 NULL，配合下面的 COALESCE 保证「空值不覆盖已有值」
+    const ws = row.workspace === undefined || row.workspace === null || row.workspace === '' ? null : row.workspace
     this.db.prepare(`
-      INSERT INTO turn_read (session, turn, ts, question, token_in, token_out, cache_read, duration_ms, tps)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO turn_read (session, turn, ts, question, token_in, token_out, cache_read, duration_ms, tps, workspace)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(session, turn) DO UPDATE SET
         ts = excluded.ts,
         question = COALESCE(excluded.question, question),
@@ -632,6 +686,7 @@ export class NautilusStore {
         token_out = token_out + excluded.token_out,
         cache_read = cache_read + excluded.cache_read,
         duration_ms = COALESCE(duration_ms, 0) + COALESCE(excluded.duration_ms, 0),
+        workspace = COALESCE(excluded.workspace, workspace),
         tps = CASE
           WHEN COALESCE(duration_ms, 0) + COALESCE(excluded.duration_ms, 0) > 0
           THEN (token_out + excluded.token_out) * 1000.0
@@ -639,7 +694,7 @@ export class NautilusStore {
           ELSE NULL END
     `).run(
       row.session, row.turn, row.ts, row.question,
-      row.tokenIn, row.tokenOut, row.cacheRead, dur, tps,
+      row.tokenIn, row.tokenOut, row.cacheRead, dur, tps, ws,
     )
   }
 
@@ -1058,50 +1113,68 @@ export class NautilusStore {
   }
 
   // ── AL.5s 往期会话读侧（列表 + 详情；工作台打分入口的数据面）────────────────────────
-  // 主干是 turn_read（轮次读数）；turn_text 只用于「原文在场」判定；标注计数按代际分层。
+  // 轮次集合 = **turn_read ∪ turn_text**（AL.6e）：有读数 或 有原文即出场，同一 turn 去重、按 turn 升序。
+  // 为什么并入：活库实测有「原文在场（原文门满足、能打分）却看不到」的轮次——主干只取 turn_read 时
+  // 它们既不在详情里、也不进 totals，UI 无从发现。并集后 `turns` = **并集轮数**（不再是「有读数的轮数」），
+  // 标注计数同样按并集的轮次附着判定（详情里渲染得出来的轮次，计数就必须认——summary 与详情不许各说一套）。
+  // 无读数轮次的读数一律 null（**不写 0**：0 是真实读数）。
   // 列表按最后轮次倒序（最近的往期会话在前），并以 session 作二级键——分页不许出现
   // 「同一行既在 offset=0 又在 offset=50」的不确定序（UI 翻页会看到重复行）。
 
-  /** 会话清单聚合（分页；按 last_ts 倒序 + session 升序定序）。 */
+  /** 会话清单聚合（分页；按 last_ts 倒序 + session 升序定序；`turns` = 并集轮数）。 */
   listSessionAggregates(limit: number, offset: number, rubricVersion: string): SessionAggregateRow[] {
     const page = this.db.prepare(`
-      SELECT ${SESSION_AGG_COLUMNS}
-      FROM turn_read GROUP BY session
-      ORDER BY last_ts DESC, session ASC
+      ${SESSION_AGG_SELECT}
+      GROUP BY u.session
+      ORDER BY last_ts DESC, u.session ASC
       LIMIT ? OFFSET ?
     `).all(limit, offset) as Array<Record<string, unknown>>
     return this.decorateSessions(page, rubricVersion)
   }
 
   /**
-   * 单会话聚合（详情）。会话在 turn_read 里没有任何轮次 → `null`（路由据此 404——
-   * 「往期会话」的判据就是「有读数」，没有读数的 id 不假装存在）。
+   * 单会话聚合（详情）。会话**既无读数也无原文** → `null`（路由据此 404——
+   * 「往期会话」的判据 = 在并集里至少有一轮；两条腿都没有的 id 不假装存在）。
    * @param rubricVersion 自评计数的当期准则版本（store 不持有该知识，由调用方从 nexus 常量传入）。
    */
   sessionAggregate(session: string, rubricVersion: string): SessionAggregateRow | null {
     const page = this.db.prepare(`
-      SELECT ${SESSION_AGG_COLUMNS}
-      FROM turn_read WHERE session = ? GROUP BY session
+      ${SESSION_AGG_SELECT}
+      WHERE u.session = ? GROUP BY u.session
     `).all(session) as Array<Record<string, unknown>>
     return this.decorateSessions(page, rubricVersion)[0] ?? null
   }
 
-  /** 某会话的全部轮次（按轮次升序；原文只出在场与否——**不返回全文**，负载控制）。 */
+  /**
+   * 某会话的全部轮次（**并集**：有读数 或 有原文；按轮次升序去重；原文只出在场与否，**不返回全文**）。
+   *
+   * 无读数的轮次（原文在、读数缺）：`tokenIn/tokenOut/cacheRead/durationMs/tps` 一律 **null**——
+   * 0 是真实读数（真有一轮 0 输出），拿它冒充「没测到」就是造假数据；`ts` 取 `turn_text.updated_at`。
+   */
   sessionTurns(session: string): SessionTurnRow[] {
     const rows = this.db.prepare(`
-      SELECT tr.turn, tr.ts, tr.question, tr.token_in, tr.token_out, tr.cache_read, tr.duration_ms, tr.tps,
+      SELECT u.turn AS turn,
+             COALESCE(tr.ts, tt.updated_at) AS ts,
+             tr.question AS question,
+             tr.token_in AS token_in, tr.token_out AS token_out, tr.cache_read AS cache_read,
+             tr.duration_ms AS duration_ms, tr.tps AS tps,
              CASE WHEN tt.session IS NULL THEN 0 ELSE 1 END AS has_text
-      FROM turn_read tr
-      LEFT JOIN turn_text tt ON tt.session = tr.session AND tt.turn = tr.turn
-      WHERE tr.session = ?
-      ORDER BY tr.turn ASC
-    `).all(session) as Array<Record<string, unknown>>
+      FROM (
+        SELECT turn FROM turn_read WHERE session = ?
+        UNION
+        SELECT turn FROM turn_text WHERE session = ?
+      ) u
+      LEFT JOIN turn_read tr ON tr.session = ? AND tr.turn = u.turn
+      LEFT JOIN turn_text tt ON tt.session = ? AND tt.turn = u.turn
+      ORDER BY u.turn ASC
+    `).all(session, session, session, session) as Array<Record<string, unknown>>
+    const numOrNull = (v: unknown): number | null => v === null || v === undefined ? null : Number(v)
     return rows.map((r) => ({
-      turn: Number(r.turn), ts: Number(r.ts),
+      turn: Number(r.turn), ts: numOrNull(r.ts),
       question: r.question === null || r.question === undefined ? null : String(r.question),
-      tokenIn: Number(r.token_in ?? 0), tokenOut: Number(r.token_out ?? 0), cacheRead: Number(r.cache_read ?? 0),
-      durationMs: r.duration_ms === null || r.duration_ms === undefined ? null : Number(r.duration_ms),
-      tps: r.tps === null || r.tps === undefined ? null : Number(r.tps),
+      tokenIn: numOrNull(r.token_in), tokenOut: numOrNull(r.token_out), cacheRead: numOrNull(r.cache_read),
+      durationMs: numOrNull(r.duration_ms),
+      tps: numOrNull(r.tps),
       hasText: Number(r.has_text ?? 0) === 1,
     }))
   }
@@ -1140,10 +1213,22 @@ export class NautilusStore {
     const keys = page.map((r) => String(r.session))
     const ph = keys.map(() => '?').join(', ')
 
+    // 历史归属（AL.4a 后不再新增，只作 AL.6e 工作区的**回落**——见 nexus/sessions.ts 的 resolveWorkspace）
     const roots = new Map<string, string>()
     for (const r of this.db.prepare(`SELECT session, root FROM session_root WHERE session IN (${ph})`).all(...keys) as Array<Record<string, unknown>>) {
       roots.set(String(r.session), String(r.root ?? ''))
     }
+
+    // AL.6e 工作区：该会话**最后一个非空** turn_read.workspace（官方 cwd 逐轮落库；v10 前历史行恒 NULL）
+    const workspaces = new Map<string, string>()
+    const wsRows = this.db.prepare(`
+      SELECT session, workspace FROM (
+        SELECT session, workspace, ROW_NUMBER() OVER (PARTITION BY session ORDER BY turn DESC) AS rn
+        FROM turn_read
+        WHERE session IN (${ph}) AND workspace IS NOT NULL AND workspace <> ''
+      ) WHERE rn = 1
+    `).all(...keys) as Array<Record<string, unknown>>
+    for (const r of wsRows) workspaces.set(String(r.session), String(r.workspace))
 
     // 会话名候选：每会话取前几条候选（SQL 侧已按「去空白非空 ∧ 不以 < 开头」预筛，但 SQLite 的 trim
     // 只认 ASCII 空白，故多取几条交给 nexus 的权威判据逐条判——「前导 Unicode 空白 + 尖括号块」这类
@@ -1167,21 +1252,22 @@ export class NautilusStore {
       else list.push(String(r.question))
     }
 
-    // 计数只数**已附着到该会话轮次**的行（= 详情逐轮渲染的同一集合；summary 与详情不许各说一套）。
+    // 计数只数**已附着到该会话轮次**的行，轮次集合 = AL.6e 并集（= 详情逐轮渲染的同一集合；
+    // summary 与详情不许各说一套）——原文在、读数缺的轮次也能被标、也在详情里，故计数必须认它。
     const human = this.countBySession(`
       SELECT ta.session AS session, COUNT(*) AS n FROM turn_annotation ta
-        JOIN turn_read tr ON tr.session = ta.session AND tr.turn = ta.turn
+        JOIN (${TURN_UNION_SQL}) u ON u.session = ta.session AND u.turn = ta.turn
       WHERE ta.session IN (${ph}) AND ta.schema_version >= 2 AND (ta.align IS NOT NULL OR ta.exempt = 1)
       GROUP BY ta.session`, keys)
     const legacy = this.countBySession(`
       SELECT ta.session AS session, COUNT(*) AS n FROM turn_annotation ta
-        JOIN turn_read tr ON tr.session = ta.session AND tr.turn = ta.turn
+        JOIN (${TURN_UNION_SQL}) u ON u.session = ta.session AND u.turn = ta.turn
       WHERE ta.session IN (${ph}) AND ta.schema_version = 1
       GROUP BY ta.session`, keys)
     // 自评：通道(dsh_tool) + align 非空 + 当期 rubric 三件套与 /m2/alignments 同一判据（dsh_tool 下 ext_ref = 会话 id）
     const self = this.countBySession(`
       SELECT sc.ext_ref AS session, COUNT(*) AS n FROM selfcheck_record sc
-        JOIN turn_read tr ON tr.session = sc.ext_ref AND tr.turn = sc.turn_ordinal
+        JOIN (${TURN_UNION_SQL}) u ON u.session = sc.ext_ref AND u.turn = sc.turn_ordinal
       WHERE sc.ext_ref IN (${ph}) AND sc.source_kind = 'dsh_tool' AND sc.align IS NOT NULL AND sc.rubric_version = ?
       GROUP BY sc.ext_ref`, keys, [rubricVersion])
 
@@ -1189,7 +1275,8 @@ export class NautilusStore {
       const session = String(r.session)
       return {
         session,
-        workspace: roots.get(session) ?? '',
+        workspace: workspaces.get(session) ?? '',
+        sessionRoot: roots.get(session) ?? '',
         turns: Number(r.turns ?? 0),
         firstTs: Number(r.first_ts ?? 0),
         lastTs: Number(r.last_ts ?? 0),
@@ -1218,18 +1305,33 @@ export class NautilusStore {
 
 
 /**
- * AL.5s 会话聚合列（列表与详情**共用同一段 SQL**——两处数字不许各算一套）。
- * 分页排序键 `last_ts` 与二级键 `session` 在调用方（见 listSessionAggregates）。
+ * AL.6e 轮次并集（读数 ∪ 原文）：`(session, turn)` 去重，`ts` 取读数时刻，无读数则取原文落库时刻。
+ * 只取 `session/turn/ts` 三列——读数列一律回 turn_read 取（并集不搬运读数，避免第二份事实源）。
  */
-const SESSION_AGG_COLUMNS = `
-  session,
-  COUNT(*) AS turns,
-  MIN(ts) AS first_ts,
-  MAX(ts) AS last_ts,
-  COALESCE(SUM(token_in), 0) AS tin,
-  COALESCE(SUM(token_out), 0) AS tout,
-  COALESCE(SUM(cache_read), 0) AS cr,
-  COALESCE(SUM(duration_ms), 0) AS dur
+const TURN_UNION_SQL = `
+  SELECT session, turn, ts FROM turn_read
+  UNION ALL
+  SELECT tt.session, tt.turn, tt.updated_at FROM turn_text tt
+    WHERE NOT EXISTS (SELECT 1 FROM turn_read tr WHERE tr.session = tt.session AND tr.turn = tt.turn)
+`
+
+/**
+ * AL.5s/AL.6e 会话聚合（列表与详情**共用同一段 SQL**——两处数字不许各算一套）。
+ * `turns` = **并集轮数**（有读数 或 有原文）；`first_ts`/`last_ts` 也按并集取（无读数轮次用原文时刻）。
+ * token/时长合计只累加**有读数**的轮次（无读数轮贡献 0——它们本来就没有读数，不是 0 读数）。
+ * 分页排序键 `last_ts` 与二级键 `u.session` 在调用方（见 listSessionAggregates）。
+ */
+const SESSION_AGG_SELECT = `
+  SELECT u.session AS session,
+         COUNT(*) AS turns,
+         MIN(u.ts) AS first_ts,
+         MAX(u.ts) AS last_ts,
+         COALESCE(SUM(tr.token_in), 0) AS tin,
+         COALESCE(SUM(tr.token_out), 0) AS tout,
+         COALESCE(SUM(tr.cache_read), 0) AS cr,
+         COALESCE(SUM(tr.duration_ms), 0) AS dur
+  FROM (${TURN_UNION_SQL}) u
+  LEFT JOIN turn_read tr ON tr.session = u.session AND tr.turn = u.turn
 `
 
 /**

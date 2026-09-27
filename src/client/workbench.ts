@@ -268,8 +268,8 @@ export const fmtDayTime = (ts: number | null | undefined): string => {
   return String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0') + ' ' + String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0')
 }
 export const fmtNum = (n: number | null | undefined, d = 2): string => n === null || n === undefined || !Number.isFinite(n) ? '—' : n.toFixed(d)
-/** 令牌数 → k/M 缩写（累计输入/排行条的紧凑刻度）。 */
-export const fmtK = (n: number): string => {
+/** 令牌数 → k/M 缩写（累计输入/排行条的紧凑刻度）；null/缺失 → 「—」（AL.6e 并集轮次可能无读数）。 */
+export const fmtK = (n: number | null | undefined): string => {
   if (!Number.isFinite(n)) return '—'
   if (n >= 1e6) return (n / 1e6).toFixed(1) + 'M'
   if (n >= 1e3) return (n / 1e3).toFixed(1) + 'k'
@@ -1645,8 +1645,11 @@ export type SessionTurnHuman = {
   quote: string | null; note: string | null; origin: string; schemaVersion: number; annotatedAt: number
 }
 export type SessionTurn = {
-  turn: number; ts: number; question: string | null
-  tokenIn: number; tokenOut: number; cacheRead: number
+  turn: number
+  /** AL.6e 并集轮次：无读数的轮次 ts 取原文落库时刻；两者皆缺 → null（渲染成「—」）。 */
+  ts: number | null; question: string | null
+  /** AL.6e：无读数的轮次为 null（**不是 0**）——只类型放宽，渲染逻辑不变（null → 「—」）。 */
+  tokenIn: number | null; tokenOut: number | null; cacheRead: number | null
   durationMs: number | null; tps: number | null
   /** 有原文才可打分（服务端「无原文即拒」的门）。 */
   hasText: boolean

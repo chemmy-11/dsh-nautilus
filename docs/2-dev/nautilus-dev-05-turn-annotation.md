@@ -92,11 +92,12 @@ CREATE TABLE IF NOT EXISTS annotation_sample (        -- 抽样队列（一行�
 - 契约**冻结**（UI 线按同一份写视图；只加字段，不改既有字段名/类型）。
 - `label` 派生是**服务端单点**（`src/nexus/sessions.ts`，UI 不再自己拼）：
   `label = workspaceName + " · " + sessionName`；
-  `workspaceName` = `session_root` 里该会话工作区路径的 basename（**无记录/未归属 → 「未知工作区」**）；
+  `workspaceName` = **会话工作区**路径的 basename；会话工作区 = `turn_read` 最后一个非空 `workspace`
+  （AL.6e 起逐轮落库）→ 回落 `session_root.root` → 再缺「未知工作区」（三级回落见 §8；**历史会话仍是未知工作区**）；
   `sessionName` = 该会话**第一条不以 `<` 开头且去空白非空**的 question 的**首行前 24 字**，
   无 → **session id 短形（末 8 位）**。真库实测（2026-09-27 字节快照副本）：65 条 `turn_read` 里 8 条 question
   以 `<system-reminder>` 块开头——不跳过就会得到「<system-reminder>」这种伪会话名；**不存在的真会话名不编**。
-- 口径：主干 `turn_read`（轮次读数）；`turn_text` 只用于 `hasText` 在场判定，**原文一律不返回**
+- 口径（**AL.6e 更新**：轮次集合 = `turn_read` ∪ `turn_text`，见 §8）：读数列来自 `turn_read`；`turn_text` 另用于 `hasText` 在场判定与并集轮次，**原文一律不返回**（无读数的轮次指标为 null，不写 0）
   （question 截断 200 字）；`totals.tpsAvg` = 总输出 / 总时长（与 `turn_read` 行内同式，不是逐轮 tps 的算术平均）；
   标注计数只数**已附着到该会话轮次**的行（= 详情逐轮渲染的同一集合），`human` 只出 `schema_version≥2`
   （有分 + 豁免），旧尺行（=1）只进 `annotated.legacyFit`，`self` 只认 `dsh_tool × align 非空 × rubric_version=al-v1`。
@@ -109,3 +110,62 @@ CREATE TABLE IF NOT EXISTS annotation_sample (        -- 抽样队列（一行�
   不拼路径、不拼 SQL，路径穿越类输入只是「查不到的键」）。
 - 分页严格（不夹取、不猜默认）：`limit ∈ [1,200]` 缺省 50、`offset ≥ 0` 缺省 0；在场但非法 → 400
   （静默夹取会让 UI 以为「已经拿到全部会话」）。
+
+## 8. AL.6e 工作区归属落库（v10）与会话清单并集（`turn_read` ∪ `turn_text`）
+
+两条改动均由守谷人批准（2026-09-28），动机是**两处「数据其实在手上却看不到」**：
+
+1. **工作区归属没落库**：AL.4a 撤除「工作区指向」后 `session_root.root` 全为空串（历史值也如此），
+   于是 `/m2/sessions` 的 label 前段**全是**「未知工作区」；而官方 `session/header.cwd` 早就随事件在手
+   （`TurnsCollector.handle(sessionId, ev, cwd)` 的第三参），只是从没写进库。
+2. **「有原文但无读数」的轮次看不见**：清单/详情的主干只取 `turn_read`，而这类轮次**原文门满足（本来就能打分）**，
+   却在清单里数不到、在详情里看不到——真库（2026-09-28 字节快照副本）实测 4 条：
+   `session-08665854` 的 turn 10/30/31 与 `session-ddda7022` 的 turn 2。
+
+### 8.1 v10 迁移：`turn_read` 加**可空**列 `workspace`（只加不改）
+
+```sql
+ALTER TABLE turn_read ADD COLUMN workspace TEXT;   -- 迁移账本顺序号 10（migrations.ts 注册 + 回读校验）
+```
+
+- **幂等**：列已在 → 零变更；`turn_read` 缺席（手工置版 / 半迁移的库）→ 跳过并 `console.warn`（同 v8/v9 防御写法）。
+- **绝不回填、绝不改既有列、绝不改既有行**（红线 3）——历史行 `workspace` 恒 NULL。
+- 采集写：`upsertTurnRead({ …, workspace: cwd })`——**仅非空才写**（空串归一为 NULL），冲突分支走
+  `workspace = COALESCE(excluded.workspace, workspace)`：空值**不覆盖**已有值（前向积累，只增不改）。
+
+### 8.2 读侧三级回落（单点 = `src/nexus/sessions.ts` 的 `resolveWorkspace`）
+
+① `turn_read` 该会话**最后一个非空** `workspace`（同一会话中途换目录 → 取最近一次真实落点；脏空串跳过）
+→ ② 该会话历史归属 `session_root.root`（AL.4a 后不再新增，只作兜底）→ ③ 空串 → 显示名走 `workspaceNameOf` = basename
+（Windows/POSIX 分隔符都认、尾斜杠忽略；空 → 「未知工作区」）。契约字段 `workspace` 给出**已解析的原始路径**。
+
+### 8.3 会话清单 / 详情的轮次集合 = 并集
+
+| 项 | 口径（AL.6e） |
+|---|---|
+| 轮次集合 | `turn_read` ∪ `turn_text`，同 `(session, turn)` 去重、按 `turn` 升序 |
+| 会话存在判据 | 并集里至少有一轮（两条腿都没有的 id → 404，不假装存在） |
+| `turns` | **并集轮数**（不再是「有读数的轮数」） |
+| `firstTs`/`lastTs` | 按并集取：无读数轮用 `turn_text.updated_at` |
+| 只有原文的轮次 | `ts = turn_text.updated_at`；`tokenIn`/`tokenOut`/`cacheRead`/`durationMs`/`tps` **一律 null**（**不写 0**——0 是真实读数，拿它冒充「没测到」就是造假）；`hasText = true` |
+| `totals` | **仍只累加有读数的轮次**（无读数轮贡献 0，它们本就没有读数） |
+| `annotated` 三计数 | 按**并集轮次**附着判定（详情里渲染得出来的轮次，计数就必须认——summary 与详情不许各说一套） |
+| 契约纪律 | **只加不改**：字段名与单位一字不动，只是这些数值字段现在可能为 `null`（UI 侧按「null → —」渲染，未改渲染逻辑） |
+| 原文门 | **不放宽**：`hasText=false` 照旧 400 `no-turn-text` 零写入；并集只是把「有原文」的轮次显示出来 |
+
+### 8.4 诚实边界（随读数一起引用）
+
+1. **历史会话仍显「未知工作区」——设计而非缺陷**：v10 只前向落库、绝不回填；真库字节快照副本实测（2026-09-28）：
+   18 个会话、`workspaceName ≠ 未知工作区` 的条数 = **0**（这是预期：修复只对**此后新增**的轮次生效）。
+2. **两个分母不是一回事**：`/m2/state` 的 `totals.turns` 仍是**读数口径**（实测 99），`/m2/sessions` 的 `turns` 是**并集口径**
+   （实测合计 103 = 99 读数 + 4 只有原文）。刻意的：state 是读数台，sessions 是打分面——引用时不许互相换算。
+3. 只有原文的轮次 `question = null`（question 只有读数腿有；**不拿原文首行充数**），故这类轮次的会话名候选仍只看读数腿。
+4. 目标会话实测：`session-08665854-…` 读数轮 55 + 只有原文 3 = **并集 58** 轮（`turn 10/30/31` 指标全 null、`hasText=true`）。
+
+### 8.5 测试（`scripts/test-al.mjs`，真 `ctx.plugin` 装配）
+
+- v10：老库（v9 手写 `turn_read`）→ 加列后**既有行逐列未变 + workspace 恒 NULL**、列数只多 1、可空、重开幂等；新库直达 v10 且列在位。
+- 采集：非空 `cwd` 落库；空串 `cwd` **不覆盖**已有值；缺参 → NULL（不是空串）。
+- 三级回落：`turn_read` 最后一个非空（含跳过脏空串）→ `session_root.root` → 「未知工作区」。
+- 并集：构造「有原文、无读数」轮次 → 出现在清单与详情；指标 `=== null`（不是 0）；`hasText=true`；**且 POST 打分 200 落行**（本次改动的目的），
+  计数同步（`annotated.human` 认并集轮次）；无原文的轮次照旧 400 `no-turn-text`。

@@ -10,7 +10,8 @@
  *
  * 派生规则（守谷人冻结契约，逐字实现）：
  *   label = workspaceName + ' · ' + sessionName
- *   · workspaceName = session_root 里该会话工作区路径的 basename；无记录 → 「未知工作区」
+ *   · workspaceName = **会话工作区**的 basename；会话工作区 = turn_read 最后一个非空 workspace（AL.6e）
+ *                     → 回落 session_root.root → 再缺「未知工作区」（三级回落见 resolveWorkspace）
  *   · sessionName   = 该会话**第一条不以 '<' 开头且去空白非空**的 question 的**首行前 24 字**；
  *                     无 → session id 短形（末 8 位）。**不存在的真会话名不要编**。
  *
@@ -40,6 +41,23 @@ export const QUESTION_PREVIEW_MAX = 200
 export function truncateChars(text: string, max: number): string {
   const points = Array.from(text)
   return points.length <= max ? text : points.slice(0, max).join('')
+}
+
+/**
+ * AL.6e 会话工作区解析（**服务端单点**，三级回落）：
+ *   ① `turn_read` 里该会话**最后一个非空** `workspace`（官方 `session/header.cwd`，v10 起逐轮落库）——
+ *      「最后一个」= 轮次最大的那行；同一会话中途换目录时，取最近一次的真实落点，不猜、不合并；
+ *   ② 缺（含全部历史行——v10 只前向落库，**绝不回填**）→ 该会话的历史归属 `session_root.root`（AL.4a 后不再新增）；
+ *   ③ 再缺 → `''`（显示口径由 `workspaceNameOf` 统一成「未知工作区」）。
+ * 返回**原始路径**（不做 basename——显示名走 `workspaceNameOf`）。
+ *
+ * 诚实边界：历史会话两级都缺 → 仍显「未知工作区」，这是**设计而非缺陷**（数据当时就没落库，回头补是编造）。
+ */
+export function resolveWorkspace(workspace: string | null | undefined, sessionRoot: string | null | undefined): string {
+  const turnWs = typeof workspace === 'string' ? workspace : ''
+  if (turnWs.trim() !== '') return turnWs
+  const root = typeof sessionRoot === 'string' ? sessionRoot : ''
+  return root.trim() !== '' ? root : ''
 }
 
 /** 工作区路径 basename（Windows/POSIX 分隔符都认；尾部斜杠忽略）；空/无 → 「未知工作区」。 */

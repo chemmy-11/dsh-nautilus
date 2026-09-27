@@ -3,6 +3,9 @@
  *
  * 内容：
  *  · AL.6 边界守卫：`src/nexus/**` 自包含、只在 src/nexus 下、两腿互不 import（决策 §7.2）。
+ *  · AL.6e 工作区归属落库（v10）+ 会话清单并集：v10 加可空 workspace 列（不回填/不动既有列）·
+ *    采集写 cwd（非空才写、空值不覆盖）· 工作区三级回落（turn_read → session_root → 未知工作区）·
+ *    轮次集合 = turn_read ∪ turn_text（只有原文的轮次出现在清单/详情，指标 null 而非 0，且可打分）。
  *  · AL.2 迁移账本与 v8 迁移：按序应用 / 跳号如实记录 / 幂等 / 旧契合行一个不丢 / 1–5 与边界 CHECK。
  *  · AL.3 自评通道换 al-v1 对齐量表：工具面 = rubric 注入面 / 硬门零写入 / 双形 ingest / 覆盖语义。
  *  · AL.4a 收敛守卫：假设/预言/工作区指向零残留（源码级）+ 抽样生成器不再查已删的 store.lfieldRoot。
@@ -34,6 +37,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 import { runMigrations, readUserVersion } from '../lib/migrations.js'
 import { openStore } from '../lib/store.js'
 import { processSelfCheck, buildSelfCheckTool } from '../lib/nexus/selfcheck.js'
+import { TurnsCollector } from '../lib/nexus/turns.js'
 import { ingestSelfCheck, QUOTE_MAX, EVIDENCE_MAX, RUBRIC_VERSION } from '../lib/nexus/selfcheck-ingest.js'
 import { MIN_PAIRS } from '../lib/nexus/consistency.js'
 
@@ -67,21 +71,30 @@ test('AL.6 边界守卫：nexus 模块自包含、只在 src/nexus 下、两腿�
 
 // ── AL.2 迁移账本 ────────────────────────────────────────────────────────────
 
-test('AL.2 迁移账本：新库按序到 v8、跳号（v1/v4）如实记录、重开幂等、重复版本号响亮失败', () => {
+test('AL.2 迁移账本：新库按序到 v10、跳号（v1/v4）如实记录、重开幂等、重复版本号响亮失败', () => {
   const tmp = tmpDir('nautilus-mig-')
   try {
     const file = join(tmp, 'n.db')
     const s1 = openStore(file)
-    assert.equal(s1.schemaVersion(), 9)
+    assert.equal(s1.schemaVersion(), 10, 'AL.6e：新库直达 v10（v9 → v10 只加 turn_read.workspace 可空列）')
     const run1 = s1.migrationLog()
-    assert.deepEqual(run1.applied.map((m) => m.version), [2, 3, 5, 6, 7, 8, 9], '按版本升序应用本腿注册的迁移')
+    assert.deepEqual(run1.applied.map((m) => m.version), [2, 3, 5, 6, 7, 8, 9, 10], '按版本升序应用本腿注册的迁移')
     assert.deepEqual(run1.skipped, [1, 4], '跳号如实记录（v1 已废弃 / v4 属 pulse，不假装连续）')
     assert.ok(run1.applied.every((m) => m.owner === 'nautilus'), '本腿注册的迁移 owner 均为 nautilus（长度不写死，随版本自然增长）')
     s1.close()
     const s2 = openStore(file)
     assert.deepEqual(s2.migrationLog().applied, [], '重开不再应用任何迁移（幂等）')
-    assert.equal(s2.schemaVersion(), 9, '不回退')
+    assert.equal(s2.schemaVersion(), 10, '不回退')
     s2.close()
+
+    // AL.6e：新库的 turn_read 必须**已经有** workspace 列（v10 迁移体在构造期就跑过）
+    {
+      const raw = new DatabaseSync(file)
+      const ws = raw.prepare('PRAGMA table_info(turn_read)').all().find((c) => c.name === 'workspace')
+      assert.ok(ws !== undefined, '新库 turn_read 缺 workspace 列——v10 没跑或被跳过')
+      assert.equal(ws.notnull, 0, 'workspace 必须是可空列（历史行恒 NULL，不回填）')
+      raw.close()
+    }
     // 账本自身的守卫：重复版本号 = 装配错误（后一条永远不会被应用）
     const db = new DatabaseSync(join(tmp, 'ledger.db'))
     assert.throws(() => runMigrations({
@@ -94,6 +107,60 @@ test('AL.2 迁移账本：新库按序到 v8、跳号（v1/v4）如实记录、�
     // apply 不推进版本号 → 响亮失败（静默跳步是最难查的事故）
     assert.throws(() => runMigrations({ db, log: () => {}, list: [{ version: 9, owner: 'x', name: 'noop', apply: () => {} }] }), /与声明不符/)
     db.close()
+  } finally { cleanup(tmp) }
+})
+
+// ── AL.6e v10 迁移：turn_read 加可空 workspace 列（前向积累，绝不回填）─────────────
+
+/** v9 时代的 turn_read（无 workspace 列）——老库快照用；既有行逐列都由断言钉死。 */
+const V9_TURN_READ = `
+  CREATE TABLE turn_read (
+    session TEXT NOT NULL, turn INTEGER NOT NULL, ts INTEGER NOT NULL, question TEXT,
+    token_in INTEGER NOT NULL DEFAULT 0, token_out INTEGER NOT NULL DEFAULT 0,
+    cache_read INTEGER NOT NULL DEFAULT 0, duration_ms INTEGER, tps REAL,
+    clarity REAL, defense TEXT, declaration INTEGER,
+    PRIMARY KEY (session, turn)
+  );`
+
+test('AL.6e v10 迁移：老库加可空 workspace 列；既有行不回填、既有列逐列未变；重开幂等', () => {
+  const tmp = tmpDir('nautilus-v10-')
+  try {
+    const file = join(tmp, 'n.db')
+    {
+      const raw = new DatabaseSync(file)
+      raw.exec(V9_TURN_READ)
+      raw.exec(`
+        INSERT INTO turn_read (session, turn, ts, question, token_in, token_out, cache_read, duration_ms, tps)
+        VALUES ('s-old', 1, 100, '历史轮', 7, 3, 11, 500, 6.0),
+               ('s-old', 2, 200, NULL, 0, 0, 0, NULL, NULL);
+        PRAGMA user_version = 9;
+      `)
+      raw.close()
+    }
+    const s = openStore(file)
+    assert.equal(s.schemaVersion(), 10, 'v9 → v10')
+    assert.deepEqual(s.migrationLog().applied.map((m) => m.version), [10], '只应用没跑过的那一条')
+    const raw = new DatabaseSync(file)
+    const cols = raw.prepare('PRAGMA table_info(turn_read)').all()
+    const ws = cols.find((c) => c.name === 'workspace')
+    assert.ok(ws !== undefined, 'workspace 列必须在位')
+    assert.equal(ws.type, 'TEXT'); assert.equal(ws.notnull, 0, '必须可空（历史行只能是 NULL）')
+    assert.equal(cols.length, 13, '只加一列——既有列一个不多、一个不少')
+    // 既有行逐列未变 + workspace 全 NULL（**不回填**：数据当时就没落库，回头补就是编造）
+    const rows = raw.prepare('SELECT * FROM turn_read ORDER BY turn ASC').all()
+    assert.deepEqual(rows.map((r) => [r.session, r.turn, r.ts, r.question, r.token_in, r.token_out, r.cache_read, r.duration_ms, r.tps, r.workspace]), [
+      ['s-old', 1, 100, '历史轮', 7, 3, 11, 500, 6.0, null],
+      ['s-old', 2, 200, null, 0, 0, 0, null, null, null],
+    ], '既有列逐列未变，workspace 恒 NULL')
+    raw.close()
+    s.close()
+    // 重开幂等：列已在 → 迁移体零变更、版本不回退
+    const s2 = openStore(file)
+    assert.deepEqual(s2.migrationLog().applied, [], '重开不再应用任何迁移（幂等：列已在即跳过）')
+    assert.equal(s2.schemaVersion(), 10)
+    s2.close()
+    // 迁移体的「turn_read 缺席 → 跳过并告警」分支与 v8/v9 同款；经 openStore 时该表由构造期 DDL 兜底创建，
+    // 故这条分支只在手工置版 / 半迁移的库上生效（防御写法，不做假场景去命中它）。
   } finally { cleanup(tmp) }
 })
 
@@ -131,7 +198,7 @@ test('AL.2 v8 重建：旧 0–4 契合行一个不丢（schema_version=1 / alig
       raw.close()
     }
     const s = openStore(file)
-    assert.equal(s.schemaVersion(), 9, 'v7 → v8')
+    assert.equal(s.schemaVersion(), 10, 'v7 → 最新（v8 重建 → v9 重建 → v10 加列，连续应用）')
     const rows = s.listTurnAlignments()
     assert.equal(rows.length, 3, '旧行一个不丢')
     const r1 = rows.find((r) => r.session === 's-a' && r.turn === 1)
@@ -1470,6 +1537,8 @@ function seedSessions(s, file) {
     // 旧代际（fit 0–4，schema_version=1）人工行：只许进 annotated.legacyFit，不进 human、不在详情出场
     raw.prepare('INSERT INTO turn_annotation (session, turn, fit, exempt, quote, note, origin, boundary, schema_version, annotated_at, updated_at) VALUES (?, ?, ?, 0, NULL, ?, ?, ?, 1, 1, 1)')
       .run(SESS_A, 1, 3, '旧尺子', 'spot', 'none')
+    raw.prepare('INSERT INTO turn_text (session, turn, user_text, assistant_text, updated_at) VALUES (?, ?, ?, ?, ?)')
+      .run(SESS_TEXT_ONLY, 1, USER_SENTINEL + '（无读数的轮次）', '', 9500)
   } finally { raw.close() }
 
   // sess-a：1 尖括号开头（旧尺行）· 2 真会话名来源（多行 + 24 字截断）· 3 **无原文** · 4 有原文（豁免行）· 5 有原文（未标注）
@@ -1494,8 +1563,8 @@ function seedSessions(s, file) {
   // sess-d / sess-noq
   s.upsertTurnRead({ session: SESS_D, turn: 1, ts: 8000, question: 'D 会话', tokenIn: 1, tokenOut: 1, cacheRead: 0, durationMs: 100 })
   s.upsertTurnRead({ session: SESS_NOQ, turn: 1, ts: 9000, question: null, tokenIn: 1, tokenOut: 1, cacheRead: 0, durationMs: 100 })
-  // sess-text-only：只有原文、没有读数 → 不该出现在清单里（turn_read 是主干）
-  s.upsertUserText(SESS_TEXT_ONLY, 1, USER_SENTINEL + '（无读数的轮次）')
+  // sess-text-only：只有原文、没有读数 → AL.6e 起**必须**出现在清单里（并集口径）。
+  // 直接 INSERT 钉死 updated_at（upsertUserText 用 Date.now()）：并集读侧的 ts 就该等于它，且排序可断言。
 
   // 人工标注（新量表）：turn 2 有分（4 必附引文）· turn 4 豁免（N/A）· turn 1 旧尺行已在上面直插
   s.upsertTurnAlignment({ session: SESS_A, turn: 2, align: 4, exempt: 0, boundary: 'none', quote: '「引文」', note: null, origin: 'spot' })
@@ -1516,6 +1585,163 @@ function seedSessions(s, file) {
   ingestSelfCheck(s, { sourceKind: 'dsh_tool', agent: SESS_A, extRef: SESS_A, turnOrdinal: 1, clarity: 0.5, defense: 'none', declaration: 0 })
   ingestSelfCheck(s, { sourceKind: 'dsh_tool', agent: SESS_A, extRef: SESS_A, turnOrdinal: 99, align: 5, quote: '「无读数轮的自评」', declaration: 0 })
 }
+
+// ── AL.6e 工作区归属落库（v10 前向积累）+ 会话清单并集（turn_read ∪ turn_text）──────────
+// 两条改动的实测动机（活库字节快照副本）：① session_root.root 全为空串 → label 前段全是「未知工作区」，
+// 而官方 session/header.cwd 其实一直在手上（TurnsCollector.handle 第三参），只是没落库；
+// ② session-08665854 的 turn 10/30/31 **有原文但无读数**——原文门满足（能打分）却在清单/详情里看不见。
+
+test('AL.6e 采集写 workspace：非空 cwd 落进 turn_read.workspace；空 cwd / 缺参不覆盖已有值，也不写空串', () => {
+  const tmp = tmpDir('nautilus-ws-')
+  try {
+    const file = join(tmp, 'n.db')
+    const store = openStore(file)
+    const collector = new TurnsCollector(store)
+    const usage = { inputTokens: 10, outputTokens: 5, cacheReadTokens: 1 }
+    // turn 1：带非空 cwd（官方 session/header.cwd 的形状）→ 必须落库
+    collector.handle('s-ws', { type: 'turn/start', time: 100, data: { turn: 1 } }, 'L:\\proj\\alpha')
+    collector.handle('s-ws', { type: 'assistant/message', time: 200, data: { turn: 1, step: 1, usage } }, 'L:\\proj\\alpha')
+    // 同一轮第二个 step 带**空串** cwd → 不得覆盖已落的值（空串语义 = 「没有」，不是「改成空」）
+    collector.handle('s-ws', { type: 'assistant/message', time: 300, data: { turn: 1, step: 2, usage } }, '')
+    // turn 2：**缺 cwd 参数**（宿主没给 header.cwd）→ 该轮 workspace 为 NULL（不是空串）
+    collector.handle('s-ws', { type: 'turn/start', time: 400, data: { turn: 2 } })
+    collector.handle('s-ws', { type: 'assistant/message', time: 500, data: { turn: 2, step: 1, usage } })
+    const raw = new DatabaseSync(file)
+    const rows = raw.prepare('SELECT turn, workspace FROM turn_read WHERE session = ? ORDER BY turn ASC').all('s-ws')
+    raw.close()
+    assert.deepEqual(rows.map((r) => [Number(r.turn), r.workspace]), [[1, 'L:\\proj\\alpha'], [2, null]], '非空 cwd 落库、缺 cwd 落 NULL')
+    // 读侧：会话工作区 = 最后一个非空 workspace（本轮唯一那条）
+    assert.equal(store.sessionAggregate('s-ws', RUBRIC_VERSION).workspace, 'L:\\proj\\alpha')
+    store.close()
+  } finally { cleanup(tmp) }
+})
+
+/** AL.6e fixture：并集轮次 + 工作区三级回落的四类会话（各自的**末 8 位**互不相同）。 */
+const SESS_UNION = 'session-7777aaaa-2222-3333-4444-555566667777'
+const SESS_WS = 'session-8888bbbb-2222-3333-4444-555566668888'
+const SESS_ROOTONLY = 'session-9999cccc-2222-3333-4444-555566669999'
+const SESS_NOWS = 'session-aaaa5555-2222-3333-4444-555566665555'
+
+/**
+ * 落库姿势说明：`upsertUserText` 用 Date.now() 写 updated_at，断言不了确切 ts——故「只有原文」的轮次
+ * 直接 INSERT 进 turn_text 并钉死 updated_at（并集读侧的 `ts` 就该等于它）。
+ */
+function seedAl6e(s, file) {
+  const raw = new DatabaseSync(file)
+  try {
+    // ② 只有历史归属、没有任何 workspace 读数 → 必须回落到 session_root.root
+    raw.prepare('INSERT OR REPLACE INTO session_root (session, root, first_ts) VALUES (?, ?, ?)').run(SESS_ROOTONLY, 'D:\\work\\legacy-root', 100)
+  } finally { raw.close() }
+  // ① 并集：turn 1 有读数 + 有原文 · turn 2 **只有原文**（本次改动的目的）· turn 3 有读数无原文
+  s.upsertTurnRead({ session: SESS_UNION, turn: 1, ts: 1000, question: '第一轮有读数', tokenIn: 10, tokenOut: 5, cacheRead: 1, durationMs: 1000 })
+  s.upsertTurnRead({ session: SESS_UNION, turn: 3, ts: 3000, question: '第三轮有读数无原文', tokenIn: 30, tokenOut: 15, cacheRead: 3, durationMs: 3000 })
+  s.upsertUserText(SESS_UNION, 1, '第一轮原文')
+  {
+    const db = new DatabaseSync(file)
+    try {
+      // turn 2：只有原文、无读数（并集后必须出场，读数全 null）
+      db.prepare('INSERT INTO turn_text (session, turn, user_text, assistant_text, updated_at) VALUES (?, ?, ?, ?, ?)').run(SESS_UNION, 2, '第二轮只有原文', '答', 2500)
+      // turn 4：只有原文、updated_at 无从断言也无妨（证明并集按 turn 排序去重）
+      db.prepare('INSERT INTO turn_text (session, turn, user_text, assistant_text, updated_at) VALUES (?, ?, ?, ?, ?)').run(SESS_UNION, 4, '第四轮只有原文', '答', 4000)
+    } finally { db.close() }
+  }
+  // ③ 工作区取「最后一个非空」：turn 1 一个路径、turn 2 另一个 → 取 turn 2；turn 3 直插空串（脏值）→ 必须跳过它
+  s.upsertTurnRead({ session: SESS_WS, turn: 1, ts: 5000, question: 'W1', tokenIn: 1, tokenOut: 1, cacheRead: 0, durationMs: 100, workspace: 'C:\\one\\alpha' })
+  s.upsertTurnRead({ session: SESS_WS, turn: 2, ts: 5001, question: 'W2', tokenIn: 1, tokenOut: 1, cacheRead: 0, durationMs: 100, workspace: 'L:\\two\\beta\\' })
+  {
+    const db = new DatabaseSync(file)
+    try {
+      // 直插空串（脏值 / 早期外部写入）：读侧必须把它当「没有」，继续往前找 turn 2 的真实路径
+      db.prepare('INSERT INTO turn_read (session, turn, ts, question, token_in, token_out, cache_read, duration_ms, tps, workspace) VALUES (?, ?, ?, ?, 1, 1, 0, 100, 10.0, ?)')
+        .run(SESS_WS, 3, 5002, 'W3', '')
+    } finally { db.close() }
+  }
+  // ④ 无 workspace、无归属 → 未知工作区
+  s.upsertTurnRead({ session: SESS_NOWS, turn: 1, ts: 6000, question: 'N1', tokenIn: 1, tokenOut: 1, cacheRead: 0, durationMs: 100 })
+  s.upsertTurnRead({ session: SESS_ROOTONLY, turn: 1, ts: 7000, question: 'R1', tokenIn: 1, tokenOut: 1, cacheRead: 0, durationMs: 100 })
+}
+
+test('AL.6e 工作区三级回落：turn_read 最后一个非空 workspace → session_root.root → 未知工作区', async () => {
+  const m = await mountSessionRoutes(seedAl6e)
+  try {
+    const g = await m.list()
+    assert.equal(g.statusCode, 200)
+    const byId = new Map(g.body.sessions.map((r) => [r.session, r]))
+    // ① 有 workspace 读数 → 取**最后一个非空**（turn 2 的路径），并忽略更高轮的脏空串（turn 3）
+    const ws = byId.get(SESS_WS)
+    assert.equal(ws.workspace, 'L:\\two\\beta\\', 'workspace = 最后一个非空读数（原始值，不去尾斜杠）')
+    assert.equal(ws.workspaceName, 'beta', 'workspaceName = basename（尾斜杠忽略）；不是 turn 1 的 alpha')
+    // ② 无 workspace 读数 → 回落 session_root.root（AL.6e 只把 session_root 降级为**兜底**，不删不用）
+    const ro = byId.get(SESS_ROOTONLY)
+    assert.equal(ro.workspace, 'D:\\work\\legacy-root', '回落历史归属')
+    assert.equal(ro.workspaceName, 'legacy-root', 'Windows 路径 basename')
+    // ③ 两级都缺 → 「未知工作区」（文案仍由 nexus/sessions.ts 单点给）
+    const no = byId.get(SESS_NOWS)
+    assert.equal(no.workspace, '')
+    assert.equal(no.workspaceName, '未知工作区')
+    assert.ok(no.label.startsWith('未知工作区 · '), 'label 前段仍是未知工作区：' + no.label)
+    // 详情与列表同源同值（同一份装配）
+    const d = await m.detail(SESS_WS)
+    assert.equal(d.statusCode, 200)
+    assert.deepEqual(d.body.session, ws, '详情里的 session 与列表单条同形同值')
+  } finally { await m.close() }
+})
+
+test('AL.6e 并集：只有原文、没有读数的轮次出现在清单与详情；读数一律 null（不是 0）且可打分', async () => {
+  const m = await mountSessionRoutes(seedAl6e)
+  try {
+    // 前置（外部世界）：库里该会话只有 2 条读数，却必须出 4 个轮次——并集口径的硬证据
+    const raw = new DatabaseSync(m.file)
+    const readTurns = raw.prepare('SELECT turn FROM turn_read WHERE session = ? ORDER BY turn').all(SESS_UNION).map((r) => Number(r.turn))
+    const textTurns = raw.prepare('SELECT turn FROM turn_text WHERE session = ? ORDER BY turn').all(SESS_UNION).map((r) => Number(r.turn))
+    raw.close()
+    assert.deepEqual(readTurns, [1, 3], '读数腿只有 turn 1/3')
+    assert.deepEqual(textTurns, [1, 2, 4], '原文腿有 turn 1/2/4')
+
+    const g = await m.list()
+    const row = g.body.sessions.find((r) => r.session === SESS_UNION)
+    assert.equal(row.turns, 4, 'AL.6e：turns = **并集轮数**（读数 2 条 + 只在原文里的 2 轮），不再是「有读数的轮数」')
+    // totals 只累加有读数的轮次（turn 1 + turn 3）——无读数轮贡献 0，它们本就没有读数
+    assert.deepEqual({ ...row.totals }, { tokenIn: 40, tokenOut: 20, cacheRead: 4, durationMs: 4000, tpsAvg: 5 }, 'totals 仍只算读数腿')
+
+    const d = await m.detail(SESS_UNION)
+    assert.equal(d.statusCode, 200)
+    assert.deepEqual(d.body.turns.map((t) => t.turn), [1, 2, 3, 4], '并集按 turn 升序去重（turn 1 同时有读数与原文，只出一行）')
+    const byTurn = new Map(d.body.turns.map((t) => [t.turn, t]))
+    for (const t of d.body.turns) assert.deepEqual(Object.keys(t).sort(), SESSION_TURN_KEYS, '轮次契约形状不变（字段名/单位一字未动）')
+    // ② 只有原文的轮次（turn 2 / turn 4）：ts 取 turn_text.updated_at，读数**一律 null**（`=== null`，不是 0）
+    for (const turn of [2, 4]) {
+      const t = byTurn.get(turn)
+      assert.strictEqual(t.tokenIn, null, 'T' + turn + '：tokenIn 必须是 null（0 是真实读数，不能冒充缺失）')
+      assert.strictEqual(t.tokenOut, null, 'T' + turn + '：tokenOut 必须是 null')
+      assert.strictEqual(t.cacheRead, null, 'T' + turn + '：cacheRead 必须是 null')
+      assert.strictEqual(t.durationMs, null, 'T' + turn + '：durationMs 必须是 null')
+      assert.strictEqual(t.tps, null, 'T' + turn + '：tps 必须是 null')
+      assert.equal(t.hasText, true, 'T' + turn + '：有原文 → hasText=true')
+      assert.equal(typeof t.ts, 'number', 'T' + turn + '：ts 回落到 turn_text.updated_at')
+    }
+    assert.equal(byTurn.get(2).ts, 2500, 'T2 的 ts = turn_text.updated_at（2500）')
+    assert.equal(byTurn.get(4).ts, 4000, 'T4 的 ts = turn_text.updated_at（4000）')
+    assert.equal(byTurn.get(2).question, null, '只有原文的轮次没有 question 读数——不编（不拿原文首行充数）')
+    // 有读数的轮次逐字回归（单位与口径不变）
+    assert.deepEqual([byTurn.get(1).tokenIn, byTurn.get(1).tokenOut, byTurn.get(1).cacheRead, byTurn.get(1).durationMs, byTurn.get(1).tps], [10, 5, 1, 1000, 5])
+    assert.equal(byTurn.get(3).hasText, false, '无原文的轮次照旧 hasText=false（原文门不放宽）')
+
+    // ③ **本次改动的目的**：这轮能打分——原文门满足，POST 必须落行（改前它在清单里根本看不到）
+    const scored = await m.annotate({ session: SESS_UNION, turn: 2, align: 4, quote: '「只有原文也能打分的引文」' })
+    assert.equal(scored.statusCode, 200, '有原文的并集轮次必须可打分：' + JSON.stringify(scored.body))
+    assert.equal(scored.body.result, 'inserted')
+    // ④ 计数口径随之同步：标注附着到并集轮次上 → annotated.human 必须认它（详情里渲染得出来就必须计数）
+    const back = await m.detail(SESS_UNION)
+    assert.equal(back.body.session.annotated.human, 1, '标注落在只有原文的轮次上，summary 计数必须认（并集口径）')
+    assert.equal(back.body.turns.find((t) => t.turn === 2).human.align, 4, '详情逐轮回读同一行')
+    assert.equal(row.annotated.human, 0, '打分前该会话没有人工行（同一份计数在打分前为 0）')
+    // ⑤ 无原文的轮次照旧拒（门不放宽）：turn 3 有读数、无原文
+    const noText = await m.annotate({ session: SESS_UNION, turn: 3, align: 3 })
+    assert.equal(noText.statusCode, 400)
+    assert.equal(noText.body.error, 'no-turn-text')
+  } finally { await m.close() }
+})
 
 test('AL.5s 路由门与空库：同源 403 / 非 GET 405 / 空库 sessions=[] / 未知 id 404 / 路径安全不 500', async () => {
   const m = await mountSessionRoutes()
@@ -1571,7 +1797,8 @@ test('AL.5s label 派生（服务端单点）：跳过尖括号块 / 首行 24 �
     const g = await m.list()
     assert.equal(g.statusCode, 200)
     const rows = g.body.sessions
-    assert.deepEqual(rows.map((r) => r.session), [SESS_NOQ, SESS_D, SESS_C, SESS_B, SESS_A], '按 lastTs 倒序（最近的往期会话在前）')
+    // AL.6e 起 SESS_TEXT_ONLY（只有原文、updated_at=9500）也在清单里，且按 lastTs 倒序排在最前
+    assert.deepEqual(rows.map((r) => r.session), [SESS_TEXT_ONLY, SESS_NOQ, SESS_D, SESS_C, SESS_B, SESS_A], '按 lastTs 倒序（最近的往期会话在前）')
     for (const row of rows) {
       assert.deepEqual(Object.keys(row).sort(), SESSION_KEYS, '单条会话契约形状（冻结）')
       assert.deepEqual(Object.keys(row.totals).sort(), SESSION_TOTALS_KEYS, 'totals 形状')
@@ -1581,7 +1808,7 @@ test('AL.5s label 派生（服务端单点）：跳过尖括号块 / 首行 24 �
     const byId = new Map(rows.map((r) => [r.session, r]))
     // ① 真会话名：首条 question 是 <system-reminder> 块 → 跳过；第二条多行 → 取首行、截 24 字
     const a = byId.get(SESS_A)
-    assert.equal(a.workspace, 'L:\\proj\\nautilus-al', 'workspace = session_root 冻结原值')
+    assert.equal(a.workspace, 'L:\\proj\\nautilus-al', 'AL.6e：无 workspace 读数 → 回落 session_root 冻结原值（该会话三级回落的第②级）')
     assert.equal(a.workspaceName, 'nautilus-al', 'Windows 路径 basename')
     assert.equal(a.sessionName, '我准备对nexus层进行大改，你先和我对齐目标：')
     assert.equal([...a.sessionName].length, 24, '首行前 24 字（码点口径）')
@@ -1604,8 +1831,14 @@ test('AL.5s label 派生（服务端单点）：跳过尖括号块 / 首行 24 �
     // ⑤ 全程无 question（question 全 NULL）→ 回落短形
     assert.equal(byId.get(SESS_NOQ).sessionName, '6666eeee')
     assert.equal(byId.get(SESS_NOQ).label, '未知工作区 · 6666eeee')
-    // ⑥ 只有原文、没有读数的会话不出现在清单（turn_read 是主干）
-    assert.equal(byId.has(SESS_TEXT_ONLY), false, '没有读数的会话不假装存在')
+    // ⑥ AL.6e 口径变更：只有原文、没有读数的会话**现在要出现**——轮次集合是 turn_read ∪ turn_text，
+    // 「能打分却看不到」正是本次要修的问题；turns=1（并集轮数），ts 取 turn_text.updated_at。
+    const to = byId.get(SESS_TEXT_ONLY)
+    assert.ok(to !== undefined, '有原文的会话必须出现（并集口径）')
+    assert.equal(to.turns, 1, 'turns = 并集轮数（这里没有读数，只有 1 轮原文）')
+    assert.deepEqual({ ...to.totals }, { tokenIn: 0, tokenOut: 0, cacheRead: 0, durationMs: 0, tpsAvg: null }, '无读数 → totals 全 0（合计口径不变），tpsAvg 仍旧 null（0 时长不报 0 tps）')
+    assert.equal(to.lastTs, 9500, 'ts 取 turn_text.updated_at')
+    assert.equal(to.label, '未知工作区 · 6666ffff', '无工作区无 question → 未知工作区 + id 短形')
     // 分页：页边界不重不漏（定序 last_ts DESC + session ASC 是确定序）
     const p1 = await m.list({ url: SESSIONS_PATH + '?limit=2&offset=0' })
     const p2 = await m.list({ url: SESSIONS_PATH + '?limit=2&offset=2' })
@@ -1648,7 +1881,8 @@ test('AL.5s 详情：轮次升序齐备 + hasText 真伪两类 + question 截断
     assert.equal(byTurn.get(5).question, 'Q'.repeat(200))
     assert.equal(byTurn.get(2).question, '我准备对nexus层进行大改，你先和我对齐目标：去掉l场相关抽象的概念\n第二行不该出现')
     assert.equal(byTurn.get(3).question, '第三轮（无原文）')
-    // 无读数的轮次（只有原文）不出场：轮次表以 turn_read 为主干
+    // AL.6e：轮次表 = turn_read ∪ turn_text。turn 99 只有一条**自评行**（不在这两条腿里）→ 照旧不出场
+    // （并集并的是「读数」与「原文」，不是「任何提到过这个轮次的表」）。
     assert.equal(d.body.turns.some((t) => t.turn === 99), false)
     // 未知 id → 404（详情读侧）
     assert.equal((await m.detail('nope')).statusCode, 404)

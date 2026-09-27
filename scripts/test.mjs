@@ -284,17 +284,17 @@ test('migrateV5: v4 存库升级幂等、turn_read 数字不变、新库直达 v
       raw.close()
     }
     const s1 = openStore(file)
-    assert.equal(s1.schemaVersion(), 9, 'v4 存库经 S1.1(v5)+T(v6)+A(v7)+AL(v8) 后到 v8')
+    assert.equal(s1.schemaVersion(), 10, 'v4 存库经 S1.1(v5)+T(v6)+A(v7)+AL(v8/v9)+AL.6e(v10) 后到最新')
     assert.deepEqual(s1.turnTotals(), { turns: 3, tokenIn: 0, tokenOut: 0, cacheRead: 0 }, 'turn_read 数字不变')
     assert.equal(s1.countSelfCheckRecords(), 0)
     s1.close()
     const s2 = openStore(file)
-    assert.equal(s2.schemaVersion(), 9, '重开幂等：不重复迁移、不回退')
+    assert.equal(s2.schemaVersion(), 10, '重开幂等：不重复迁移、不回退')
     assert.deepEqual(s2.turnTotals(), { turns: 3, tokenIn: 0, tokenOut: 0, cacheRead: 0 })
     s2.close()
     // 新库直达 v5；pulse 侧 v>4 直接返回（其表由自身构造 exec 幂等创建，不抢版本）
     const fresh = openStore(join(tmp, 'fresh.db'))
-    assert.equal(fresh.schemaVersion(), 9, '新库直达当前最新（v8）')
+    assert.equal(fresh.schemaVersion(), 10, '新库直达当前最新（v10）')
     fresh.close()
   } finally {
     try { rmSync(tmp, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }) } catch { /* Windows 句柄 GC 滞后：容忍 %TEMP% 残留 */ }
@@ -1087,7 +1087,7 @@ test('PS.0fix-A：dataDir 指向自定义目录 → 库真的落在那（pulse �
       assert.ok(existsSync(dbFile), '主库必须落在 dataDir 指定目录：' + dbFile)
       const db = new DatabaseSync(dbFile, { readOnly: true })
       try {
-        assert.equal(Number(pragmaScalar(db, 'user_version')), 9, '落在那的确实是本插件的库（schema 版本在场）')
+        assert.equal(Number(pragmaScalar(db, 'user_version')), 10, '落在那的确实是本插件的库（schema 版本在场）')
         assert.ok(
           db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'metric_sample'").get() !== undefined,
           'pulse 的表必须同库（子插件跟随同一数据目录，否则面板半空）',
