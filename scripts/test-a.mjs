@@ -243,7 +243,7 @@ test('pulse/alerts 路由：403 同源门 + 规则/运行态/台账结构 + 真�
     const h = handlers.get('/api/nautilus/pulse/alerts')
     assert.equal(typeof h, 'function', 'alerts 路由必须注册')
 
-    const req = (method, sameOrigin = true) => ({ method, headers: sameOrigin ? { 'sec-fetch-site': 'same-origin' } : {}, url: '/api/nautilus/pulse/alerts' })
+    const req = (method, sameOrigin = true) => ({ method, headers: sameOrigin ? { 'sec-fetch-site': 'same-origin' } : { 'sec-fetch-site': 'cross-site' }, url: '/api/nautilus/pulse/alerts' })
     const res = () => ({ statusCode: 0, payload: null, writeHead(s) { this.statusCode = s }, end(t) { this.payload = JSON.parse(String(t ?? '{}')) } })
     const call = async (method, sameOrigin) => {
       const r = res()
@@ -312,7 +312,7 @@ test('pulse/alerts 路由：403 同源门 + 规则/运行态/台账结构 + 真�
       const rq = new Readable({ read() {} })
       rq.method = 'POST'
       rq.url = '/api/nautilus/pulse/alerts/verdict'
-      rq.headers = sameOrigin ? { 'sec-fetch-site': 'same-origin' } : {}
+      rq.headers = sameOrigin ? { 'sec-fetch-site': 'same-origin' } : { 'sec-fetch-site': 'cross-site' }
       rq.push(Buffer.from(JSON.stringify(body), 'utf8'))
       rq.push(null)
       return rq
@@ -326,7 +326,7 @@ test('pulse/alerts 路由：403 同源门 + 规则/运行态/台账结构 + 真�
     }
     const callG = async (url, sameOrigin = true) => {
       const out = res()
-      rh({ method: 'GET', headers: sameOrigin ? { 'sec-fetch-site': 'same-origin' } : {}, url }, out)
+      rh({ method: 'GET', headers: sameOrigin ? { 'sec-fetch-site': 'same-origin' } : { 'sec-fetch-site': 'cross-site' }, url }, out)
       const dl2 = Date.now() + 3000
       while (Date.now() < dl2 && out.statusCode === 0) await new Promise((x) => setTimeout(x, 10))
       return out

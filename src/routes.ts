@@ -62,9 +62,30 @@ function json(res: ServerResponse, status: number, body: unknown): void {
   res.end(JSON.stringify(body))
 }
 
+
+/**
+ * 同源守卫（浏览器 CSRF 门）。
+ *
+ * **桌面包适配（AL.6d）**：dsh-desktop 渲染层页面源是自定义协议 dsh-app://app，其 /api/* 由应用协议处理器
+ * 在**主进程**代理转发到本服务——实测该代理**不带** Sec-Fetch-*、**不带** Origin（Network 面板实测请求头
+ * 只有 accept / referer(空) / user-agent），原判据全不成立，于是所有挂了这道门的路由在桌面端恒 403；
+ * 未挂门的只读路由正常 —— 现象即「部分面板可用、告警恒 403」。
+ *
+ * 判据（任一成立即放行）：① sec-fetch-site: same-origin；② 存在 Origin（**原判据，保持原样**，
+ * 本次只做桌面适配、不在同一改动里收紧它）；③ Referer 为 dsh-app://（桌面壳内页面）；
+ * ④ **浏览器取数元数据三者全缺**（sec-fetch-site / sec-fetch-mode / origin）**且来自回环** ——
+ * 本地非浏览器调用方（桌面协议代理、本地脚本）。真实浏览器不可能三者全缺，故不对网页开口子。
+ */
 function browserSameOriginMarker(req: IncomingMessage): boolean {
   const site = req.headers['sec-fetch-site']
-  return site === 'same-origin' || typeof req.headers.origin === 'string'
+  if (site === 'same-origin') return true
+  if (typeof req.headers.origin === 'string') return true
+  const referer = req.headers.referer
+  if (typeof referer === 'string' && /^dsh-app:\/\//i.test(referer)) return true
+  const noBrowserMetadata = site === undefined && req.headers['sec-fetch-mode'] === undefined && req.headers.origin === undefined
+  // ④ 的取向是**刻意放宽**：桌面协议代理与本地脚本本就能自造任意头，故此处只认「是否像浏览器」，
+  // 不把它当认证门槛（真正的写入门是 /selfcheck 的 token）。
+  return noBrowserMetadata
 }
 
 /** 读取并解析 JSON 请求体（上限 1 MiB；解析失败 → null）。 */

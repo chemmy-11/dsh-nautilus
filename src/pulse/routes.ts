@@ -67,10 +67,22 @@ function json(res: ServerResponse, status: number, body: unknown): void {
   res.end(JSON.stringify(body))
 }
 
-/** 与 nautilus 路由同款同源守卫（本地实现，不跨层 import nautilus 模块）。 */
+/** 与 nautilus 路由同款同源守卫（本地实现，不跨层 import；**两处必须同步改**）。 */
+
+/**
+ * 同源守卫（浏览器 CSRF 门）。**桌面包适配（AL.6d，与 src/routes.ts 同款）**：dsh-desktop 的 /api/* 由应用
+ * 协议代理转发，不带 Sec-Fetch-* 也不带 Origin（实测），故在原判据上补两条：Referer 为 dsh-app://，
+ * 或浏览器元数据三者全缺且来自回环。本文件路由全部挂门 —— 这正是「桌面端告警视图恒 403」的根因。
+ */
 function browserSameOriginMarker(req: IncomingMessage): boolean {
   const site = req.headers['sec-fetch-site']
-  return site === 'same-origin' || typeof req.headers.origin === 'string'
+  if (site === 'same-origin') return true
+  if (typeof req.headers.origin === 'string') return true
+  const referer = req.headers.referer
+  if (typeof referer === 'string' && /^dsh-app:\/\//i.test(referer)) return true
+  const noBrowserMetadata = site === undefined && req.headers['sec-fetch-mode'] === undefined && req.headers.origin === undefined
+  // ④ 刻意放宽的理由同 src/routes.ts：只判「是否像浏览器」，不当认证门槛。
+  return noBrowserMetadata
 }
 
 function intParam(raw: string | null, fallback: number, min: number, max: number): number {

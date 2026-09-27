@@ -585,13 +585,13 @@ async function mountApi(seed) {
   const fiber = ctx.plugin(mod, { pulse: { enabled: false } })
   const deadline = Date.now() + 5000
   while (Date.now() < deadline && !routes.has(ALIGN_PATH)) await new Promise((r) => setTimeout(r, 25))
-  const call = async (method, { path = ALIGN_PATH, kind, sameOrigin = true, url = path, body } = {}) => {
+  const call = async (method, { path = ALIGN_PATH, kind, sameOrigin = true, url = path, body, headers } = {}) => {
     const h = (kind === undefined ? routes.get(path) : routes.get(kind + ' ' + path))?.handler
     assert.equal(typeof h, 'function', '路由必须注册：' + path)
     const r = new Readable({ read() {} })
     r.method = method
     r.url = url
-    r.headers = sameOrigin ? { 'sec-fetch-site': 'same-origin' } : {}
+    r.headers = headers !== undefined ? headers : (sameOrigin ? { 'sec-fetch-site': 'same-origin' } : {})
     if (body !== undefined) r.push(Buffer.from(typeof body === 'string' ? body : JSON.stringify(body), 'utf8'))
     r.push(null)
     const res = { statusCode: 0, body: null, writeHead(s) { this.statusCode = s }, end(t) { this.body = JSON.parse(String(t ?? '{}')) } }
@@ -623,9 +623,17 @@ test('AL.4b 路由门与空库：同源 403 / 非 GET 405 / 空库结构齐备�
   try {
     assert.equal(m.route.kind, 'exact', 'AL.4b 路由必须是 exact（不做前缀匹配）')
     assert.equal(m.routes.has(ALIGN_PATH + '/extra'), false, '子路径不得命中——路径安全')
-    const noOrigin = await m.call('GET', { sameOrigin: false })
-    assert.equal(noOrigin.statusCode, 403, '非同源必须 403')
-    assert.equal(noOrigin.body.error, 'forbidden')
+    // AL.6d 桌面适配回归：dsh-desktop 的 /api/* 由应用协议处理器代理转发，实测请求头只有
+    // accept / referer(空) / user-agent —— Sec-Fetch-* 与 Origin 全缺。这类「无浏览器元数据」的调用方
+    // 必须放行，否则桌面端所有挂门路由恒 403（真机实测的故障形态）。
+    const desktopProxy = await m.call('GET', { sameOrigin: false })
+    assert.equal(desktopProxy.statusCode, 200, '无浏览器元数据的调用方必须放行（AL.6d 桌面适配）')
+    // 反例：**声明**自己是跨站的浏览器请求仍拒 —— 浏览器必然带 sec-fetch-site，故这条判据仍可判。
+    const crossSite = await m.call('GET', { sameOrigin: false, headers: { 'sec-fetch-site': 'cross-site' } })
+    assert.equal(crossSite.statusCode, 403, '声明跨站必须 403')
+    assert.equal(crossSite.body.error, 'forbidden')
+    const appShell = await m.call('GET', { sameOrigin: false, headers: { referer: 'dsh-app://app/' } })
+    assert.equal(appShell.statusCode, 200, '桌面壳 Referer 必须放行')
     for (const method of ['POST', 'PUT', 'DELETE', 'HEAD']) {
       const r = await m.call(method)
       assert.equal(r.statusCode, 405, method + ' 必须 405（只 GET）')
@@ -1008,7 +1016,7 @@ test('AL.4 写路径双形：带 align → schema_version=2 行；align=4 无引
   })
   try {
     // 门序回归①：非同源 403（新形同门，不是新出口）
-    const foreign = await m.call('POST', { path: TURN_ANNOTATIONS_PATH, sameOrigin: false, body: { session: 's-1', turn: 1, align: 3 } })
+    const foreign = await m.call('POST', { path: TURN_ANNOTATIONS_PATH, sameOrigin: false, headers: { 'sec-fetch-site': 'cross-site' }, body: { session: 's-1', turn: 1, align: 3 } })
     assert.equal(foreign.statusCode, 403); assert.equal(foreign.body.error, 'forbidden')
     // 门序回归②：无 turn_text 原文即拒（新形也走同一条原文门——不让人对着摘要打五分制）
     const noText = await m.call('POST', { path: TURN_ANNOTATIONS_PATH, body: { session: 's-1', turn: 99, align: 3 } })
@@ -1508,11 +1516,12 @@ function seedSessions(s, file) {
 test('AL.5s 路由门与空库：同源 403 / 非 GET 405 / 空库 sessions=[] / 未知 id 404 / 路径安全不 500', async () => {
   const m = await mountSessionRoutes()
   try {
-    const noOrigin = await m.list({ sameOrigin: false })
-    assert.equal(noOrigin.statusCode, 403, '非同源必须 403')
-    assert.equal(noOrigin.body.error, 'forbidden')
-    const noOriginDetail = await m.detail('any', { sameOrigin: false })
-    assert.equal(noOriginDetail.statusCode, 403, '详情同源门同列表')
+    // AL.6d 桌面适配：**无浏览器取数元数据**（Sec-Fetch-* 与 Origin 全缺）的调用方 = dsh-desktop 的
+    // 应用协议代理形态，必须放行；声明跨站的浏览器请求仍拒（反例在 /m2/alignments 门用例里）。
+    const desktopProxy = await m.list({ sameOrigin: false })
+    assert.equal(desktopProxy.statusCode, 200, '无浏览器元数据必须放行（AL.6d）')
+    const desktopDetail = await m.detail('any', { sameOrigin: false })
+    assert.equal(desktopDetail.statusCode, 404, '门放行后未知 id 仍 404')
     for (const method of ['POST', 'PUT', 'DELETE', 'HEAD']) {
       const l = await m.call(method, { path: SESSIONS_PATH, kind: 'exact' })
       assert.equal(l.statusCode, 405, method + ' 列表必须 405（只 GET）')

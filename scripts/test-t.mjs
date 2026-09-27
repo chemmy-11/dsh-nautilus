@@ -316,7 +316,7 @@ test('m2/turn-annotations 路由：403 门/无原文拒/引文门/spot 与 sampl
     const req = (method, body, sameOrigin = true) => {
       const r = new Readable({ read() {} })
       r.method = method
-      r.headers = sameOrigin ? { 'sec-fetch-site': 'same-origin' } : {}
+      r.headers = sameOrigin ? { 'sec-fetch-site': 'same-origin' } : { 'sec-fetch-site': 'cross-site' } // AL.6d：false 现在表示**声明跨站**（原「无任何头」已改为放行——桌面协议代理就是那样）
       if (body !== undefined) r.push(Buffer.from(JSON.stringify(body), 'utf8'))
       r.push(null)
       return r
