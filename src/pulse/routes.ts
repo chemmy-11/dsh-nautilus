@@ -81,12 +81,29 @@ function browserSameOriginMarker(req: IncomingMessage): boolean {
   // 会让任意网页直接调本机 API —— 实测 sec-fetch-site: cross-site + origin: https://evil.example 改动前返回 200；
   // 跨源**响应**虽读不到，但**写请求照样会被执行**（打分 / 裁决都是写），必须补这一条。
   if (site === 'cross-site' || site === 'same-site') return false
+  // `none` = 浏览器对「无发起方/直接请求」（导航、扩展、主进程代理）所发的值，**不是跨站信号**。
+  // AL.6d 修（实测头组合表抓到）：早先收紧时只放行 same-origin，把 none 误拒 → 桌面端仍恒 403。
+  if (site === 'none') return true
   if (typeof req.headers.origin === 'string') return true
   const referer = req.headers.referer
   if (typeof referer === 'string' && /^dsh-app:\/\//i.test(referer)) return true
   const noBrowserMetadata = site === undefined && req.headers['sec-fetch-mode'] === undefined && req.headers.origin === undefined
   // ④ 刻意放宽的理由同 src/routes.ts：只判「是否像浏览器」，不当认证门槛。
   return noBrowserMetadata
+}
+
+/**
+ * 门拒绝时的统一出口：**把所见的取数标记回显在响应体里**。
+ * 这样「为什么被拒」是自证的——桌面端/代理形态（或未来别的宿主）若与判据不符，
+ * 从 Network 的 Response 面板一眼可见，不必再走「重建—重启—猜」的循环（AL.6d 正是这么踩过来的）。
+ */
+function forbiddenByGuard(res: ServerResponse, req: IncomingMessage): void {
+  json(res, 403, { ok: false, error: 'forbidden', seen: {
+    site: req.headers['sec-fetch-site'] ?? null,
+    mode: req.headers['sec-fetch-mode'] ?? null,
+    origin: req.headers.origin ?? null,
+    referer: typeof req.headers.referer === 'string' ? req.headers.referer.slice(0, 60) : null,
+  } })
 }
 
 function intParam(raw: string | null, fallback: number, min: number, max: number): number {
@@ -116,7 +133,7 @@ export function registerPulseRoutes(ctx: { webServer: { register(route: WebRoute
     path: PULSE_API_PREFIX + '/state',
     handler: (req, res): void => {
       if (req.method !== 'GET') return json(res, 405, { ok: false, error: 'method-not-allowed' })
-      if (!browserSameOriginMarker(req)) return json(res, 403, { ok: false, error: 'forbidden' })
+      if (!browserSameOriginMarker(req)) return forbiddenByGuard(res, req)
       const st = deps.store.status()
       json(res, 200, {
         revision: Date.now(),
@@ -132,7 +149,7 @@ export function registerPulseRoutes(ctx: { webServer: { register(route: WebRoute
     path: PULSE_API_PREFIX + '/series',
     handler: (req, res): void => {
       if (req.method !== 'GET') return json(res, 405, { ok: false, error: 'method-not-allowed' })
-      if (!browserSameOriginMarker(req)) return json(res, 403, { ok: false, error: 'forbidden' })
+      if (!browserSameOriginMarker(req)) return forbiddenByGuard(res, req)
       const url = new URL(req.url ?? '/', 'http://localhost')
       const metric = url.searchParams.get('metric')
       if (metric === null || metric === '') return json(res, 400, { ok: false, error: 'metric-required' })
@@ -151,7 +168,7 @@ export function registerPulseRoutes(ctx: { webServer: { register(route: WebRoute
     handler: (req, res): void => {
       void (async (): Promise<void> => {
         if (req.method !== 'POST') return json(res, 405, { ok: false, error: 'method-not-allowed' })
-        if (!browserSameOriginMarker(req)) return json(res, 403, { ok: false, error: 'forbidden' })
+        if (!browserSameOriginMarker(req)) return forbiddenByGuard(res, req)
         const body = (await readJsonBody(req)) as { mode?: unknown; intervalMs?: unknown; sample?: unknown } | null
         if (body === null) return json(res, 400, { ok: false, error: 'invalid-json' })
 
@@ -189,7 +206,7 @@ export function registerPulseRoutes(ctx: { webServer: { register(route: WebRoute
     path: PULSE_API_PREFIX + '/alerts',
     handler: (req, res): void => {
       if (req.method !== 'GET') return json(res, 405, { ok: false, error: 'method-not-allowed' })
-      if (!browserSameOriginMarker(req)) return json(res, 403, { ok: false, error: 'forbidden' })
+      if (!browserSameOriginMarker(req)) return forbiddenByGuard(res, req)
       if (deps.alerts === undefined) return json(res, 503, { ok: false, error: 'alerts-unavailable' })
       const view = deps.alerts()
       const byRule = new Map(view.states.map((s) => [s.id, s]))
@@ -221,7 +238,7 @@ export function registerPulseRoutes(ctx: { webServer: { register(route: WebRoute
     handler: (req, res): void => {
       void (async (): Promise<void> => {
         if (req.method !== 'POST') return json(res, 405, { ok: false, error: 'method-not-allowed' })
-        if (!browserSameOriginMarker(req)) return json(res, 403, { ok: false, error: 'forbidden' })
+        if (!browserSameOriginMarker(req)) return forbiddenByGuard(res, req)
         if (deps.verdict === undefined) return json(res, 503, { ok: false, error: 'verdict-unavailable' })
         const body = (await readJsonBody(req)) as { id?: unknown; verdict?: unknown; note?: unknown } | null
         if (body === null) return json(res, 400, { ok: false, error: 'invalid-json' })
@@ -249,7 +266,7 @@ export function registerPulseRoutes(ctx: { webServer: { register(route: WebRoute
     path: PULSE_API_PREFIX + '/alerts/report',
     handler: (req, res): void => {
       if (req.method !== 'GET') return json(res, 405, { ok: false, error: 'method-not-allowed' })
-      if (!browserSameOriginMarker(req)) return json(res, 403, { ok: false, error: 'forbidden' })
+      if (!browserSameOriginMarker(req)) return forbiddenByGuard(res, req)
       if (deps.readReport === undefined) return json(res, 503, { ok: false, error: 'report-unavailable' })
       const url = new URL(req.url ?? '/', 'http://localhost')
       const id = url.searchParams.get('id') ?? ''

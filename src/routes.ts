@@ -83,6 +83,9 @@ function browserSameOriginMarker(req: IncomingMessage): boolean {
   // 会让任意网页直接调本机 API —— 实测 sec-fetch-site: cross-site + origin: https://evil.example 改动前返回 200；
   // 跨源**响应**虽读不到，但**写请求照样会被执行**（打分 / 裁决都是写），必须补这一条。
   if (site === 'cross-site' || site === 'same-site') return false
+  // `none` = 浏览器对「无发起方/直接请求」（导航、扩展、主进程代理）所发的值，**不是跨站信号**。
+  // AL.6d 修（实测头组合表抓到）：早先收紧时只放行 same-origin，把 none 误拒 → 桌面端仍恒 403。
+  if (site === 'none') return true
   if (typeof req.headers.origin === 'string') return true
   const referer = req.headers.referer
   if (typeof referer === 'string' && /^dsh-app:\/\//i.test(referer)) return true
@@ -90,6 +93,20 @@ function browserSameOriginMarker(req: IncomingMessage): boolean {
   // ④ 的取向是**刻意放宽**：桌面协议代理与本地脚本本就能自造任意头，故此处只认「是否像浏览器」，
   // 不把它当认证门槛（真正的写入门是 /selfcheck 的 token）。
   return noBrowserMetadata
+}
+
+/**
+ * 门拒绝时的统一出口：**把所见的取数标记回显在响应体里**。
+ * 这样「为什么被拒」是自证的——桌面端/代理形态（或未来别的宿主）若与判据不符，
+ * 从 Network 的 Response 面板一眼可见，不必再走「重建—重启—猜」的循环（AL.6d 正是这么踩过来的）。
+ */
+function forbiddenByGuard(res: ServerResponse, req: IncomingMessage): void {
+  json(res, 403, { ok: false, error: 'forbidden', seen: {
+    site: req.headers['sec-fetch-site'] ?? null,
+    mode: req.headers['sec-fetch-mode'] ?? null,
+    origin: req.headers.origin ?? null,
+    referer: typeof req.headers.referer === 'string' ? req.headers.referer.slice(0, 60) : null,
+  } })
 }
 
 /** 读取并解析 JSON 请求体（上限 1 MiB；解析失败 → null）。 */
@@ -109,7 +126,7 @@ export function registerNautilusRoutes(ctx: { webServer: { register(route: WebRo
     path: `${API_PREFIX}/m2/state`,
     handler: (req, res): void => {
       if (req.method !== 'GET') return json(res, 405, { ok: false, error: 'method-not-allowed' })
-      if (!browserSameOriginMarker(req)) return json(res, 403, { ok: false, error: 'forbidden' })
+      if (!browserSameOriginMarker(req)) return forbiddenByGuard(res, req)
       const historyDays = deps.m2HistoryDays ?? 30
       const fromTs = Date.now() - historyDays * 86400000
       // AL.4a：全局口径（原「指向 / 全局」两态已撤除，不再有 ?root= 过滤）
@@ -150,7 +167,7 @@ export function registerNautilusRoutes(ctx: { webServer: { register(route: WebRo
     path: `${API_PREFIX}/m2/turn-text`,
     handler: (req, res): void => {
       if (req.method !== 'GET') return json(res, 405, { ok: false, error: 'method-not-allowed' })
-      if (!browserSameOriginMarker(req)) return json(res, 403, { ok: false, error: 'forbidden' })
+      if (!browserSameOriginMarker(req)) return forbiddenByGuard(res, req)
       const url = new URL(String(req.url ?? ''), 'http://localhost')
       const session = url.searchParams.get('session') ?? ''
       const turn = Number(url.searchParams.get('turn') ?? '')
@@ -169,7 +186,7 @@ export function registerNautilusRoutes(ctx: { webServer: { register(route: WebRo
     path: `${API_PREFIX}/m2/analysis`,
     handler: (req, res): void => {
       if (req.method !== 'GET') return json(res, 405, { ok: false, error: 'method-not-allowed' })
-      if (!browserSameOriginMarker(req)) return json(res, 403, { ok: false, error: 'forbidden' })
+      if (!browserSameOriginMarker(req)) return forbiddenByGuard(res, req)
       const historyDays = deps.m2HistoryDays ?? 30
       const fromTs = Date.now() - historyDays * 86400000
       const rows = deps.store.turnReadsSince(fromTs)
@@ -232,7 +249,7 @@ export function registerNautilusRoutes(ctx: { webServer: { register(route: WebRo
     kind: 'exact',
     path: `${API_PREFIX}/m2/turn-annotations`,
     handler: async (req, res): Promise<void> => {
-      if (!browserSameOriginMarker(req)) return json(res, 403, { ok: false, error: 'forbidden' })
+      if (!browserSameOriginMarker(req)) return forbiddenByGuard(res, req)
       if (req.method === 'GET') {
         json(res, 200, { revision: Date.now(), annotations: deps.store.listTurnAnnotations(), coverage: deps.store.turnAnnotationCoverage() })
         return
@@ -379,7 +396,7 @@ export function registerNautilusRoutes(ctx: { webServer: { register(route: WebRo
     path: `${API_PREFIX}/m2/alignments`,
     handler: (req, res): void => {
       if (req.method !== 'GET') return json(res, 405, { ok: false, error: 'method-not-allowed' })
-      if (!browserSameOriginMarker(req)) return json(res, 403, { ok: false, error: 'forbidden' })
+      if (!browserSameOriginMarker(req)) return forbiddenByGuard(res, req)
       const cov = deps.store.turnAlignmentCoverage()
       // v3：human[] = **全部新量表行**（有分 + 豁免）——旧代际（schema_version=1）不出场，只由 legacyFitRows 计数。
       const human = deps.store.listTurnAlignments().filter((a) => a.schemaVersion >= 2 && (a.align !== null || a.exempt === 1))
@@ -549,7 +566,7 @@ export function registerNautilusRoutes(ctx: { webServer: { register(route: WebRo
     path: SESSIONS_PATH,
     handler: (req, res): void => {
       if (req.method !== 'GET') return json(res, 405, { ok: false, error: 'method-not-allowed' })
-      if (!browserSameOriginMarker(req)) return json(res, 403, { ok: false, error: 'forbidden' })
+      if (!browserSameOriginMarker(req)) return forbiddenByGuard(res, req)
       const url = requestUrl(req)
       if (url === null) return json(res, 400, { ok: false, error: 'invalid:url' })
       const page = readPage(url)
@@ -565,7 +582,7 @@ export function registerNautilusRoutes(ctx: { webServer: { register(route: WebRo
     path: SESSIONS_PATH,
     handler: (req, res): void => {
       if (req.method !== 'GET') return json(res, 405, { ok: false, error: 'method-not-allowed' })
-      if (!browserSameOriginMarker(req)) return json(res, 403, { ok: false, error: 'forbidden' })
+      if (!browserSameOriginMarker(req)) return forbiddenByGuard(res, req)
       const url = requestUrl(req)
       const session = url === null ? null : sessionIdFromPath(url.pathname)
       if (session === null) return json(res, 404, { ok: false, error: 'not-found' })
