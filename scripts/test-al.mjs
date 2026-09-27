@@ -632,6 +632,10 @@ test('AL.4b 路由门与空库：同源 403 / 非 GET 405 / 空库结构齐备�
     const crossSite = await m.call('GET', { sameOrigin: false, headers: { 'sec-fetch-site': 'cross-site' } })
     assert.equal(crossSite.statusCode, 403, '声明跨站必须 403')
     assert.equal(crossSite.body.error, 'forbidden')
+    // 收紧后的反例：**带 Origin 的跨站声明**也必须拒（原判据「存在 Origin 即放行」实测放行了它，
+    // 跨源响应读不到但写请求会被执行 —— 打分/裁决都是写，故 AL.6d 一并收紧）。
+    const crossSiteWithOrigin = await m.call('GET', { sameOrigin: false, headers: { 'sec-fetch-site': 'cross-site', origin: 'https://evil.example' } })
+    assert.equal(crossSiteWithOrigin.statusCode, 403, '带 Origin 的跨站请求必须 403（AL.6d 收紧）')
     const appShell = await m.call('GET', { sameOrigin: false, headers: { referer: 'dsh-app://app/' } })
     assert.equal(appShell.statusCode, 200, '桌面壳 Referer 必须放行')
     for (const method of ['POST', 'PUT', 'DELETE', 'HEAD']) {

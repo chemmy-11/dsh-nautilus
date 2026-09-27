@@ -79,6 +79,10 @@ function json(res: ServerResponse, status: number, body: unknown): void {
 function browserSameOriginMarker(req: IncomingMessage): boolean {
   const site = req.headers['sec-fetch-site']
   if (site === 'same-origin') return true
+  // **AL.6d 收紧（实证驱动）**：声明跨站／同站子树的浏览器请求一律拒。原判据「存在 Origin 即放行」
+  // 会让任意网页直接调本机 API —— 实测 sec-fetch-site: cross-site + origin: https://evil.example 改动前返回 200；
+  // 跨源**响应**虽读不到，但**写请求照样会被执行**（打分 / 裁决都是写），必须补这一条。
+  if (site === 'cross-site' || site === 'same-site') return false
   if (typeof req.headers.origin === 'string') return true
   const referer = req.headers.referer
   if (typeof referer === 'string' && /^dsh-app:\/\//i.test(referer)) return true
