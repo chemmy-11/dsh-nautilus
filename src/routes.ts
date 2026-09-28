@@ -89,10 +89,12 @@ function browserSameOriginMarker(req: IncomingMessage): boolean {
   if (typeof req.headers.origin === 'string') return true
   const referer = req.headers.referer
   if (typeof referer === 'string' && /^dsh-app:\/\//i.test(referer)) return true
-  const noBrowserMetadata = site === undefined && req.headers['sec-fetch-mode'] === undefined && req.headers.origin === undefined
-  // ④ 的取向是**刻意放宽**：桌面协议代理与本地脚本本就能自造任意头，故此处只认「是否像浏览器」，
-  // 不把它当认证门槛（真正的写入门是 /selfcheck 的 token）。
-  return noBrowserMetadata
+  // ⑥ **无跨站信号**的调用方：`sec-fetch-site` 与 `origin` 都缺。桌面协议代理实测正是这一形态
+  //（由门自己的 `seen` 回显抓到：site=null · **mode="cors"** · origin=null · referer=null）。
+  // **`sec-fetch-mode` 不作为拒绝依据**：mode=cors/no-cors 只描述请求模式，不是「发起方 ↔ 目标」的关系信号；
+  // 早先把它算进「三者全缺」是一次实证驱动的纠错（跨站关系由 site 表达，且跨源请求必然带 origin）。
+  const noCrossSiteSignal = site === undefined && req.headers.origin === undefined
+  return noCrossSiteSignal
 }
 
 /**

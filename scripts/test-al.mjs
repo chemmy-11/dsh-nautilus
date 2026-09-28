@@ -703,6 +703,10 @@ test('AL.4b 路由门与空库：同源 403 / 非 GET 405 / 空库结构齐备�
     // 跨源响应读不到但写请求会被执行 —— 打分/裁决都是写，故 AL.6d 一并收紧）。
     const crossSiteWithOrigin = await m.call('GET', { sameOrigin: false, headers: { 'sec-fetch-site': 'cross-site', origin: 'https://evil.example' } })
     assert.equal(crossSiteWithOrigin.statusCode, 403, '带 Origin 的跨站请求必须 403（AL.6d 收紧）')
+    // 桌面代理的**实测真实形态**（由门 seen 回显抓到）：site 与 origin 都缺，但 **mode="cors"** ——
+    // mode 不是跨站信号，不得据此拒绝（这条是上一轮回归的根因，必须钉住）。
+    const corsModeOnly = await m.call('GET', { sameOrigin: false, headers: { 'sec-fetch-mode': 'cors' } })
+    assert.equal(corsModeOnly.statusCode, 200, '仅带 sec-fetch-mode 不得被拒（桌面代理实测形态）')
     const appShell = await m.call('GET', { sameOrigin: false, headers: { referer: 'dsh-app://app/' } })
     assert.equal(appShell.statusCode, 200, '桌面壳 Referer 必须放行')
     for (const method of ['POST', 'PUT', 'DELETE', 'HEAD']) {
