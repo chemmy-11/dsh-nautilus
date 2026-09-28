@@ -1,6 +1,10 @@
 # 开发文档七 · 桌面宿主适配（dsh-desktop）
 
 > **状态**：2026-09-28 实测定稿（目标宿主 **dsh-desktop 0.2.0-rc.1**；§1–§5 的 0.1.7 时代实测结论仍然成立）。
+> **端上验收（2026-09-29）**：环境四元组 = dsh-desktop **0.2.0-rc.1** · profile `desktop`（Electron 独占管理）· `link:L:/dsh-nautilus` 装配 · 结果**通过**（守谷人重启后确认工作台与打分正常）。
+> 复验读数：桌面形态（`Sec-Fetch-Mode: cors`）`GET /api/nautilus/m2/state` 与 `/api/nautilus/m2/sessions?limit=1` 均 **200**；`user_version=10`；
+> `turn_read` / `metric_sample` 的 `max(ts)` 距采样 **2s / 5s**（活性判据用 max(ts) 前移，**不**用行数——行数会被拒装窗口内的旧样本误导）；
+> 自评工具恢复可用（`record_turn_selfcheck` 落库 id=69）。
 > **适用**：本插件挂进 **dsh-desktop**（Electron 桌面壳）时的装配、请求链路、同源门判据、**宿主兼容门**与自查路径。
 > **为什么单开一篇**：AL.6d 那轮的故障不是「代码写错」而是「宿主形态与判据不符」——症状离根因很远
 > （面板部分可用、挂门路由恒 403），定位**全靠门自己回显的 `seen`**。AL.7 那轮同理：症状像「HTTP/工具/事件契约坏了」，
