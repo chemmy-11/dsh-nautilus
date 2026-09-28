@@ -1,5 +1,7 @@
 # dsh-nautilus
 
+**English** | [简体中文](README.md)
+
 ## Introduction
 
 **Nautilus is a read-only session observability plugin** for DeepSeek Harness (dsh). It records the readings of every conversation turn

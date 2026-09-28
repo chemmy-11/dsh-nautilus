@@ -1,5 +1,7 @@
 # dsh-nautilus
 
+**简体中文** | [English](README.en.md)
+
 ## 简介
 
 **Nautilus 是一个「只看不改」的会话观测插件**：挂在 DeepSeek Harness（下称 dsh）上，把每一轮对话的读数
