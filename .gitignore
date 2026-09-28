@@ -6,3 +6,7 @@ lib/
 # 外部工具在本目录留下的本地标记（zcode video-agent-kit 等）——含本机绝对路径，不入库
 .video_agent/
 
+# AL.7 排查用的临时沙盒：隔离 DSH_HOME / 探针 profile / asar 抽取物 / 收窄 peer 的复现副本。
+# 含本机绝对路径与 node_modules 联接，一律不入库（回归脚本本身在 scripts/ 里）。
+.probe/
+
