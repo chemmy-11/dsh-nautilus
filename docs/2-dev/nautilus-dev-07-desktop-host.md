@@ -79,7 +79,7 @@
 |---|---|---|---|---|
 | dsh-desktop | 0.1.7-rc.2 | **0.2.0-rc.1** | — | — |
 | `@deepseek-ai/cordis` | 4.0.4 | **4.0.4（未变）** | `>=4.0.0-rc <5` | ✅ |
-| `@deepseek-ai/dsh-host-webserver` | 0.1.7-rc.2 | **0.2.0-rc.1** | `^0.1.1-rc.2 \|\| … \|\| ^0.1.7-rc.1 \|\| ^0.2.0-rc.1` | ✅ |
+| `@deepseek-ai/dsh-host-webserver` | 0.1.7-rc.2 | **0.2.0-rc.1** | `^0.1.1-rc.2 \|\| ^0.1.2-alpha.2 \|\| ^0.1.5-rc.1 \|\| ^0.1.6-alpha.1 \|\| ^0.1.7-rc.1 \|\| ^0.2.0-rc.1` | ✅ |
 | `@deepseek-ai/schemastery` | 3.18.4 | **3.18.4（未变）** | `^3.18.0` | ✅ |
 | `@deepseek-ai/dsh-client-connection` | —（不存在） | **0.2.0-rc.1（新增）** | — | 见 §6 |
 | `@deepseek-ai/dsh-client-modules` / `-ui-{renderer,layout,sidebar}` | 0.1.7-rc.2 | **0.2.0-rc.1** | — | 契约未变 |
@@ -88,7 +88,7 @@
 > 版本矩阵读的是**装好的宿主**（`D:/dsh/resources/app.asar` 的 `package.json` 与
 > `dsh/desktop-runtime.json`），不是 npm dist-tag 推断——这是「先确认宿主实际版本」那条纪律的落点。
 
-## 6. 0.2.0-rc.1 契约变化与适配（AL.7，2026-09-28 实测）
+## 6. 0.2.0-rc.1 契约变化与适配（AL.7，2026-09-28 实测；**已定位并修复** `baaf3e2`）
 
 ### 6.1 新增的连接授权层（`@deepseek-ai/dsh-client-connection`）
 
@@ -115,6 +115,9 @@
 3. 既有同源门（§3）＋ `seen` 回显（§4）＋ selfcheck token 门已经承担了「谁能进来」的判定，
   且 0.2.0 的 exact 路由语义**明确保留在 webserver 侧**（连接层的 README 原文：
    「Host half 始终提供与载体无关的 RPC 注册表和精确 `GET`/`HEAD`/`POST` 路由注册表」）。
+
+> **判据补正（AL.7-doc，QA 复测）**：本节「`/api/*` 全 401 ⇒ 路由没注册」只在打**本该已注册**的 exact 路径时成立；
+> 未知路径的 401 是连接层 `/api` 前缀兜底、**不具判别力**——见 §6.7 (1)。
 
 ### 6.2 工具面：`ctx.tools.register` 多了一条硬校验
 
@@ -188,6 +191,66 @@
 直接证据是：拒绝时刻（`turn_read` 在 22:00–22:45 窗口为 0 行；`metric_sample` 22:18:44→22:45:08 断档）
 与恢复时刻（peer 修正 + bundle 回列之后全部恢复）对齐，加上 §6.5 的源码级拒绝路径与 semver 数值复核；
 **没有**留到「被拒装时进程内日志」的原始抓取（它写在被吞掉的 stderr 上，见 §6.5 第 4 点）。
+
+### 6.7 补充证据、判据补正与探测路径（AL.7-doc）
+
+> 本节是 AL.7 的**补充记录**（doc 线）：只补 §6.1–§6.6 之外的**原文引用、判据补正与探测路径**。
+> **因果链与修复以 §6.5 / §6.6 为准**，本节不另立结论。
+
+**一句话因果链**：peer 末段 `^0.1.7-rc.1` 不覆盖运行中的 `0.2.0-rc.1` → `evaluatePluginCompatibility` 判 false
+→ `loadProfileDirectory` **整层跳过**该 bundle（`insert: nautilus` 不进组合）＋ `preflight` 置 `row.disabled = true`
+→ **插件整体缺失** → 请求落到连接层 `/api` 前缀兜底 → **401 假象**，同时工具与采集一起消失。
+修复 = peer 追加 `|| ^0.2.0-rc.1`（`baaf3e2`），**运行时代码一行未改**（详细证据：§6.5）。
+
+**（1）判据补正：未知路径的 401 不具判别力**（QA 线在运行中的桌面实例上复测）
+
+| 探测 | 结果 | 判别力 |
+|---|---|---|
+| `GET /api/nautilus/m2/state`（**本该已注册**的 exact 路径） | 拒装期间 **401 `unauthorized`**；修复后 **200** | ✅ **这才是判据**：401 = 未注册 / 未组合 |
+| `GET /api/nautilus/nope`（未知路径） | **401 `unauthorized`** | ❌ 不具判别力 |
+| `GET /api/pet/nope`（**别的插件的**未知路径） | **401 `unauthorized`** | ❌ 同上——**任何插件都一样** |
+
+未知路径的 401 来自 `dsh-client-connection` 的 **`kind: prefix` / `path: /api`** 兜底路由加 `admit()` 拒绝（§6.1），
+与「本插件是否注册」**无关**。因此 §6.1 的「`/api/*` 全 401 ⇒ 路由没注册」应读作：
+**「一个本该已注册的 exact 路径返回 401」才是未注册的证据**；只打未知路径得到的 401 推不出任何结论。
+
+**（2）拒装的时间窗口**（同一实例，直接读数）
+
+- `turn_read`：**22:00–22:45 为 0 行**（兼容门拒装期间）；peer 修正 + bundle 回列后，**23:04 起持续增长**。
+- `metric_sample`：22:18:44 → 22:45:08 断档，随后恢复（与 §6.6 的诚实边界同源）。
+
+**（3）桌面壳转发器为什么不需要迁到连接层认证管线**（适配决策的现实依据）
+
+`app.asar/lib/main.js` 的 `forwardWebRequest`（≈:7182）转发 `/api` 时**删掉 `origin` 与 `sec-fetch-site`**、
+只注入宿主会话 cookie。于是桌面壳内的请求到达本插件同源门时，**两个跨站关系信号都是 `null`** →
+命中 §3 判据第 6 条（「`sec-fetch-site` 与 `origin` 都缺 → 放行」）**直接放行**，与本插件的 exact 路由天然兼容。
+这就是我们**不迁移路由**、继续用 `ctx.webServer.register` 的现实依据（决策全文见 §6.1）。
+
+**（4）连接层 README 原文（引述）**（源码级判据见 §6.1，此处只留原文）
+
+- 它**持有唯一的 `/api` route**、Fetch bridge、**浏览器认证**与 Host/Origin 校验；
+- **每个 Host RPC 方法和每条 WebSocket 流都要求一个浏览器会话**——**不存在**按方法区分的 loopback 层；
+- **每个进程生成一个随机启动令牌**；`dsh-web-app` 打印并打开带 `?token=...` 的应用 URL；
+- `frontend-static` 把根路径与 index 请求交给 `ctx.connection.authorizeIndex`，后者**只在 `GET /` 接受该令牌**，
+  并写入**绑定 authority 的签名 cookie**。
+
+**（5）桌面形态的探测路径**（CLI 被拒，见 §1）
+
+| 路径 | 怎么做 | 能证明什么 |
+|---|---|---|
+| 应用内 DevTools | 在运行中的应用里看控制台 / 网络面板 | 页面侧装配、请求状态码（**须指名确切 origin**） |
+| 数据面 | 直接读 `~/.dsh/nautilus/nautilus.db` 的表水位（`turn_read` / `selfcheck_record` / `metric_sample` 的最后写入时间） | 采集是否还在推进（**给前后数字**） |
+| 独立探测 profile | 见 QA 线（`al7-harness` 分支） | 不依赖 Electron 的装配 / 契约探针 |
+
+**（6）结项：原「待确认清单」的收敛**
+
+| 原待确认项 | 结论 | 证据来源 |
+|---|---|---|
+| 401 的根因 | **已证实**：不是 HTTP 契约变化，而是兼容门**整包拒装**；修复 = peer 补 `\|\| ^0.2.0-rc.1` | §6.5、§6.6、本节 (1)(2) |
+| 与连接层的协作方式 | **已证实不需要协作**：exact 路由优先于 `/api` 前缀；桌面转发器删掉关系头后由 §3 第 6 条放行 | §6.1、本节 (3) |
+| 工具面是否属契约变化 | **已证实是扩展且本包已合规**：`ctx.tools.register` 新增 `output.render` 硬校验，本包已带 `{ schema, render }` | §6.2 |
+| 依赖面未合入本分支 | **已解决**：随 `baaf3e2` 合入 | `package.json`（主线） |
+| peer 写法省略中间项 | **已修正**：§5 单元格按 `baaf3e2` 的 `package.json` 原文列全 | `package.json`（主线） |
 
 ## 7. 自查路径（症状 → 动作）
 

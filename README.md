@@ -161,6 +161,16 @@ A：这是已修的问题：本插件的同源门曾把 `sec-fetch-mode` 误当�
 主进程代理转发）的请求恒 403。**升级到最新版本即可**；成因与判据见
 [docs/2-dev/nautilus-dev-07-desktop-host.md](docs/2-dev/nautilus-dev-07-desktop-host.md)。
 
+**Q：桌面端请求返回 401（不是 403）？**
+A：这是另一条路径，两件事别混：
+（1）**0.1.x**：同源门误判 → **403**（上面那条；响应体回显 `seen` 所见标记）；
+（2）**0.2.0-rc.1**：宿主**兼容门**按 peer 范围判定本插件不可用 → **整包拒装**（`insert: nautilus` 不进组合），
+症状是**本该已注册的 `/api/nautilus/*` 路径返回 401 裸文本 `unauthorized`**，且工具与采集一起消失。
+注意：**未知路径**（如 `/api/nautilus/nope`，乃至别的插件的 `/api/pet/nope`）的 401 只是连接层 `/api` 前缀兜底，
+**任何插件都一样**，**不能**用它判断本插件是否注册。
+**修法 = 升级本插件**（peer 已覆盖 `0.2.0-rc.1`）；判据与证据见
+[docs/2-dev/nautilus-dev-07-desktop-host.md](docs/2-dev/nautilus-dev-07-desktop-host.md)。
+
 **Q：为什么历史会话的工作区显示「未知工作区」？**
 A：工作区归属**从 v10 才开始采集**，且**不回填历史数据**（forward-only，避免用今天的归属去改写过去的记录）。
 所以早期会话显示「未知工作区」是设计结果，不是缺陷。

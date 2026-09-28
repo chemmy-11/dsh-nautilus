@@ -170,6 +170,17 @@ A: That was a fixed bug: the same-origin gate used to treat `sec-fetch-mode` as 
 (`dsh-app://app` page origin, proxied by the main process) always got 403. **Upgrade to the latest version**; the cause and the criteria are documented in
 [docs/2-dev/nautilus-dev-07-desktop-host.md](docs/2-dev/nautilus-dev-07-desktop-host.md).
 
+**Q: Desktop requests return 401 rather than 403?**
+A: That is a different path — do not conflate the two:
+(1) **0.1.x**: the same-origin gate misjudged the request → **403** (the case above; the body echoes the markers it saw via `seen`);
+(2) **0.2.0-rc.1**: the host **compatibility gate** decides this plugin is unavailable from its peer ranges → the **whole plugin is denied**
+(`insert: nautilus` never enters the composition), so a path that **should already be registered** returns a bare-text
+**401 `unauthorized`** under `/api/nautilus/*`, and the tool and collection disappear with it.
+Note: a **401 on an unknown path** (e.g. `/api/nautilus/nope`, or `/api/pet/nope` for another plugin) is just the connection layer’s
+`/api` prefix fallback — **identical for any plugin** — so it proves nothing about whether this plugin is registered.
+**The fix is to upgrade this plugin** (the peer range now covers `0.2.0-rc.1`); criteria and evidence in
+[docs/2-dev/nautilus-dev-07-desktop-host.md](docs/2-dev/nautilus-dev-07-desktop-host.md).
+
 **Q: Why do historical sessions show "unknown workspace"?**
 A: Workspace attribution has only been collected **since v10**, and historical rows are **not back-filled** (forward-only — we do not rewrite the past
 with today's attribution). "Unknown workspace" on old sessions is the designed outcome, not a defect.
