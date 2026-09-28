@@ -72,6 +72,20 @@
 
 > 契约面稳定时适配**不改码**，只动依赖声明与文档；某条契约变了才按上表定位对应模块，不整包重写。
 
+## 宿主适配（HTTP 路由与同源门）
+
+1. **凡新增 HTTP 路由必须过同源门**（`src/routes.ts` 的 `browserSameOriginMarker`，不过即 `forbiddenByGuard` 403）。
+   本插件监听**回环**端口：不加门等于把本机 API 对任意网页开放——**写请求（打分 / 裁决）跨源虽读不到响应，也照样会执行**。
+   这不是假想风险：实测 `sec-fetch-site: cross-site` + `Origin: https://evil.example` 曾被放行（AL.6d 收紧）。
+2. **新增门行为必须回显所见标记**：403 响应体固定带 `seen{site,mode,origin,referer}`。
+   价值是把定位从「**重建 — 重启 — 猜**」变成「**读响应**」——桌面端恒 403 就是靠它**一次**定位的。
+3. **判据只认「发起方 ↔ 目标」的关系信号**：`sec-fetch-site`（`same-origin`/`none` 放行、`cross-site`/`same-site` 拒）与 `Origin`/`Referer`；
+   **`sec-fetch-mode` 不是跨站信号**（只描述请求模式），不得作为拒绝依据——早先把它算进去，桌面端因此恒 403。
+4. **桌面宿主（dsh-desktop）形态**：渲染层页面源是自定义协议 `dsh-app://app`，`/api/*` 由应用协议处理器在主进程代理转发
+   （实测头形：`sec-fetch-mode: cors` 在场，`site`/`origin`/`referer` 全缺）；profile 由 Electron 独占管理（CLI 无法验证桌面装配）；
+   **改动需重启应用生效、无热更新**（客户端半区改完必须 `npm run build` 再重启）。
+   完整实测与自查路径见 [`docs/2-dev/nautilus-dev-07-desktop-host.md`](./docs/2-dev/nautilus-dev-07-desktop-host.md)。
+
 ## 工程红线（事故教训固化）
 
 1. **单实例合约**：in-box 包（`@deepseek-ai/*`：宿主族 `@deepseek-ai/dsh-*` 与 `@deepseek-ai/cordis`/`@deepseek-ai/schemastery`；非 scoped 的 `cordis`/`schemastery` 不在 dsh 安装闭包内、不要用）只进 peerDependencies，严禁 dependencies；peer 范围带显式 prerelease 分支（当前 `@deepseek-ai/dsh-host-webserver`: `^0.1.1-rc.2 || ^0.1.2-alpha.2 || ^0.1.5-rc.1 || ^0.1.6-alpha.1 || ^0.1.7-rc.1`；**每个分支都必须自带预发布标签**——裸 `^0.1.6` 会静默排除 alpha 线，`check:deps` R4 拦此），且 **devDep pin 的版本必须落在 peer 范围内**（`check:deps` R3 自动校验）；遇「peer 装不上」查解析路径，禁止塞 dependencies 修复（hoist 双实例 → 模块级 Symbol 错位 → 全 tool 链崩溃）。

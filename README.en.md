@@ -17,19 +17,35 @@ Turning "how far a conversation moved the knowledge base" into numbers — **ses
 
 - **Metric definitions**: tokens (input/output/cache-hit), cache hit & miss rates (miss rate = the A projection), TPS & decode time, and a per-turn subjective clarity self-rating (0–1) — **objective and subjective tracks cross-validate each other, bounding each side's bias** (the objective curve is confounded by cache warm-up and novel topics; self-reports by reporting bias);
 - **Direct official-event capture**: subscribes to the host's `session/event` (**zero host-source modifications, no third-party plugin dependencies**), with data isolated in a private directory (`~/.dsh/nautilus/`, SQLite);
-- **Five-view workbench** (global panel: overview / curves / hypotheses / prophecies / report) plus a per-turn drawer; curves support **time tiers (1 week / 1 month), metric switching (miss rate / cumulative input / TPS / duration), a turn axis, proportional zoom, panning, fullscreen, hover summaries and click-through to the full transcript**;
+- **Six-view workbench** (global panel: overview / alignments / sessions / alerts / curves / report) plus a per-turn drawer; curves support **time tiers (1 week / 1 month), metric switching (miss rate / cumulative input / TPS / duration), a turn axis, proportional zoom, panning, fullscreen, hover summaries and click-through to the full transcript**;
 - **Repeatable analysis pipeline**: shape classification (sigmoid / rising / falling / inverse-sigmoid) · characteristic-time (τ_e) detection · bucketed comparison — first run: **sessions in the pointed workspace showed a 13.7% miss rate vs 5.6% elsewhere** (grouped by vault pointing at the time), consistent with knowledge work's higher exploration density;
 - **Self-review coverage**: per-session coverage badge (assessed / total turns + missing turn numbers), warning below 80%;
-- **Hypothesis board**: P1–P9 annotations (pending / investigating / verified) with analysis conclusions written back.
+- **Alignment ledger + sessions panel**: human "alignment 1–5" and self-assessment 1–5 are listed **turn by turn** (Δ = self − human).
+  The **sessions view** lists past sessions (workspace · session name / turn count / time range / totals / **human coverage**);
+  expand one to see per-turn details and **score past sessions retroactively** — re-submitting the same turn **overwrites** it
+  (server-side upsert, no extra row); turns without source text have their scoring entry disabled with a visible reason.
 
 > "L-field" is the author's personal research framing (L-theory); external readers can treat this panel simply as a **session-level LLM observability dashboard** — the metrics themselves (tokens / cache / TPS / self-review) are standard observability quantities.
 
-## Pointing & views
+## Views
 
-- The plugin keeps a single pointing: the **L-field pointing** (the workspace root a session belongs to), switched inside the workbench's **"L-field readings (independent pointing)"** panel (history never deleted); the vault pointing was retired with the vault-observation leg;
-- **Two view modes** live in the same panel: `global` (all workspaces) / `pointed` (the pointed workspace) — switching it changes the data scope for curves, hypotheses and the report;
-- Session attribution rule: **the workspace a session was initiated in** — sessions started inside the pointed workspace form the pointed view; everything else appears only in the global view; historical sessions are back-filled by the same rule;
-- Two dashboard views: **global** (all workspaces) / **〈pointed short name〉** (sessions initiated in the pointed workspace) — comparative analysis is a view switch.
+Six views in the global panel: **overview / alignments / sessions / alerts / curves / report**.
+
+- **Overview**: session reading totals, collector heartbeat, per-session list and per-turn drawer. Session attribution follows **the workspace a session was initiated in**
+  (the workspace-pointing abstraction was removed in AL.4a; the panel is read-only, with no write path).
+- **Alignments**: the **two-track ledger** of human "alignment 1–5" vs self-assessment 1–5 (paired per turn · Δ = self − human), boundary distribution,
+  sample consistency and version surface. Turn naming is unified as **workspace name · session name · T\<turn\>**.
+- **Sessions**: the list of past sessions — each row shows the server-derived `label` (**workspace name · session name**) plus turn count, time range,
+  reading totals (in/out · cache · duration · average tps) and **human coverage** (scored / union of turns, so you can see how much is left without expanding).
+  Expanding a row shows per-turn details (turn · time · question summary · in/out · cache · duration · tps · self · human · quote) with **one scoring entry per turn**:
+  - **score past sessions retroactively**, adding or re-doing a judgement: tiers 1–5 plus an N/A exemption (no judgeable object); **tiers 4/5 require a quote** (server-side hard gate);
+  - the scoring widget **names its target** (workspace name · session name · T\<turn\> plus source-text availability) and states whether submitting will **add** or **overwrite**;
+    for already-scored turns it is **pre-filled with the current value** — pick another tier and submit to overwrite (server-side upsert, no extra row);
+  - turns **without source text have the entry disabled** with a visible reason (the server rejects them with `no-turn-text`) — no fake buttons;
+  - turns that have source text but **no readings** (metrics show `—`) are **still scorable** and are marked "text only";
+  - after scoring, only that session's detail and its counters are refreshed (no full page reload).
+- **Alerts**: OS-layer red-line alerting (threshold detection / evidence freezing / three-stage report / ledger / human adjudication).
+- **Curves / report**: session reading curves (time tiers, metric switch, turn axis, fullscreen, hover drill-down) and the repeatable analysis report (sigmoid · τ_e · bucketed comparison).
 
 ## Compatibility
 
@@ -50,6 +66,16 @@ dsh plugin --profile <name> add github:chemmy-11/dsh-nautilus
 ```
 
 This repository does not commit `lib/`, so a **git-form install builds in place at install time** (`prepare` / `prepack` → `scripts/prepare.mjs`). pnpm ≥10 **requires allowing `allowBuilds` in the profile's `pnpm-workspace.yaml`** (key like `@dsh-external/dsh-nautilus@git+…#<sha>`) — measured: without it pnpm fails loudly and prints the exact key (the quieter failure mode is worse: an installed package with no `lib/`, which only breaks at load time); allowing it authorizes running the package's build code at install time, so **pin a commit SHA**. The build probes `$DSH_CHECKOUT` / `~/dsh-harness` and falls back to npm-devDeps mode (devDependencies are installed by the package manager for git installs). A local `npm install` / `npm ci` never builds implicitly (use `npm run build`).
+
+### Desktop form (dsh-desktop)
+
+The desktop host loads this repository through **`link:`** (a development-mode link to the checkout), and its **profile is owned exclusively by Electron** —
+CLI checks such as `dsh --profile desktop --dump-config` are **refused**, so "is the desktop assembly live?" cannot be proven from the CLI; observe it inside the app.
+
+**Changes require an app restart: the desktop host has no hot reload.** The client half is loaded from `lib/client.js` at app startup, and `npm run build`
+only updates artifacts on disk — it does not reach a running Electron process. The order is always **edit → `npm run build` → restart the app → reload the existing page and observe**.
+Request plumbing (page origin `dsh-app://app`, `/api/*` proxied by the main process) and the measured header shapes are documented in
+[docs/2-dev/nautilus-dev-07-desktop-host.md](./docs/2-dev/nautilus-dev-07-desktop-host.md).
 
 Config example (in the profile's `cordis.patch.yml`; every field has a default, so configuration is usually unnecessary):
 
@@ -77,13 +103,18 @@ Config example (in the profile's `cordis.patch.yml`; every field has a default, 
 
 ## API (same-origin)
 
+Every route goes through the **same-origin gate** (non-local / cross-site requests get 403, and a rejection echoes the `seen` markers for diagnosis —
+see [docs/2-dev/nautilus-dev-07-desktop-host.md](./docs/2-dev/nautilus-dev-07-desktop-host.md)).
+
 | Endpoint | Description |
 |---|---|
-| `GET /api/nautilus/m2/state` | session readings (latest / totals / curve / selfcheck coverage; `?root=all` switches to the global view) |
-| `GET/POST /api/nautilus/m2/annotations` | hypothesis annotations read/write |
-| `GET /api/nautilus/m2/turn-text` | full Q&A transcript of a turn |
+| `GET /api/nautilus/m2/state` | session readings (latest / totals / curve / self-review coverage) |
+| `GET /api/nautilus/m2/turn-text` | full Q&A transcript of a turn (the source of scoring quotes) |
 | `GET /api/nautilus/m2/analysis` | white-box analysis (sigmoid / bursts / τ_e) |
-| `GET/POST /api/nautilus/lfield` | L-field pointing status / switch |
+| `GET/POST /api/nautilus/m2/turn-annotations` | per-turn human judgement read/write (new form = `align` 1–5 + `boundary`; N/A exemption = `exempt`; tiers 4/5 require `quote`) |
+| `GET /api/nautilus/m2/alignments` | alignment ledger (human / self tracks + coverage + consistency) |
+| `GET /api/nautilus/m2/sessions` | past-session list (`?limit=50&offset=0`; label derived server-side) |
+| `GET /api/nautilus/m2/sessions/\<sessionId\>` | per-turn detail of one session (readings + `hasText` + both judgement tracks; unknown id → 404) |
 
 ## Build
 

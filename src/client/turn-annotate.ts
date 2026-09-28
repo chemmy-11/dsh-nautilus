@@ -241,7 +241,21 @@ export interface TurnFitActionProps {
    * 只在服务端 200 后触发——失败不回调，免得刷出「没写进去」的假象。
    */
   onScored?: () => void
+  /**
+   * 打分**对象**的指名（AL.6f）：形如「工作区名 · 会话名 · T<轮次>」+ 原文可得性。
+   * 往期会话面板必须传——同一屏里多轮并列时，没有指名就可能打在错的轮次上。
+   * 会话内（当前消息）不传：按钮就在那条消息旁，无需再报一次身份。
+   */
+  targetLabel?: string
 }
+
+/** 边界枚举 → 中文（本件不采集边界，仅用于显示已有判读；none/未知 → 空串）。 */
+function boundaryTextOf(k: string | null | undefined): string {
+  if (k === null || k === undefined || k === '' || k === 'none') return ''
+  const hit = BOUNDARY_CN_LABEL[k]
+  return hit === undefined ? k : hit
+}
+const BOUNDARY_CN_LABEL: Record<string, string> = { none: '无', substitution: '替代', possession: '占有', coercion: '强迫', projection: '投射' }
 
 export function TurnFitAction(props: TurnFitActionProps): ReactNode {
   injectFitStyle()
@@ -250,11 +264,17 @@ export function TurnFitAction(props: TurnFitActionProps): ReactNode {
   const [open, setOpen] = useState(props.defaultOpen === true)
   const [score, setScore] = useState<number | null>(null)
   const [text, setText] = useState('')
+
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState<string | null>(null)
   const turnNo = typeof props.useChat === 'function' ? props.useChat(turnSelectorFor(props.messageId)) : null
   if (turnNo === null || !Number.isFinite(turnNo)) return null // 轮序未解析 → 不渲染（无轮号无法落库）
   const row = snap.byKey.get(keyOf(props.sessionId, turnNo))
+  useEffect(() => {
+    if (!open) return
+    setScore(row === undefined || row.exempt === 1 || row.align === null ? null : Number(row.align))
+    setText(row?.quote ?? row?.note ?? '')
+  }, [open])
   const anchorOf = (n: number): string => {
     const hit = snap.anchors.find((a) => a.score === n)
     return hit === undefined ? String(n) : String(n) + ' · ' + hit.text
@@ -284,6 +304,12 @@ export function TurnFitAction(props: TurnFitActionProps): ReactNode {
     })
   }
   const onExempt = (): void => { setErr(null); void submit({ exempt: 1 }) }
+  // AL.6f：「新增」还是「覆盖」必须写明——服务端是 upsert（同轮覆盖），UI 不能让人以为是追加一条
+  const modeHint = row === undefined
+    ? '未标注：提交即新增（同轮再提交则覆盖）'
+    : (row.exempt === 1
+      ? '已标 N/A 豁免：提交即覆盖'
+      : '已标注 对齐 ' + String(row.align) + (boundaryTextOf(row.boundary) === '' ? '' : ' · ' + boundaryTextOf(row.boundary)) + '：提交即覆盖')
   const label = row === undefined
     ? '对齐'
     : row.exempt === 1
@@ -308,6 +334,10 @@ export function TurnFitAction(props: TurnFitActionProps): ReactNode {
           onClick: submitScore,
         }, '提交'),
       ),
+      // AL.6f：打分**对象**指名（往期会话面板同屏多轮并列，必须让人看清打的是哪一轮）
+      props.targetLabel === undefined ? null : createElement('div', { className: 'row' }, createElement('span', { className: 'hint' }, '打分对象：' + props.targetLabel)),
+      // AL.6f：新增 vs 覆盖，写明（服务端 upsert 语义）
+      createElement('div', { className: 'row' }, createElement('span', { className: 'hint' }, modeHint)),
       // 第二排（B3/AL.4d）：**单一输入控件**，高度翻倍（min-height 56px ≈ 改前 27px 的 2 倍）；
       // 4/5 走引文、1–3 走一句话理由，提交时映射到服务端两列
       createElement('div', { className: 'row' },
@@ -323,7 +353,7 @@ export function TurnFitAction(props: TurnFitActionProps): ReactNode {
     createElement('button', {
       className: 'nt-fitact', 'data-marked': row === undefined ? '0' : '1',
       'data-session': props.sessionId, 'data-turn': String(turnNo),
-      title: '对齐：守谷人对本轮的人工判读（1–5 档锚定 · N/A 豁免）',
+      title: (props.targetLabel === undefined ? '对齐' : '对齐 · ' + props.targetLabel) + '：守谷人对本轮的人工判读（1–5 档锚定 · N/A 豁免）',
       onClick: () => { setOpen((v) => !v); setErr(null) },
     }, label),
     pop,

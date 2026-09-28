@@ -1406,6 +1406,13 @@ const SESSION_DETAIL_FIXTURE = {
       self: null,
       human: null,
     },
+    {
+      // AL.6e 并集轮次：原文在场、读数缺失 → 读数一律 null（不是 0），**可打分**
+      turn: 5, ts: null, question: '原文在、读数缺的那轮（AL.6e 并集）',
+      tokenIn: null, tokenOut: null, cacheRead: null, durationMs: null, tps: null, hasText: true,
+      self: null,
+      human: null,
+    },
   ],
 }
 
@@ -1417,7 +1424,7 @@ test('AL.5u 会话视图 SSR：列表 label/合计/计数 + 展开逐轮两路 +
     const list = h(react.createElement(wb.SessionsView, { list: SESSIONS_FIXTURE, names }))
     for (const s of [
       'L_workspace · 观测插件开发 · 排期对齐', '未知工作区 · bbbb2222',
-      '12.0k / 4.0k', '30.0k', '已标注', '人工 3 · 自评 5 · 旧代际 2',
+      '12.0k / 4.0k', '30.0k', '人工覆盖', '自评 / 旧代际', '3 / 12', '5 / 2',
       '会话列表（只读）', '第 1 页 · 2 条',
     ]) {
       assert.ok(list.includes(s), '会话列表缺内容: ' + s)
@@ -1435,7 +1442,7 @@ test('AL.5u 会话视图 SSR：列表 label/合计/计数 + 展开逐轮两路 +
     assert.ok(!/>t\d+</.test(detail), 'AL.5u：轮次行不得出现 tNN 形式')
     assert.ok(!/session-[a-z0-9]+:\d+/.test(detail), 'AL.5u：不得出现裸 session:turn 拼接')
     // ③ hasText=false → 不打分入口 + 可见原因（服务端会以 no-turn-text 拒）
-    assert.equal((detail.match(/nt-fitact/g) ?? []).length, 1, 'AL.5u：只有 hasText=true 的轮次才有打分入口')
+    assert.equal((detail.match(/nt-fitact/g) ?? []).length, 2, 'AL.5u：只有 hasText=true 的轮次才有打分入口（fixture 里 T3/T5 有原文，T4 无）')
     assert.ok(detail.includes('不可打分：原文缺失'), 'AL.5u：原文缺失必须给出可见原因')
     assert.ok(detail.includes('no-turn-text'), 'AL.5u：原因须说明服务端会拒（不假装能打）')
     assert.ok(detail.includes('>对齐</button>'), 'AL.5u：打分入口复用会话内打分件（文案「对齐」）')
@@ -1447,6 +1454,47 @@ test('AL.5u 会话视图 SSR：列表 label/合计/计数 + 展开逐轮两路 +
     // ⑤ 列表接口缺席：显式缺席
     const noList = h(react.createElement(wb.SessionsView, { list: null, names: new Map() }))
     assert.ok(noList.includes('会话接口不可用'), '列表缺席必须显式')
+  })
+})
+
+test('AL.6f 往期会话打分：并集轮次可打分 + 覆盖语义 + 对象指名 + 局部刷新（SSR + 源码 + POST 体）', async () => {
+  await withWorkbenchClient(async ({ wb, react, h }) => {
+    const detail = h(react.createElement(wb.SessionDetail, { detail: SESSION_DETAIL_FIXTURE, pending: false, onScored: () => {} }))
+    // ① AL.6e 并集轮次（有原文、无读数）：读数渲染成「—」，但**入口在场**——正是为了能打
+    assert.ok(detail.includes('L_workspace · 观测插件开发 · 排期对齐 · T5'), '并集轮次必须出场')
+    assert.ok(detail.includes('仅原文'), '并集轮次必须标出「仅原文（无读数）」以免被当成坏数据')
+    assert.ok(detail.includes('— / —'), 'AL.6e：读数缺失一律渲染「—」（fmtK(null) = —），绝不写 0 冒充真实读数')
+    // ② 覆盖语义：已标注轮次显示当前人工分 + 明确「提交即覆盖」（服务端 upsert 不追加）
+    assert.ok(detail.includes('他引用了我那句'), '已标注轮次必须显示当前引文')
+    assert.ok(/title="已有判读：在打分入口重新提交即\*\*覆盖\*\*/.test(detail), '人工列必须说明覆盖语义')
+    assert.ok(detail.includes('再提交即覆盖'), '详情说明必须写明覆盖')
+    assert.ok(detail.includes('已标注：人工 3 · 自评 5 · 旧代际 2'), '详情抬头给三路计数（代际不混算）')
+    // ③ 打分对象指名（含原文可得性）——同屏多轮并列时不能打错轮次
+    assert.ok(detail.includes('title="对齐 · L_workspace · 观测插件开发 · 排期对齐 · T3 · 原文可得'), '打分件必须指名对象 + 原文可得')
+    // ④ 列表行不必展开就能看出「已标注多少 / 还能打多少」
+    const list = h(react.createElement(wb.SessionsView, { list: SESSIONS_FIXTURE, names: wb.buildNameIndex(SESSIONS_FIXTURE) }))
+    assert.ok(list.includes('3 / 12'), '列表必须给出人工覆盖（已判读 / 并集轮次）')
+    assert.ok(/title="并集轮次 12；其中已有人工判读 3。剩余 9 是\*\*上界\*\*/.test(list), '覆盖列必须说明剩余是上界（含无原文轮次）')
+    // ⑤ 局部刷新（不整页重拉）：只 bump 详情 nonce，绝不碰根组件 nonce
+    const wbSrc = readFileSync(join(SRC, 'client', 'workbench.ts'), 'utf8')
+    const start = wbSrc.indexOf('// ── 视图：会话（AL.5u')
+    const end = wbSrc.indexOf('// ── 根组件')
+    assert.ok(start > 0 && end > start, '会话视图切片锚点必须存在')
+    const view = wbSrc.slice(start, end)
+    assert.ok(view.includes('const onScored = (): void => { setDetailNonce((v) => v + 1) }'), 'AL.6f：打分后只 bump 详情 nonce')
+    assert.ok(!view.includes('setNonce('), 'AL.6f：会话视图不得碰根组件 nonce（那是整页重拉的入口）')
+    assert.ok(view.includes('onScored: () => props.onScored(String(s.session))'), 'AL.6f：打分回调按会话定位（只刷该会话）')
+    assert.ok(view.includes('setCounts('), 'AL.6f：会话计数走本地合并（详情落地时并回该行）')
+  })
+  // ⑥ 写路径仍是双形 POST（align + boundary 判据键；不新开 API）——直取 POST 体验证
+  await withClientModule('turn-annotate.ts', async ({ mod: ta }) => {
+    let posted = null
+    const orig = globalThis.fetch
+    globalThis.fetch = async (_url, init) => { posted = JSON.parse(String((init ?? {}).body ?? '{}')); return { ok: true, json: async () => ({ ok: true, origin: 'spot' }) } }
+    try { await ta.postHumanAlign('sess-abc', 3, { align: 4, quote: '引文' }) } finally { globalThis.fetch = orig }
+    assert.ok(Object.prototype.hasOwnProperty.call(posted, 'align'), 'POST 体必须带 align')
+    assert.ok(Object.prototype.hasOwnProperty.call(posted, 'boundary'), 'POST 体必须带 boundary 判据键')
+    assert.ok(!Object.prototype.hasOwnProperty.call(posted, 'fit'), '不得发旧形 fit')
   })
 })
 

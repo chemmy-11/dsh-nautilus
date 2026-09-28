@@ -66,6 +66,7 @@
 - 提交信息：`<type>(<scope>): <中文描述>——<为什么/细节>`；scope 用里程碑子项（`M4-A` / `M5.1` / `N1-x`）或模块名；**宿主适配类必须写明目标宿主版本**（如 `dsh 0.1.5-rc.1`）。
 - issue 先行、PR 一律 squash、**push 时机按用户明确指令**（本地领先 origin 是常态）。
 - 宿主升级按 `CONTRIBUTING.md`「宿主版本适配」五步：依赖面 → 契约面逐项核对 → 门禁 → profile 实测 → 记录。**先确认宿主实际版本，不凭 npm dist-tag 推断**；契约没变就**不改码**。
+- **桌面宿主（dsh-desktop）**：页面源是 `dsh-app://app`、`/api/*` 由主进程代理；**改动需重启应用生效（无热更新）**；新增路由必过同源门且门拒绝要回显 `seen` 标记——实测与自查见 [docs/2-dev/nautilus-dev-07-desktop-host.md](./docs/2-dev/nautilus-dev-07-desktop-host.md)。
 
 ## 7. 验收与证据
 

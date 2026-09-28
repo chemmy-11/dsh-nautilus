@@ -1719,6 +1719,8 @@ export function SessionDetail(props: { detail: SessionDetailState | null; pendin
   const turnRow = (t: SessionTurn): ReactNode => {
     const self = t.self
     const human = t.human
+    // AL.6e 并集轮次：「有原文、无读数」的轮次读数一律 null（不是 0）——如实标出来，且它们**可打分**
+    const noReadings = t.tokenIn === null && t.tokenOut === null && t.cacheRead === null && t.durationMs === null && t.tps === null
     const humanExempt = human !== null && Number(human.exempt) === 1
     const selfTxt = self === null || self.align === null
       ? '—'
@@ -1730,7 +1732,9 @@ export function SessionDetail(props: { detail: SessionDetailState | null; pendin
         : String(human.align) + (boundaryText(human.boundary) === '' ? '' : ' · ' + boundaryText(human.boundary)))
     const q = human?.quote ?? null
     return createElement('tr', { key: String(t.turn) },
-      createElement('td', null, turnLabelOf(names, String(s.session), t.turn)),
+      createElement('td', null,
+        turnLabelOf(names, String(s.session), t.turn),
+        noReadings ? createElement('span', { className: 'nt-tag', title: 'AL.6e 并集轮次：原文在场、读数缺失（读数一律 null，不写 0）——该轮**可打分**' }, '仅原文') : null),
       cell(fmtDayTime(t.ts)),
       cell(t.question === null || t.question === '' ? '—' : (t.question.length > 36 ? t.question.slice(0, 36) + '…' : t.question), t.question ?? undefined),
       cell(fmtK(t.tokenIn) + ' / ' + fmtK(t.tokenOut)),
@@ -1738,13 +1742,14 @@ export function SessionDetail(props: { detail: SessionDetailState | null; pendin
       cell(t.durationMs === null ? '—' : String(Math.round(t.durationMs)) + ' ms'),
       cell(t.tps === null ? '—' : fmtNum(t.tps, 1)),
       cell(selfTxt, self === null || self.rubricVersion === null ? undefined : String(self.rubricVersion)),
-      cell(humanTxt),
+      cell(humanTxt, human === null ? undefined : '已有判读：在打分入口重新提交即**覆盖**（服务端 upsert，不追加新条）'),
       cell(q === null || q === '' ? '—' : (q.length > 24 ? q.slice(0, 24) + '…' : q), q ?? undefined),
       createElement('td', null, t.hasText
         ? createElement(TurnFitAction, {
           sessionId: String(s.session),
           messageId: 'sessions-view:' + String(s.session) + ':' + String(t.turn),
           useChat: () => t.turn,
+          targetLabel: turnLabelOf(names, String(s.session), t.turn) + ' · 原文可得',
           onScored: () => props.onScored(String(s.session)),
         })
         : createElement('span', {
@@ -1754,7 +1759,7 @@ export function SessionDetail(props: { detail: SessionDetailState | null; pendin
     )
   }
   return createElement('div', null,
-    createElement('div', { className: 'nt-note', style: { marginTop: 0 } }, '逐轮判读：自评（人自评 1–5）与人工（本面板打分）两路并列；轮次命名统一为「工作区名 · 会话名 · T<轮次>」。'),
+    createElement('div', { className: 'nt-note', style: { marginTop: 0 } }, '逐轮判读：自评（人自评 1–5）与人工（本面板打分）两路并列；轮次命名统一为「工作区名 · 会话名 · T<轮次>」。**已标注的轮次再提交即覆盖**（服务端 upsert，不追加新条）——打分入口展开时会预填当前分，改完提交即可。原文缺失的轮次入口禁用（服务端 no-turn-text 会拒）。'),
     createElement('div', { className: 'nt-legend' },
       createElement('span', null, String(s.label)),
       createElement('span', { className: 'nt-readout', style: { marginLeft: 'auto' } }, '已标注：' + annotatedText(s.annotated))),
@@ -1811,7 +1816,13 @@ export function SessionsView(props: { list: SessionsState | null; names: Map<str
       cell0(fmtK(s.totals.cacheRead)),
       cell0(s.totals.durationMs > 0 ? fmtNum(s.totals.durationMs / 1000, 1) + ' s' : '—'),
       cell0(s.totals.tpsAvg === null || s.totals.tpsAvg === undefined ? '—' : fmtNum(s.totals.tpsAvg, 1)),
-      cell0(annotatedText(a)),
+      // AL.6f（A.1）：不必展开就能看出「已标注多少 / 还能打多少」——人工覆盖 = 已判读 / 并集轮次
+      createElement('td', {
+        title: '并集轮次 ' + String(num0(s.turns)) + '；其中已有人工判读 ' + String(num0(a.human))
+          + '。剩余 ' + String(Math.max(0, num0(s.turns) - num0(a.human)))
+          + ' 是**上界**（其中可能含无原文的轮次，那些不可打分）——展开后逐轮标注可否',
+      }, String(num0(a.human)) + ' / ' + String(num0(s.turns))),
+      cell0(String(num0(a.self)) + ' / ' + String(num0(a.legacyFit))),
     )
   }
   const onScored = (): void => { setDetailNonce((v) => v + 1) }
@@ -1829,12 +1840,12 @@ export function SessionsView(props: { list: SessionsState | null; names: Map<str
     createElement('div', { className: 'nt-note', style: { marginTop: 0 } }, '会话列表（只读）：label 由**服务端单点派生**（工作区名 · 会话名）——此处直接渲染，不再自己拼；点 label 展开逐轮并可直接打分；**未展开不请求详情接口**。'),
     Panel({
       title: '会话', fig: 'FIG.15',
-      note: '轮次命名统一为「工作区名 · 会话名 · T<轮次>」（两段名取契约，不出现裸会话 id 拼接）。读数合计取服务端口径；已标注计数人工 / 自评 / 旧代际**分别显示**（代际不混算）。分页 50 条一页；契约未给总数，故「下一页」以「本页满 50 条」为可用判据——不编造总数。',
+      note: '轮次命名统一为「工作区名 · 会话名 · T<轮次>」（两段名取契约，不出现裸会话 id 拼接）。**人工覆盖 = 已判读 / 并集轮次**（不必展开即可看出还能打多少；剩余是上界，含无原文轮次）；自评 / 旧代际分列，代际不混算。读数合计取服务端口径。分页 50 条一页；契约未给总数，故「下一页」以「本页满 50 条」为判据——不编造总数。**已标注的轮次在详情里再提交即覆盖（upsert）**，不追加新条。',
       children: data === null
         ? Empty({ text: '会话接口不可用（/api/nautilus/m2/sessions）——路由未落地或读取中，不写 0 假读数' })
         : createElement('div', null, pager,
           createElement('table', { className: 'nt-tbl' },
-            createElement('thead', null, createElement('tr', null, ...['会话（工作区 · 会话名）', '轮次', '时间范围', 'in / out', 'cache', '时长', '平均 tps', '已标注'].map((h) => createElement('th', { key: h }, h)))),
+            createElement('thead', null, createElement('tr', null, ...['会话（工作区 · 会话名）', '轮次', '时间范围', 'in / out', 'cache', '时长', '平均 tps', '人工覆盖', '自评 / 旧代际'].map((h) => createElement('th', { key: h }, h)))),
             createElement('tbody', null, ...rows.map(rowNode)))),
     }),
     expanded !== null
