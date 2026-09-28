@@ -1,136 +1,196 @@
 # dsh-nautilus
 
-[English](./README.en.md) | 中文
+## 简介
 
-DeepSeek Harness（`dsh`）的观测插件（`@dsh-external/dsh-nautilus`）：**会话级量化观测**——逐轮遥测（token/缓存/耗时/tps + 自评）与形态分析，外加 OS/GPU 采集层（pulse）。观测数据全部私有化存储（`~/.dsh/nautilus/`），重启/重载不丢不重。
+**Nautilus 是一个「只看不改」的会话观测插件**：挂在 DeepSeek Harness（下称 dsh）上，把每一轮对话的读数
+（token / 缓存 / 耗时 / tps）连同质量判断记成可回看的数字与台账，并集中呈现在一个叫 **「Nautilus 工作台」** 的面板里。
 
-> ⚠️ **vault 观测腿已于 2026-09-27 下线**：本插件不再读写任何 vault（原「Vault 观测」面板与 `/api/nautilus/{state,vault,action}` 三条路由已删除）。笔记检索 / 移动 / 重命名请在**会话侧**用 `/obsidian` 技能（读 Obsidian 的 `obsidian.json` 解析活动 vault，多库可切换）。
-
-## ① Vault 观测（已下线）
-
-2026-09-27 起本插件**不再观测 vault**：全量扫描、`fs.watch` 编辑监听、vault 统计面板与指向切换整体移除（vault 侧工作交给会话侧 `/obsidian` 技能，多库支持更自然）。
-老库里的 `vault_meta` / `edit_event` / `vault_config` 三张表**保留不删**（红线：绝不销毁既有数据），但代码不再读写。
-
-## ② 会话读数（L 场读数）
-
-把「一段对话对知识库走了多远」变成数字——**会话级 LLM 观测 + 量化自评 + 曲线形态分析**：
-
-- **指标口径**：token（输入/输出/缓存命中）、缓存命中率与未命中率（未命中率 = A 投影）、TPS 与解码耗时、每轮主观清晰度自评（0–1）——**主客观双指标交叉验证，互相限制偏差**（客观曲线有缓存预热与新话题混杂，主观自评有报告偏差）；
-- **官方事件直采**：订阅宿主 `session/event`（**零宿主源码修改、无第三方插件依赖**），数据私有目录隔离（`~/.dsh/nautilus/`，SQLite，重启/重载不丢不重）；
-- **工作台六视图**（全局面板：总览 / 对齐 / 会话 / 告警 / 曲线 / 报告）+ 逐轮抽屉；曲线支持**时间档位（1 周/1 月）、指标切换（未命中率 / 累计输入 / TPS / 时长）、轮次轴、等比放缩、平移、全屏、悬停简略读数与点击下钻完整问答**；
-- **可重复分析管线**：形态分类（S 形/上升/下降/反转 S）· 特征时间 τ_e 检出 · 分桶对照——首轮实证：**指向工作区会话未命中率 13.7% vs 其它工作区 5.6%**（当时按 vault 指向分组），与知识型会话探索密度更高一致；
-- **自评覆盖**：逐会话覆盖徽标（已评/总轮次 + 缺口轮号），低于 80% 预警；
-- **对齐台账 + 会话面板**：人工「对齐 1–5」与人自评 1–5 **逐轮并列**（Δ = 自评 − 人工）；**会话视图**列出往期会话
-  （工作区名 · 会话名 / 轮次数 / 时间范围 / 读数合计 / **人工覆盖**），点开即可看逐轮明细并**对之前的会话追加打分**
-  （同一轮再提交即**覆盖**，不追加新条；原文缺失的轮次入口禁用并给出原因）。
-
-> 「L 场」是作者私人研究框架（L-theory）的用语；对外部使用者，把这块读作**会话级 LLM 观测看板**即可——指标本身（token/缓存/TPS/自评）都是标准的可观测性量。
-
-## 视图
-
-工作台六视图（全局面板）：**总览 / 对齐 / 会话 / 告警 / 曲线 / 报告**。
-
-- **总览**：会话读数合计、采集器心跳、逐会话列表与逐轮抽屉；会话归属按**发起时所在工作区**回溯归类（工作区指向抽象已于 AL.4a 撤除，面板只读、无写路径）。
-- **对齐**：人工「对齐 1–5」与自评 1–5 的**双路台账**（同轮并列 · Δ = 自评 − 人工）、边界分布、样本一致性与版本面；
-  轮次命名统一为「**工作区名 · 会话名 · T\<轮次\>**」。
-- **会话**：往期会话清单——每行是服务端派生的 `label`（**工作区名 · 会话名**）+ 轮次数 + 时间范围 + 读数合计
-  （in/out · cache · 时长 · 平均 tps）+ **人工覆盖**（已判读 / 并集轮次，不必展开就知道还能打多少）。
-  点开逐轮明细（轮次 · 时间 · 问题摘要 · in/out · cache · 时长 · tps · 自评 · 人工 · 引文），**每轮一个打分入口**：
-  - 对**之前的会话**补打或重打判读：1–5 档 + N/A 豁免（无判断对象）；**4/5 档必附引文**（服务端硬门）；
-  - 打分件会**指名打分对象**（工作区名 · 会话名 · T\<轮次\> + 原文可得性），并写明「提交即新增」还是「**提交即覆盖**」；
-    已标注的轮次展开时**预填当前分**——改哪个档就点哪个档，提交即覆盖（服务端 upsert，不追加新条）；
-  - **原文缺失的轮次入口禁用**并给出可见原因（服务端 `no-turn-text` 会拒）——不给假按钮；
-  - 「有原文、无读数」的轮次（读数显示 `—`）**同样可打分**，并标注「仅原文」；
-  - 打完只刷新该会话详情与其计数（不整页重拉）。
-- **告警**：OS 层红线告警（越线检测 / 证据冻结 / 三段式报告 / 台账 / 人工裁决）。
-- **曲线 / 报告**：会话读数曲线（时间档位 / 指标切换 / 轮次轴 / 全屏 / 悬停下钻）与可重复分析报告（S 形 · τ_e · 分桶对照）。
-
-## 兼容性
-
-- **宿主支持矩阵**：`dsh` **0.1.7-rc.1**（当前主用，已实测，见下「适配验证」）+ **0.1.5-rc.2**（稳定线，已实测）+ **0.1.6-alpha.2**（并存安装 `dsh-next`，已实测）；peer 范围 `@deepseek-ai/dsh-host-webserver` = `^0.1.1-rc.2 || ^0.1.2-alpha.2 || ^0.1.5-rc.1 || ^0.1.6-alpha.1 || ^0.1.7-rc.1`——**每个分支都必须自带预发布标签**：按 semver 预发布规则，`0.1.6-alpha.2` 只能被「同元组且带预发布」的比较器匹配，写裸 `^0.1.6` 会静默排除 alpha 线（`check:deps` R4 拦此）；带 tag 的分支同时覆盖 alpha 与日后转正的 stable；
-- **契约面**：宿主侧只消费官方 `session/event`、`ctx.webServer.register`、`ctx.tools.register`，客户端只消费 `ctx.slots`（`conversation.view`）——不 import 宿主实现，故跨 prerelease 版本无需改码；
-- **依赖面**：运行时只 import 随 dsh 安装提供的 in-box 包——`@deepseek-ai/cordis`（类型）、`@deepseek-ai/schemastery`（Config schema）、`@deepseek-ai/dsh-host-webserver`（路由类型）；非 scoped 的 `cordis`/`schemastery` 不在安装闭包内，已迁移；
-- **客户端入口**：客户端插件就是普通 Cordis 插件（`Context` 来自 `@deepseek-ai/cordis`；`@deepseek-ai/dsh-client-runtime` 在 0.1.5 已移除）；UI 注册表 `ctx.slots` 由 `@deepseek-ai/dsh-client-ui-renderer` 提供；只 type-only 跨插件导入，运行时只 require 基线 `react`；
-- **适配验证（2026-09-13，dsh 0.1.5-rc.2）**：先做契约面对照——rc.1→rc.2 的 `dsh-host-webserver` / `dsh-session` / `dsh-tools` / `dsh-client-ui-renderer` / `dsh-client-ui-conversation` 产物除版本号外逐字节一致（无接口变更，故不改码）；devDep 精确 pin 升 `0.1.5-rc.2`（cordis 4.0.2 / schemastery 3.18.2 与 rc.2 依赖一致）；`typecheck` / `build` / `test`（12/12）/ `check:deps` / `check-meta` / client shim 全绿；隔离 `DSH_HOME` 的入口冒烟通过（Standard Schema 默认值与非法值拒绝 + 8 路由 + 1 工具 + 2 事件订阅 + 6 disposer + 新库 schema v3/9 表）。上一轮 0.1.5-rc.1（2026-09-10）同为全绿。
-
-- **适配验证（2026-09-20，dsh 0.1.6-alpha.2 · 并存安装 `dsh-next`）**：契约面逐项对照 `C:\Users\15266\dsh-next\node_modules\@deepseek-ai\*` 的类型声明——槽位注册选项（`keyed → options.key` / `list → options.id|order|label`，label 仍支持函数形，新增可选 `priority`）、`ctx.layout.selectPanel(MainPanelId|null)`、`sidebar.panellist` 与 `SidebarPanelMetadata`、`WebRoute{kind,path,handler}`、`ctx.subprocess`（`spawn(graceMs/maxBytes/signal)` + `exitCode/signal/readFrom`）、`dsh.client` 清单字段（`platform/inject/immediately?/external?`）**全部未变**，故**不改码**；peer 追加 `^0.1.6-alpha.1` 分支（devDep 仍 pin `0.1.5-rc.2`，两版共存）；`check:deps` 新增 R4（宿主 peer 每个分支必须带预发布标签）并做反向验证（裸 `^0.1.6` 被拦下并给出确切分支名）。**端上实测**：`dsh-next --profile web --patch <临时叠加> ` 起 0.1.6（端口 3099，探测走进程内叠加、**不改 profile**），启动日志 `[nautilus] Pulse OS/GPU 层已挂载（子插件）`、`[pulse] mode=auto interval=5000ms exec=ctx.subprocess db=…\.dsh-next\nautilus\nautilus.db`；启动图含本行（rev `a05f2c1db892a264-51`），下发 bundle 含工作台与心跳控件标记；`/api/nautilus/{state,vault,lfield,m2/state,m2/analysis,m2/annotations,pulse/state}` 全 **200**（注：`state`/`vault` 两条已于 2026-09-27 随 vault 观测腿下线）（pulse 15 指标、`shell=powershell`、`gpuOk=true`）；`POST /pulse/control` 切 1s→`{mode:auto,intervalMs:1000}`、`{mode:manual,sample:true}`→ticks 5→6、非法档位→**400**；六件套全绿（`test` 22/22）。
-
-- **适配验证（2026-09-28，dsh 0.1.7-rc.1）**：先取实际版本（`dsh --version` = 0.1.7-rc.1，`dsh-host-webserver` 同为 0.1.7-rc.1；cordis 4.0.4 / schemastery 3.18.4），**不凭 dist-tag 推断**。契约面逐项对照安装产物的类型声明——`WebRoute{kind:'exact'|'prefix',path,handler}`、`session/event` 的 `turn/start{ turn }`·`step/start{ turn, step }`·`user/message`·`assistant/message{ turn, step, message.content, usage{ inputTokens, outputTokens, cacheReadTokens? } }`、`ToolDefinition{name,description,parameters,output}`、客户端槽位（`main` 仍 kind `keyed`；`conversation.chat.assistant-actions`/`turnTail` 仍 `list`·scope `session`·owner `{ messageId }`/`TurnTailOwnerProps`；`sidebar.panellist`）、以及本项目 A 系列新用的 `ctx.llm.stream(GenerateOptions)`·`ctx.agentDefaultModel.currentSelection()`·`ctx.jobs.start(JobSpec)` **全部未变**，故**不改码**；peer 追加 `^0.1.7-rc.1` 分支（保留旧四支），devDep 精确 pin 升 `0.1.7-rc.1`；六件套全绿（`test` 55/55）。端上四元组见证据归档 E29/E30。
+- **它解决什么问题**：长对话里「哪几轮真正往前走了、代价是多少」平时只留模糊印象。这个插件把它变成**可复查的记录**——
+  逐轮读数、模型自评、你的人工判读并排放在同一行，还能回头给历史上的会话补打分。
+- **它不做什么**：**不改宿主源码、不改宿主行为、不写你的数据**；**不读也不写任何 Obsidian vault**。
+  观测数据只落在你自己的 `~/.dsh/nautilus/`（SQLite）。定位是**观测，不干预**——结论由人下，插件只提供证据。
 
 ## 安装
 
+> **装完必须重启宿主**：桌面端（dsh-desktop）**没有热更新**，改完不重启就等于没改（实测事实，见
+> [桌面宿主适配](docs/2-dev/nautilus-dev-07-desktop-host.md)）。
+
+### 方式 A：web profile（`dsh web`）
+
 ```sh
-dsh plugin --profile <name> add github:chemmy-11/dsh-nautilus
+# git 形式：装到 profile 目录（推荐用于长期使用）
+dsh plugin --profile <profile-name> add github:chemmy-11/dsh-nautilus
+
+# 本地检出形式：直接指向本仓库（推荐用于开发）
+cd <本仓库>
+npm run build                                        # link: 之前必须先构建
+dsh plugin --profile <profile-name> add link:<本仓库绝对路径>
 ```
 
-本仓库不提交 `lib/`，故 **git 形式安装在安装时就地构建**（`prepare` / `prepack` → `scripts/prepare.mjs`）：pnpm ≥10 **必须在 profile 的 `pnpm-workspace.yaml` 放行 `allowBuilds`**（键形如 `@dsh-external/dsh-nautilus@git+…#<sha>`）——实测未放行时 pnpm 会直接报错并给出该键（不报错的形态更危险：装出没有 `lib/` 的包，加载期才炸）；放行等同授权该包在安装时执行构建代码，**建议锁定 commit SHA**。构建需要 dsh 源码 checkout，自动探测 `$DSH_CHECKOUT` 或 `~/dsh-harness`，探测不到则回退 npm-devDeps 模式（git 安装时 devDependencies 由包管理器装好）。本地 `npm install` / `npm ci` 不隐式整包构建（本地开发用 `npm run build`）。
+**git 装配**：本仓库不提交构建产物 `lib/`，安装时会**就地构建**（`prepare` / `prepack` → `scripts/prepare.mjs`）。
+pnpm ≥10 默认**拒绝执行依赖的构建脚本**，所以必须在 profile 的 `pnpm-workspace.yaml` 里放行：
 
-### 桌面形态（dsh-desktop）
+```yaml
+allowBuilds:
+  '@dsh-external/dsh-nautilus': true
+```
 
-桌面宿主用 **`link:`** 装配本仓库（开发态直连检出目录），**profile 由 Electron 独占管理**——
-`dsh --profile desktop --dump-config` 这类 CLI 验证**会被拒**，所以「桌面装配是否生效」不能用 CLI 证明，只能在应用内观察。
+- **为什么必须放行**：放行 = **授权这个依赖在安装时执行构建代码**（等同信任本仓库的构建脚本）；
+  不放行的后果不是报错，而是**静默装出一个没有 `lib/` 的坏包**（pnpm 11.24 实测：不报错、不警告，症状是插件根本不出现）。
+- **生产装配请锁定 commit SHA**：`github:chemmy-11/dsh-nautilus#<sha>`。
 
-**改动需重启应用生效：桌面端没有热更新。** 客户端半区由 `lib/client.js` 在应用启动时加载，
-`npm run build` 只更新磁盘产物、不触达已运行的 Electron 进程——顺序恒定为 **改码 → `npm run build` → 重启应用 → 刷新既有页面观察**。
-请求链路（页面源 `dsh-app://app`、`/api/*` 由主进程代理转发）与实测头形见 [docs/2-dev/nautilus-dev-07-desktop-host.md](./docs/2-dev/nautilus-dev-07-desktop-host.md)。
+**`link:` 装配**：profile 直接指向本仓库目录，改完代码重新 `npm run build` 即可生效（无需重新安装）。
+同样因为产物不入库，**`link:` 之前必须先 `npm run build`**，否则装到的是没有产物的空壳。
 
-配置示例（profile 的 `cordis.patch.yml`；全部字段都有默认值，通常无需配置）：
+### 方式 B：桌面端（dsh-desktop）
 
-> **破坏性配置变更（AL.4g）**：读数采集项由 `lField` 改名为 `readings`（L 场抽象已撤）。旧键 `lField` **不再被读取**——
-> 若你的 `cordis.patch.yml` 里写过它，请改名，否则该项会**静默回落到默认值**。
+桌面宿主用 **`link:`** 装配本仓库：
+
+```sh
+cd <本仓库>
+npm run build
+dsh plugin --profile desktop add link:<本仓库绝对路径>
+```
+
+- **profile 由 Electron 独占管理**：`dsh --profile desktop --dump-config` 这类 CLI 验证**会被拒**，
+  所以「桌面装配是否生效」不能用 CLI 证明——只能在应用内观察。
+- **改动需重启应用生效**：客户端半区由 `lib/client.js` 在应用启动时加载，`npm run build` 只更新磁盘上的产物，
+  **不触达已在运行的进程**。顺序恒定为：**改码 → `npm run build` → 重启应用 → 在既有页面刷新后观察**。
+- 请求链路与实测头形（页面源 `dsh-app://app`、`/api/*` 由主进程代理转发）见
+  [docs/2-dev/nautilus-dev-07-desktop-host.md](docs/2-dev/nautilus-dev-07-desktop-host.md)。
+
+### 装完自检
+
+**重启宿主后，侧栏应出现「Nautilus 工作台」图标行**，点开即工作台（默认落在「总览」）。
+看不到 → 见 [FAQ](#faq)（多数是没重启，或 git 装配漏了 `allowBuilds`）。
+
+## 快速开始
+
+第一次打开工作台：顶部是一排视图按钮，右上角有刷新与「返回会话」。
+
+| 视图 | 一句话 |
+|---|---|
+| **总览** | 会话读数的汇总与逐会话列表（点开有逐轮抽屉）：token、缓存命中、耗时、tps。 |
+| **对齐** | 「对齐 1–5」人工判读与模型自评的**双路台账**（同一轮并列，Δ = 自评 − 人工）+ 四条边界的分布 + 样本一致性。 |
+| **会话** | 往期会话清单（工作区名 · 会话名 / 轮次数 / 读数合计 / 人工覆盖）；点开逐轮明细，**每轮可以直接打分**。 |
+| **告警** | OS / GPU 层红线告警：越线检测、证据冻结、报告与人工裁决。 |
+| **曲线** | 会话读数曲线：时间档位、指标切换、轮次轴、全屏、悬停下钻。 |
+| **报告** | 可重复的分析报告：形态分类、特征时间 τ_e、分桶对照。 |
+
+### 给某一轮打分
+
+1. 打开 **会话** 视图 → 点某一行的会话名，展开它的逐轮明细；
+2. 每轮最右一列是打分入口，点 **「对齐」** 展开：选 **1–5** 档，或选 **N/A**；
+3. 选 **4 或 5 必须附引文**（你引用 / 追问 / 改道于哪一句）——这是硬性要求，不填提交不了；
+4. 点「提交」。
+
+**几个词的意思**：
+
+- **对齐 1–5**：这一轮在「接 → 顺 → 推」的校准回路上推进了对方真正问题的程度——
+  `1` 没接住（绕开对方状态、答非所问）· `2` 接住了但没延展（正确、无增量）· `3` 接+顺一层（在已有表达上点亮一处）·
+  `4` 顺+推（指出他还没命名的结构或方向）· `5` 推到了改变下一步动作（他改道 / 引用 / 追问，可回查）。
+- **N/A**：这一轮**没有可判断的对象**（纯操作性指令轮）→ 豁免，不进分母。
+- **四条边界**（与档位正交，越界不改变档位但要记录）：**不替代 · 不占有 · 不强迫 · 不投射**。
+- **重新提交即覆盖**：同一轮的判读是**覆盖**语义（服务端 upsert），**不会**追加一条新记录；
+  已标注的轮次展开打分件时会**预填当前分**，改哪档点哪档再提交即可。
+- **原文缺失的轮次不能打分**：入口会**禁用**并写明原因（该轮原文不在库里，服务端会拒绝写入）——不给假按钮。
+
+## 你能做什么
+
+- **逐轮遥测**：每轮的 token（输入 / 输出 / 缓存命中）、耗时、tps，自动采集，无需手动记录；
+- **自评**：模型按「对齐 1–5 + 四条边界」给自己的判断（通过 dsh 工具或 HTTP 通道）；
+- **人工判读与一致性**：你给人自评打分（或独立打你自己的分），工作台把两路并排、算差值、给覆盖率与一致性指标；
+- **往期回顾**：会话视图列出历史会话，展开即可对**之前的轮次**补打分或改分；
+- **OS / GPU 红线告警**：按规则检测越线（含滞回与冷却），冻结证据快照，可选三段式 LLM 报告，并在工作台里人工裁决；
+- **可重复分析**：形态分类、特征时间、分桶对照——同一份数据可以反复跑出同一份结论。
+
+## 配置
+
+配置写在 profile 的 `cordis.patch.yml` 里。**所有字段都有默认值，通常不需要配置**：
 
 ```yaml
 - id: nautilus
   config:
-    dataDir: ''       # 空 = $DSH_HOME/nautilus（默认，行为不变）
-                      # 多端（同机 dsh-web 与 desktop）共享同一份数据时，两端指向同一个目录（如 D:\\nautilus-data）
-                      # 只共享数据目录，各自 home 仍隔离；库文件名固定为该目录下的 nautilus.db（pulse 子插件同库不同表，跟随同一目录）
+    dataDir: ''            # 空 = $DSH_HOME/nautilus（默认）；多端共享同一份数据时指向同一目录
     readings:
-      enabled: true
-      historyDays: 30
-    pulse:            # OS/GPU 采集子插件
+      enabled: true        # 是否采集会话读数
+      historyDays: 30      # 读数保留窗口
+    selfcheck:
+      ingest:
+        enabled: false     # 外部 harness 自评通道，默认关闭
+        token: ''          # 开启时必须填非空 token（空 token + enabled=true 会在加载时报错）
+        maxBodyBytes: 8192
+    pulse:
+      enabled: true        # OS/GPU 采集子插件
       intervalMs: 5000
       enableCounters: true
       enableGpu: true
+      alertEnabled: true   # 红线告警
 ```
 
-## API（同源访问）
+> **配置键注意**：读数采集项自 AL.4g 起叫 **`readings`**（旧键 `lField` 已改名、**不再被读取**）；
+> 若你的配置里还写着 `lField`，请改名，否则该项会**静默回落到默认值**。
+>
+> pulse 子插件还有更多字段（采样间隔、保留期、告警规则 `alertRules`、`alertsDir` 等，均有默认值），
+> 见 [docs/2-dev/nautilus-dev-03-os-layer.md](docs/2-dev/nautilus-dev-03-os-layer.md) 与
+> [docs/2-dev/nautilus-dev-06-os-alerting.md](docs/2-dev/nautilus-dev-06-os-alerting.md)。
 
-所有路由都过**同源门**（非本机/跨站请求 403，拒绝时回显 `seen` 标记便于定位——见 [docs/2-dev/nautilus-dev-07-desktop-host.md](./docs/2-dev/nautilus-dev-07-desktop-host.md)）。
+## 数据与隐私
 
-| 端点 | 说明 |
-|---|---|
-| `GET /api/nautilus/m2/state` | 会话读数（latest / totals / curve / 自评覆盖） |
-| `GET /api/nautilus/m2/turn-text` | 某轮完整问答原文（打分引文的事实来源） |
-| `GET /api/nautilus/m2/analysis` | 白盒分析（S 形 / 爆发段 / τ_e） |
-| `GET/POST /api/nautilus/m2/turn-annotations` | 逐轮人工判读读写（新形 = `align` 1–5 + `boundary`；N/A 豁免 = `exempt`；4/5 必附 `quote`） |
-| `GET /api/nautilus/m2/alignments` | 对齐台账（人工 / 自评双路 + 覆盖 + 一致性） |
-| `GET /api/nautilus/m2/sessions` | 往期会话清单（`?limit=50&offset=0`；label 服务端派生） |
-| `GET /api/nautilus/m2/sessions/\<sessionId\>` | 单会话逐轮详情（读数 + `hasText` + 双路判读；未知 id → 404） |
+- **数据只落在你自己的机器上**：`~/.dsh/nautilus/nautilus.db`（SQLite；pulse 子插件同库不同表）。
+  `dataDir` 可改为别的目录（多端共享同一份数据时用）。
+- **不读也不写 vault**：本插件与 Obsidian vault 零耦合（vault 观测腿已于 2026-09-27 下线）。
+- **不改宿主**：不修改宿主源码、不改变宿主行为；数据采集走官方 `session/event` 事件，零侵入。
+- **自评 ingest 默认关闭**，且开启必须配 `token`（请求头 `x-nautilus-selfcheck-token`）；没开通道时该路由恒 403。
+- **本地 API 有同源门**：所有 `/api/nautilus/*` 路由只接受本机同源请求，跨站请求一律 403（拒绝时会回显所见标记，
+  便于定位）——细节见 [桌面宿主适配](docs/2-dev/nautilus-dev-07-desktop-host.md)。
 
-## 构建
+## FAQ
+
+**Q：为什么改完代码要重启宿主？**
+A：桌面端**没有热更新**：客户端半区由 `lib/client.js` 在启动时加载，`npm run build` 只更新磁盘产物。
+顺序永远是 **改码 → `npm run build` → 重启应用 → 刷新既有页面**。
+
+**Q：桌面端面板空白 / 请求一直 403？**
+A：这是已修的问题：本插件的同源门曾把 `sec-fetch-mode` 误当作跨站信号，导致桌面端（`dsh-app://app` 页面源 +
+主进程代理转发）的请求恒 403。**升级到最新版本即可**；成因与判据见
+[docs/2-dev/nautilus-dev-07-desktop-host.md](docs/2-dev/nautilus-dev-07-desktop-host.md)。
+
+**Q：为什么历史会话的工作区显示「未知工作区」？**
+A：工作区归属**从 v10 才开始采集**，且**不回填历史数据**（forward-only，避免用今天的归属去改写过去的记录）。
+所以早期会话显示「未知工作区」是设计结果，不是缺陷。
+
+**Q：「会话名」是怎么来的？是宿主的真名字吗？**
+A：**不是真名，是派生名**：取该会话**第一条不以 `<` 开头且去空白非空的提问**的首行前 24 个字；
+找不到就退回**会话 id 的末 8 位**。因为真库里大量提问以 `<system-reminder>` 之类的块开头，只好这么取——
+所以列表里的名字只用于**辨认**，不是权威标题。
+
+**Q：为什么两个地方的「轮次数」不一样？**
+A：口径不同。**「会话」视图（`/m2/sessions`）是并集口径**——「有读数」**或**「有原文」都算一轮
+（故意把「原文在、读数缺」的轮次也列出来，因为**那些轮次照样可以打分**）；**「总览」的读数是读数口径**，只数有读数的轮次。
+合计（token / 时长 / tps）始终只累加**有读数**的轮次，缺读数的位置显示 `—`（不写 0，0 是真实读数）。
+
+## 开发
 
 ```sh
-DSH_CHECKOUT=<dsh-checkout> bash scripts/build.sh   # = node scripts/prepare.mjs（host tsc + client esbuild）
+npm run typecheck && npm run build && npm test      # 提交前的本地门禁（三件）
+npm run check:deps && npm run check:exports && node .github/scripts/check-meta.mjs
 ```
 
-构建链为纯 Node 实现（`scripts/prepare.mjs` + `scripts/build-client.mjs`），不依赖 bash 环境差异。
+- 工程约定与红线：[CONTRIBUTING.md](CONTRIBUTING.md)（分支 / 提交信息 / 六件套 / 宿主适配 / profile 卫生）；
+- 开发文档索引：[docs/2-dev/README.md](docs/2-dev/README.md)——含
+  [桌面宿主适配（dev-07）](docs/2-dev/nautilus-dev-07-desktop-host.md)、
+  [工作台 UI（dev-02）](docs/2-dev/nautilus-dev-02-ui-workbench.md)、
+  [对齐量表决策](docs/1-planning/nautilus-alignment.md) 与
+  [UI 线证据归档](docs/2-dev/evidence-al-20260928.md)；
+- 提交与评审：issue 先行、PR 一律 squash；`lib/` 不入库（构建入口只有 `scripts/prepare.mjs`）。
 
-**两种构建模式**（`scripts/prepare.mjs` 自动选择）：
-- **checkout 模式**（本地开发）：探测到 `$DSH_CHECKOUT` / `~/dsh-harness` → 从 checkout junction 链接 `cordis`/`schemastery`/`dsh-host-webserver` 并复用其 tsc/esbuild；
-- **npm-devDeps 模式**（CI / 无 checkout）：`npm install` 装好 devDependencies 后直接用本地依赖构建，无需 dsh 源码。
+### 兼容性
 
-## CI
+- **当前主用宿主**：dsh **0.1.7-rc.1**；已实测 **0.1.5-rc.2**（稳定线）、**0.1.6-alpha.2**（并存安装 `dsh-next`）与 **0.1.7-rc.1**；
+  桌面端 **dsh-desktop 0.1.7-rc.2** 实测可用（组件版本矩阵见 [dev-07](docs/2-dev/nautilus-dev-07-desktop-host.md)）。
+- 依赖面与 peer 范围、宿主升级五步流程见 [CONTRIBUTING.md](CONTRIBUTING.md)「宿主版本适配」。
 
-`.github/workflows/ci.yml` 在每次 push/PR 上跑 `typecheck` + `build`（npm-devDeps 模式）+ 测试 + 元数据校验（bundle patch / client 双半 / files 清单）；`.github/workflows/release.yml` 在 `v*` tag 上自动构建 tgz 并创建 GitHub Release。
+## 许可
 
-## 设计原则
-
-- **独立可装**：仅依赖官方 `cordis`/`schemastery`/`dsh-host-webserver`，不与任何其它插件耦合；
-- **观测即留痕**：编辑与会话读数从部署起前向积累（SQLite 持久化，重启/重载不丢不重）；
-- **边界意识**：**不碰 vault**（vault 观测腿已下线）、数据私有化（`~/.dsh/nautilus/`，不混入其它数据源）；
-- **归属不混数**：会话按发起工作区归属，指向工作区会话与其它工作区会话分开分析（同一分类规则，不做时间分代）。
-
-## 安全说明
-
-安装插件等于在机器上运行第三方代码，权限与运行者相同。安装前请先阅读源码；本插件**不访问 vault**，只写自己的数据目录 `~/.dsh/nautilus/`。
+**BSD-3-Clause**（见 `package.json` 的 `license` 字段；仓库当前未单独附 LICENSE 文件）。
