@@ -56,6 +56,9 @@ dsh plugin --profile desktop add link:<本仓库绝对路径>
 
 - **profile 由 Electron 独占管理**：`dsh --profile desktop --dump-config` 这类 CLI 验证**会被拒**，
   所以「桌面装配是否生效」不能用 CLI 证明——只能在应用内观察。
+- **装完必须回读 profile 的 `dsh.profile.bundles`**：组合器**只**读这个列表，不在列表里的依赖即使装好了也不会挂载
+  （症状是插件整个缺失：路由 401、工具不存在、面板不出现）。
+  `dsh plugin add` 会写进去；任何重装/清理之后的第一次自检就是回读它。
 - **改动需重启应用生效**：客户端半区由 `lib/client.js` 在应用启动时加载，`npm run build` 只更新磁盘上的产物，
   **不触达已在运行的进程**。顺序恒定为：**改码 → `npm run build` → 重启应用 → 在既有页面刷新后观察**。
 - 请求链路与实测头形（页面源 `dsh-app://app`、`/api/*` 由主进程代理转发）见
@@ -189,8 +192,12 @@ npm run check:deps && npm run check:exports && node .github/scripts/check-meta.m
 
 ### 兼容性
 
-- **当前主用宿主**：dsh **0.1.7-rc.1**；已实测 **0.1.5-rc.2**（稳定线）、**0.1.6-alpha.2**（并存安装 `dsh-next`）与 **0.1.7-rc.1**；
-  桌面端 **dsh-desktop 0.1.7-rc.2** 实测可用（组件版本矩阵见 [dev-07](docs/2-dev/nautilus-dev-07-desktop-host.md)）。
+- **当前主用宿主**：dsh **0.2.0-rc.1**（桌面端 **dsh-desktop 0.2.0-rc.1** 实测可用）；
+  也已实测 **0.1.5-rc.2**（稳定线）、**0.1.6-alpha.2**（并存安装 `dsh-next`）、**0.1.7-rc.1** 与桌面端 **0.1.7-rc.2**
+  （组件版本矩阵见 [dev-07](docs/2-dev/nautilus-dev-07-desktop-host.md)）。
+- **宿主升级会先过一道兼容门**：宿主按 `package.json` 的 `@deepseek-ai/dsh*` peer 范围判定插件是否可用，
+  不覆盖运行版本的 peer 会让插件**被整体拒装**（症状：路由 401、工具消失、面板不出现，且日志在桌面端被吞掉）。
+  升级 devDep 后**先跑 `npm run check:deps`**（R3 就是这条护栏）；peer 范围现覆盖 `0.1.1-rc.2 … 0.2.0-rc.1`。
 - 依赖面与 peer 范围、宿主升级五步流程见 [CONTRIBUTING.md](CONTRIBUTING.md)「宿主版本适配」。
 
 ## 许可

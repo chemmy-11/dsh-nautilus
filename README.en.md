@@ -60,6 +60,9 @@ dsh plugin --profile desktop add link:<absolute path to this repo>
 
 - **The profile is owned exclusively by Electron**: CLI checks such as `dsh --profile desktop --dump-config` are **refused**,
   so "is the desktop assembly live?" cannot be proven from the CLI — observe it inside the app.
+- **Always read back the profile's `dsh.profile.bundles` after installing**: the composer reads **only** that list, and a dependency
+  that is missing from it is never mounted even when installed (the whole plugin disappears: routes 401, no tool, no panel).
+  `dsh plugin add` writes it; re-read it as the first check after any reinstall or cleanup.
 - **Changes require an app restart**: the client half is loaded from `lib/client.js` at app startup, and `npm run build` only updates
   artifacts on disk — it **does not reach a running process**. The order is always **edit → `npm run build` → restart → reload the existing page and observe**.
 - Request plumbing and the measured header shapes (page origin `dsh-app://app`, `/api/*` proxied by the main process) are documented in
@@ -199,8 +202,13 @@ npm run check:deps && npm run check:exports && node .github/scripts/check-meta.m
 
 ### Compatibility
 
-- **Primary host in use**: dsh **0.1.7-rc.1**; also tested on **0.1.5-rc.2** (stable line), **0.1.6-alpha.2** (side-by-side install `dsh-next`) and **0.1.7-rc.1**.
-  The desktop app **dsh-desktop 0.1.7-rc.2** is verified working (component version matrix in [dev-07](docs/2-dev/nautilus-dev-07-desktop-host.md)).
+- **Primary host in use**: dsh **0.2.0-rc.1** (the desktop app **dsh-desktop 0.2.0-rc.1** is verified working);
+  also tested on **0.1.5-rc.2** (stable line), **0.1.6-alpha.2** (side-by-side install `dsh-next`), **0.1.7-rc.1** and desktop **0.1.7-rc.2**
+  (component version matrix in [dev-07](docs/2-dev/nautilus-dev-07-desktop-host.md)).
+- **A host upgrade goes through a compatibility gate first**: the host checks this package's `@deepseek-ai/dsh*` peer ranges against the
+  running version, and a range that does not cover it gets the plugin **denied wholesale** (routes 401, tool gone, no panel — and on the
+  desktop the diagnostic is swallowed). Run `npm run check:deps` right after bumping the devDep; that is exactly what rule R3 guards.
+  The peer range now covers `0.1.1-rc.2 … 0.2.0-rc.1`.
 - The dependency surface, peer ranges and the five-step host upgrade flow live in [CONTRIBUTING.md](CONTRIBUTING.md) ("host version adaptation").
 
 ## License
