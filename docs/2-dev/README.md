@@ -29,4 +29,4 @@ Nautilus 各阶段的具体开发文档：模块设计、接口契约、schema�
 | [evidence-u2-20260924.md](./evidence-u2-20260924.md) | 证据归档 · **U2 主题层**：`--nt-*` 亮暗双主题跟随宿主（`body[data-ds-dark-theme]`）+ 手动档（跟随/浅/深）——修「153 处引用 0 处定义」导致插件恒浅色；含宿主别名表实测、绑定纪律数值依据、七步端上目视清单 | 已归档（六件套 57/57；端上双态目视待守谷人） |
 
 （**已完成**：S2 / v8 及后续 v9/v10 迁移由 AL 系列落地——`turn_annotation` 重建 `align/align_prev/boundary` + `selfcheck_record` 追加并转可空 + `turn_read.workspace`，见 [evidence-al-20260928.md](./evidence-al-20260928.md)；）
-（待建：**S1.2「自评读侧统一与覆盖率三态」开发文档**（面板切读 `selfcheck_record`、按 source_kind/agent 分层、缺口三态——决策 D-SC4 落点）；Phase 2a「模型层 API 时代」开发文档；Phase 3「core 管道与时间窗对齐」；1 分钟档聚合与 OTLP 导出按 [nautilus-dev-03-os-layer.md](./nautilus-dev-03-os-layer.md) §7 的 OQ 推进）
+（待建：**S1.2「自评读侧统一与覆盖率三态」开发文档**（面板切读 `selfcheck_record`、按 source_kind/agent 分层、缺口三态——决策 D-SC4 落点）；**LLM 层（原 Phase 2a/2b「模型层」）开发文档**——下一号 **dev-08**（读数：应用侧逐调用口径 + 引擎适配器 + 只读取数路由）与 **dev-09**（工具化与白名单运维循环），范围与判定标准见 [../1-planning/nautilus-agentic-ops-outline.md](../1-planning/nautilus-agentic-ops-outline.md)；Phase 3「core 管道与时间窗对齐」；1 分钟档聚合与 OTLP 导出按 [nautilus-dev-03-os-layer.md](./nautilus-dev-03-os-layer.md) §7 的 OQ 推进）

@@ -13,11 +13,14 @@
 | 文档 | 内容 |
 |---|---|
 | **[nautilus-alignment.md](./nautilus-alignment.md)** | **对齐体系重构（AL 系列，当前主线）**：术语收敛（「对齐」收归 我ai 口径 / 契合与 L 场废止 / A 改称分辨率提升速率）· 对齐定义 v1 与 1–5 量表 · v8 迁移与迁移账本 · 自评方案甲 · Correction 式进化闭环 · UI 收敛（删假设/预言）· nexus 解耦（甲）。**取代 T 系列与原 S2/v8 计划**；v0.1 **待守谷人逐条签核** |
+| **[nautilus-agentic-ops-outline.md](./nautilus-agentic-ops-outline.md)** | **次阶段大纲（2026-10-15 访谈共识，守谷人已审批）**：LLM 层（原 infer 腿）观测选型（Strata 优先 / llama.cpp 第二）· agentic ops 路线（L1 工具集 / L3 白名单运维循环）· 阶段划分 2b-1…2b-4 · 与 PS/AL/A 三系列的边界与待决点 |
 | [nautilus-opening-report.md](./nautilus-opening-report.md) | 开题报告（第一期）：技术调研、指标口径、总体设计、Phase 0–5 计划 |
 | [nautilus-research-2-positioning.md](./nautilus-research-2-positioning.md) | 第二期调研：产品定位（Agent 工作台）、竞争格局、路线阶梯、可借鉴开源项目清单 |
 | [nautilus-selfcheck-multisource.md](./nautilus-selfcheck-multisource.md) | 自评多源采集（S 系列）：通道定 HTTP ingest、declaration 改证据要求（D-SC1/2/3 已签核）；规则完善与诚实边界。**S1.2+ 挂起（2026-09-27）** |
 | [nautilus-turn-annotation.md](./nautilus-turn-annotation.md) | 逐轮人工标注（T 系列）：「契合」5 档锚定量表 + 抽屉随手标/抽样队列双口径（D-T1 已签核）；观测体系的第一人工真值源 |
 | [nautilus-os-alerting.md](./nautilus-os-alerting.md) | OS 层红线告警（A 系列）：固定阈值触发 + `[t0-lookback, t0]` 证据冻结 + `ctx.llm` 三段式报告 + `alert_event` 台账（D-A1/A2/A3 已签核；**做提示与留证，不自动处置**） |
+| [nautilus-package-split.md](./nautilus-package-split.md) | 分包决策（PS 系列 v0.1，S1–S7 已签）：聚合包 + nexus/pulse/llm 三子包形态、**两库方案与拆库路径**、迁移账本归属与发版纪律（只增迁移 + schema 地板）、LLM 层定义修正（**补登记**：原文未入表） |
+| [nautilus-nexus-positioning.md](./nautilus-nexus-positioning.md) | nexus 层定位与架构边界（D-N0…D-N4；其中 **D-N1 方案 B 已由 AL.2 迁移账本落地**）（**补登记**：该文 §6 早已要求入库登记） |
 
 ## 关联
 
