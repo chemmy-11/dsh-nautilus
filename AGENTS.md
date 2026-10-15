@@ -10,7 +10,7 @@
 
 ## 0. 项目是什么
 
-- **观测插件**（`@dsh-external/dsh-nautilus`，bundle 形态）：逐轮会话遥测（token/缓存/耗时/tps + 自评）+ L 场读数（按会话工作区归属）+ OS/GPU 采集（pulse 子插件）+ 工作台面板 + **OS 层红线告警（A 系列：越线检测 / 证据冻结 / 三段式 LLM 报告 / 台账 / 人工裁决）**。**vault 观测腿已于 2026-09-27 下线**（不再读 vault；vault 侧操作走会话侧 /obsidian 技能）。A 系列规格见 [docs/2-dev/nautilus-dev-06-os-alerting.md](./docs/2-dev/nautilus-dev-06-os-alerting.md) 与 [docs/1-planning/nautilus-os-alerting.md](./docs/1-planning/nautilus-os-alerting.md)；扩展方向见 `docs/1-planning/`（三层指标 pulse / infer / nexus + era 因果上下文 + Agentic Ops 工作台）；**层名与包名映射**：层名与指标命名空间沿用 `infer`（`nautilus.infer.*` 口径冻结），目标包名为 `dsh-nautilus-llm`（PS 系列 §6，S3 已签），两者同指一物。
+- **观测插件**（`@dsh-external/dsh-nautilus`，bundle 形态）：逐轮会话遥测（token/缓存/耗时/tps + 自评）+ 会话工作区归属读数（`turn_read.workspace`，AL.6e）+ OS/GPU 采集（pulse 子插件）+ 工作台面板 + **OS 层红线告警（A 系列：越线检测 / 证据冻结 / 三段式 LLM 报告 / 台账 / 人工裁决）**。**vault 观测腿已于 2026-09-27 下线**（不再读 vault；vault 侧操作走会话侧 /obsidian 技能）。A 系列规格见 [docs/2-dev/nautilus-dev-06-os-alerting.md](./docs/2-dev/nautilus-dev-06-os-alerting.md) 与 [docs/1-planning/nautilus-os-alerting.md](./docs/1-planning/nautilus-os-alerting.md)；扩展方向见 `docs/1-planning/`（三层指标 pulse / infer / nexus + era 因果上下文 + Agentic Ops 工作台）；**层名与包名映射**：层名与指标命名空间沿用 `infer`（`nautilus.infer.*` 口径冻结），目标包名为 `dsh-nautilus-llm`（PS 系列 §6，S3 已签），两者同指一物。
 - 定位红线：**不干预被观测对象的推理路径**——不改宿主源码、不改宿主行为、不写用户数据；**运维动作走白名单 + 人工批准 + 审计留痕**（J3，见 [docs/1-planning/nautilus-agentic-ops-outline.md](./docs/1-planning/nautilus-agentic-ops-outline.md) §5）。A 系列的「不自动处置」与 J3 **并列成立**：前者禁的是「未经批准的自动处置」，后者管的是「已批准动作的执行与留痕」。归因结论人工主导，AI 只辅助检索与编码。
 
 ## 1. 五条不可违（违反即回滚，不看进度）

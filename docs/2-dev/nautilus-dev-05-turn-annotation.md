@@ -1,5 +1,7 @@
 # 开发文档五 · T 系列 逐轮人工标注（契合 · 混合入口）
 
+> **⚠ 已被 AL 取代（2026-09-28）**：「契合」维度废止、量表改 **`align` 1–5 + `boundary` + `declaration`**；`turn_annotation.fit` 列保留不写（红线 3），新旧量表分层永不合并统计。现行决策见 [../1-planning/nautilus-alignment.md](../1-planning/nautilus-alignment.md) §1/§3.2。**本文为历史实现记录，保留不改写。**
+
 > 版本 v0.1（2026-09-27 开项）。上游决策：[../1-planning/nautilus-turn-annotation.md](../1-planning/nautilus-turn-annotation.md) v0.2（D-T1 签核；量表锁版 `schema_version=1`；D-T2/T3/T4 本文定案）。
 > **两线并行纪律**（2026-09-27 已收敛）：UI 图表线由守谷人完成并先期入库（`0504028`），**UI 半区（流内契合条 + 曲线人工层标记）已随本线交付，见 E23**。`src/client` 不进 tsc（tsconfig exclude），客户端类型纪律 = 本地类型 + 运行时契约测试。
 

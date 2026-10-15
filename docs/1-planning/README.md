@@ -17,7 +17,7 @@
 | [nautilus-opening-report.md](./nautilus-opening-report.md) | 开题报告（第一期）：技术调研、指标口径、总体设计、Phase 0–5 计划 |
 | [nautilus-research-2-positioning.md](./nautilus-research-2-positioning.md) | 第二期调研：产品定位（Agent 工作台）、竞争格局、路线阶梯、可借鉴开源项目清单 |
 | [nautilus-selfcheck-multisource.md](./nautilus-selfcheck-multisource.md) | 自评多源采集（S 系列）：通道定 HTTP ingest、declaration 改证据要求（D-SC1/2/3 已签核）；规则完善与诚实边界。**S1.2+ 挂起（2026-09-27）** |
-| [nautilus-turn-annotation.md](./nautilus-turn-annotation.md) | 逐轮人工标注（T 系列）：「契合」5 档锚定量表 + 抽屉随手标/抽样队列双口径（D-T1 已签核）；观测体系的第一人工真值源 |
+| [nautilus-turn-annotation.md](./nautilus-turn-annotation.md) | 逐轮人工标注（T 系列）：「契合」5 档锚定量表 + 抽屉随手标/抽样队列双口径（D-T1 已签核）；观测体系的第一人工真值源。**已被 AL 取代**：`契合` 废止、量表改 `align` 1–5、`fit` 列保留不写 |
 | [nautilus-os-alerting.md](./nautilus-os-alerting.md) | OS 层红线告警（A 系列）：固定阈值触发 + `[t0-lookback, t0]` 证据冻结 + `ctx.llm` 三段式报告 + `alert_event` 台账（D-A1/A2/A3 已签核；**做提示与留证，不自动处置**） |
 | [nautilus-package-split.md](./nautilus-package-split.md) | 分包决策（PS 系列 v0.1，S1–S7 已签）：聚合包 + nexus/pulse/llm 三子包形态、**两库方案与拆库路径**、迁移账本归属与发版纪律（只增迁移 + schema 地板）、LLM 层定义修正（**补登记**：原文未入表） |
 | [nautilus-nexus-positioning.md](./nautilus-nexus-positioning.md) | nexus 层定位与架构边界（D-N0…D-N4；其中 **D-N1 方案 B 已由 AL.2 迁移账本落地**）（**补登记**：该文 §6 早已要求入库登记） |

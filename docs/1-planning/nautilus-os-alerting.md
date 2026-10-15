@@ -114,6 +114,6 @@ pulse 采集层已经把 OS/GPU 读数按 5s 原始节奏落了库（14 天保�
 
 ## 9. 关联与回写
 
-- 与 [T 系列](./nautilus-turn-annotation.md) 正交：那条线标的是**回答的契合**，这条线记的是**机器的越线**。
+- 与 [T 系列](./nautilus-turn-annotation.md) 正交：那条线标的是**回答的对齐（`align`）**，这条线记的是**机器的越线**。
 - 与 pulse（Phase 1）同库不同表：本系列只读 `metric_sample`，写 `alert_event`（v7）。
 - 回写 vault（守谷人点头后走 /obsidian）：谷文档新增本专项口径页 + PROJECT-MOC 登记。

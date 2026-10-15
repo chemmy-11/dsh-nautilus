@@ -1,5 +1,7 @@
 # 逐轮人工标注（T 系列）——「契合」维度与混合入口决策记录
 
+> **⚠ 已被 AL 取代（2026-09-28，AL 系列「6 签均同意」）**：本文的「**契合**」维度**已废止**——术语表把「对齐」收归 我ai 口径，人工改判 `align` 1–5，并新增正交轴 `boundary` 与 `declaration`；`turn_annotation.fit` 列**保留但不写**（红线 3）。现行口径与迁移见 [nautilus-alignment.md](./nautilus-alignment.md) §1/§3.2（v8/v9）。**本文作为历史决策记录保留不改写**（其量表锚文 `schema_version=1` 仍在库中分层，永不与新量表混算）。
+
 > 版本 v0.3（2026-09-27 起草；**入口 C / 量表 5 档 / 单维守谷人选项框签核，量表锚文同日「锁板」——即 §1 草案原文为锁版文本，`schema_version=1` 定死**，改锚即递增不混算；D-T2/T3/T4 按签核流程进 dev-05 实现；**同日守谷人再裁决 D-T5：流内打分件挂宿主 `conversation.chat.turnTail` 链槽**，见 §4）
 > 归属：决策文档（改动即决策）；实现落 `../2-dev/`（开项时建 Phase 文档）。
 > 上游：vault `外功/DSH/DSH_Nexus —— 神经系统插件规范.md` §一 命名纪律 · 同 `-M5` OQ-M5-1（真值从哪来）· `dev-02` §5 人工标注纪律（解读不写回读数）· [nautilus-selfcheck-multisource.md](./nautilus-selfcheck-multisource.md)（S 系列，同源不同物）。
